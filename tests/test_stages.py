@@ -29,16 +29,40 @@ def test_stage_of_every_step():
     assert S(snap([10], 2))["code"] == "moj" and S(snap([10], 2))["n"] == 1
     assert S(snap([10, 25], 2))["code"] == "cab" and S(snap([10, 25], 2))["n"] == 2
     assert S(snap([10, 25, 35], 2))["code"] == "chamber" and S(snap([10, 25, 35], 2))["n"] == 3
-    assert S(snap([10, 25, 35], 20, done=True))["code"] == "removed"                       # the Chamber removed it from control: done
-    assert S(snap([10, 25, 35], 21, done=True))["n"] == 4
-    d = S(snap([10, 25, 35, 45], 2, due=ms(2027, 3, 1)))                                     # a final answer, but not done: accepted for information
+    assert S(snap([10, 25, 35, 45], 20, done=True))["code"] == "removed"                   # 45 = Nazoratdan yechildi: removed from control, done
+    assert S(snap([10, 25, 35, 45], 21, done=True))["n"] == 4
+    w = S(snap([10, 25, 35, 45], 2))                                                      # the answer of removal, but the site has not marked the task done yet
+    assert w["code"] == "removed_wait" and not w["attention"]
+    d = S(snap([10, 25, 35, 49], 2, due=ms(2027, 3, 1)))                                    # 49 from the Chamber: the task stays open, the term changes
     assert d["code"] == "info" and d["attention"] and d["new_due"] == "2027-03-01" and d["n"] == 3
-    assert S(snap([10, 25, 35, 45], 2, due=ms(2027, 3, 1)), dates=False)["new_due"] is None  # no dates for people who must not see them
+    assert S(snap([10, 25, 35, 49], 2, due=ms(2027, 3, 1)), dates=False)["new_due"] is None   # no dates for people who must not see them
+    assert S(snap([10, 25, 35, 44], 2))["code"] == "info"                                  # 44 Maʼlumot uchun qabul qilindi (never seen yet, but it is in the site's table)
     assert S(snap([10, 25, 35, 99], 2))["code"] == "chamber_other" and S(snap([10, 25, 35, 99], 2))["attention"]
-    assert S(snap([10, 29], 2))["code"] == "returned" and S(snap([10, 25, 35, 49], 2))["code"] == "returned"
-    assert S(snap([45], 2, due=ms(2027, 3, 1)))["code"] == "info"
+    assert S(snap([10, 29], 2))["code"] == "returned" and S(snap([10, 25, 18], 2))["code"] == "returned"
     assert S(snap(found=0))["code"] == "not_found"
     assert S(snap(repeatable=1, periods=json.dumps([{"order": 1, "recipient_status": 0, "due_ms": ms(2026, 12, 1)}])))["code"] == "periodic"
+
+
+def test_comment_of_the_chamber_names_the_case():
+    def with_text(text):
+        s = snap([10, 25, 35, 49], 2)
+        a = json.loads(s["answers"]); a[-1]["text"] = text; s["answers"] = json.dumps(a); return s
+    assert ijro.stage_of(with_text("Маълумот учун қабул қилинди"))["label"] == "Маълумот учун қабул қилинди"
+    assert ijro.stage_of(with_text("Қўшимча маълумот тақдим этинг"))["label"] == "Қўшимча маълумот сўрови"
+
+
+def test_the_active_answer_decides():
+    s = snap([10, 25, 35])
+    a = json.loads(s["answers"])
+    for x in a:
+        x["active"] = 0
+    a[1]["active"] = 1                                                                      # the site marks the Justice answer as the current one
+    s["answers"] = json.dumps(a)
+    assert ijro.stage_of(s)["code"] == "cab"
+    for x in a:
+        x["active"] = 0                                                                     # nothing active: the newest one
+    s["answers"] = json.dumps(a)
+    assert ijro.stage_of(s)["code"] == "chamber"
 
 
 def test_the_latest_answer_decides_not_the_order_of_arrival():
@@ -84,7 +108,7 @@ def test_answer_on_the_site_moves_the_task_to_in_progress_by_itself(admin, key):
 
 
 def test_removed_from_control_is_done(admin, key):
-    push(key, "ST0001", [10, 25, 35, 50], 20, done=True)
+    push(key, "ST0001", [10, 25, 35, 45], 20, done=True)
     t = task(admin, "ST0001")
     assert t["status"] == "done" and t["site"]["stage"]["code"] == "removed"
 
@@ -94,14 +118,14 @@ def test_accepted_for_information_reopens_the_task_with_the_new_term(admin, key)
     assert admin.patch(f"/api/tasks/{tid}", json={"status": "done"}).status_code == 200        # somebody marked it done after the answer was sent
     assert task(admin, "ST0002")["status"] == "done"
     old_due = admin.get(f"/api/tasks/{tid}?by=due").json()["due"]
-    push(key, "ST0002", [10, 25, 35, 45], 2, due=ms(2027, 3, 1))
+    push(key, "ST0002", [10, 25, 35, 49], 2, due=ms(2027, 3, 1))
     full = admin.get(f"/api/tasks/{tid}?by=due").json()
     assert full["status"] == "progress"                                                       # the task is not done: the Chamber only took it for information
     assert full["due"] == "2027-03-01" and old_due != "2027-03-01"
     assert full["site"]["stage"]["code"] == "info" and full["site"]["stage"]["new_due"] == "2027-03-01"
     assert any(e["field"] == "due" for e in full["events"])
     # asking again changes nothing more
-    assert push(key, "ST0002", [10, 25, 35, 45], 2, due=ms(2027, 3, 1))["auto_applied"] == 0
+    assert push(key, "ST0002", [10, 25, 35, 49], 2, due=ms(2027, 3, 1))["auto_applied"] == 0
 
 
 def test_stage_filter_and_the_funnel_on_the_dashboard(admin, key):
@@ -118,7 +142,7 @@ def test_stage_filter_and_the_funnel_on_the_dashboard(admin, key):
 def test_switched_off_the_site_changes_nothing(admin, key):
     assert admin.put("/api/sync/settings", json={"auto_apply": False}).status_code == 200
     try:
-        assert push(key, "ST0003", [10, 25, 35, 50], 20, done=True)["auto_applied"] == 0
+        assert push(key, "ST0003", [10, 25, 35, 45], 20, done=True)["auto_applied"] == 0
         assert task(admin, "ST0003")["status"] == "todo"
         assert task(admin, "ST0003")["site"]["diff"] is True                                  # but it is proposed on the review screen
     finally:
@@ -135,4 +159,4 @@ def test_employee_sees_the_stage_but_never_the_official_term(admin, key):
     assert t["site"]["stage"]["code"] == "info" and "new_due" not in t["site"]["stage"]
     assert all(e["field"] != "due" for e in t["events"]) and "2027-03-01" not in json.dumps(t)
     row = emp.get("/api/tasks?q=ST0002").json()["items"][0]
-    assert row["site"]["stage"]["label"] == "Маълумот учун қабул қилинди"
+    assert row["site"]["stage"]["label"] == "Қўшимча маълумот сўрови"

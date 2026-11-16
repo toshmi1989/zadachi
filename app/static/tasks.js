@@ -2,7 +2,7 @@
 /* Task list (filters, sorting, paging, bulk edit) and the task drawer. */
 
 const FIELD = { assignee_id: "Ответственный", status: "Статус", close_date: "Дата закрытия", due: "Срок по ijro" };
-const STAGE_NAME = { none: "Ответ не введён", moj: "Адлия вазирлигида", cab: "Вазирлар Маҳкамасида", chamber: "Ҳисоб палатасида", info: "Маълумот учун қабул қилинди", returned: "Возврат / запрос", unchecked: "Не проверялись на сайте" };
+const STAGE_NAME = { none: "Ответ не введён", moj: "Адлия вазирлигида", cab: "Вазирлар Маҳкамасида", chamber: "Ҳисоб палатасида", info: "Ҳисоб палатаси вернула (срок изменён)", returned: "Возврат / запрос", unchecked: "Не проверялись на сайте" };
 /* where the task is on its way (the answer goes Justice -> Cabinet -> Chamber of Accounts) */
 function stageChip(t) {
   const g = t.site && t.site.stage;
@@ -238,7 +238,7 @@ function stageBlock(t, admin) {
   const nd = g.new_due ? g.new_due.split("-").reverse().join(".") : "";
   return `<div class="sec-t" style="margin-top:12px">Этап согласования</div><div class="stepper">${steps}</div>
     <p class="hint" style="margin:6px 0 0"><b>${esc(g.label)}</b> — ${esc(g.hint)}</p>
-    ${g.code === "info" ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>Счётная палата приняла ответ <b>к сведению</b>: задача <b>не выполнена</b>${admin && nd ? `, срок на сайте изменён на <b>${esc(nd)}</b> (мы обновили его у себя)` : ", срок изменён"}.</span></div>` : ""}
+    ${g.code === "info" ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>Счётная палата вернула задачу (принято к сведению или запрос информации): она <b>не выполнена</b>${admin && nd ? `, срок на сайте изменён на <b>${esc(nd)}</b> (мы обновили его у себя)` : ", срок изменён"}.</span></div>` : ""}
     ${g.code === "returned" || g.code === "chamber_other" ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>${esc(g.hint)}.</span></div>` : ""}`;
 }
 function siteBlock(t, admin) {

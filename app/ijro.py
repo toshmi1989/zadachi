@@ -23,48 +23,77 @@ MAX_ITEMS = 200
 MAX_TEXT = 600
 MAX_ANSWERS = 30
 
-# what the answers on the site mean (sender_type, as read from the real traffic)
-ANSWER_TYPES = {10: "Ответ исполнителя", 25: "Согласовано", 29: "Возврат на доработку", 35: "Снятие с контроля подтверждено",
-                45: "Принято (итог)", 48: "Отрицательное решение", 49: "Запрос дополнительной информации"}
+# what the answers on the site mean (sender_type): the site's own table paTaskSenderType. The tens are the level: 1x executor, 2x Ministry of
+# Justice, 3x Cabinet of Ministers, 4x Chamber of Accounts (the level is a reading of the pattern, the names are the site's).
+T_ANSWER, T_AGREED, T_REMOVAL, T_REMOVED = 10, 25, 35, 45
+T_DONE = {15, 45, 55, 105, 125}                                   # Nazoratdan yechildi: removed from control = done
+T_REWORK = {19, 29, 33, 39, 59, 109, 129}                         # Qayta ishlashga yuborildi: back to the executor
+T_RETAKEN = {18, 34, 38, 48, 58, 108, 128}                        # Qayta nazoratga olindi: taken under control again
+T_INFO = {44, 54, 104, 49}                                        # 44.. Maʼlumot uchun qabul qilindi; 49 Qoʻshimcha maʼlumot uchun soʻrov: the task stays open, the term changes
+ANSWER_TYPES = {10: "Ответ исполнителя", 20: "Согласовано (Kelishilgan)", 25: "Согласование подтверждено (Kelishish tasdiqlangan)",
+                30: "Снятие с контроля согласовано (Nazoratdan olish kelishildi)", 40: "Снятие с контроля согласовано (Nazoratdan olish kelishildi)",
+                35: "Снятие с контроля подтверждено (Nazoratdan olishni tasdiqlandi)", 44: "Принято к сведению (Maʼlumot uchun qabul qilindi)",
+                54: "Принято к сведению (Maʼlumot uchun qabul qilindi)", 104: "Принято к сведению (Maʼlumot uchun qabul qilindi)",
+                49: "Запрос дополнительной информации (Qoʻshimcha maʼlumot uchun soʻrov)", 124: "Рассматривается (Koʻrib chiqilmoqda)"}
+for _c in T_DONE:
+    ANSWER_TYPES[_c] = "Снято с контроля (Nazoratdan yechildi)"
+for _c in T_REWORK:
+    ANSWER_TYPES[_c] = "Отправлено на доработку (Qayta ishlashga yuborildi)"
+for _c in T_RETAKEN:
+    ANSWER_TYPES[_c] = "Снова взято на контроль (Qayta nazoratga olindi)"
+
 
 
 # The way of an answer: entered -> Ministry of Justice -> Cabinet of Ministers -> Chamber of Accounts -> removed from control.
-# The Chamber either removes the task from control (done) or only accepts the answer for information (not done, new term).
+# The site stores NO stage: it is read from the answers. The answer that counts is the one with active=1, otherwise the newest:
+# 10 -> with the Ministry of Justice, 25 -> with the Cabinet, 35 -> with the Chamber, 29/49 -> back to us, 45 -> removed from control (done).
 STAGE_STEPS = [("sub", "Киритилди", "Ответ введён"), ("moj", "Адлия вазирлигида", "Согласование в Минюсте"), ("cab", "Вазирлар Маҳкамасида", "В Кабинете Министров"),
                ("chamber", "Ҳисоб палатасида", "В Счётной палате"), ("end", "Назоратдан ечилди", "Снята с контроля: выполнена")]
-T_ANSWER, T_AGREED, T_REWORK, T_REMOVAL, T_FINAL, T_REJECT, T_INFO = 10, 25, 29, 35, 45, 48, 49
+ACCEPTED_WORDS = ("қабул қилинди", "қабул килинди", "qabul qilindi", "принят")
+
+
+def current_answer(answers: list[dict]):
+    """The answer that says where the task is now: the one the site marks active, else the newest."""
+    ordered = sorted((a for a in answers if a.get("sender_type") is not None), key=lambda a: a.get("at_ms") or 0)
+    if not ordered:
+        return None
+    active = [a for a in ordered if a.get("active")]
+    return (active or ordered)[-1]
 
 
 def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
-    """Where the task is on its way. Read from the answers on the site (the latest one decides) and from the site's own 'done'.
-    A final answer on a task that is NOT done means the Chamber accepted it for information: the task is open, the term is new.
-    {code, n (index in STAGE_STEPS, -1 = no answer yet), label, hint, attention, new_due}. Periodic tasks have no single way: code 'periodic'."""
+    """Where the task is on its way. {code, n (index in STAGE_STEPS, -1 = no answer yet), label, hint, attention, new_due}.
+    code 'info': the Chamber of Accounts sent it back (accepted for information / asked for more): the task is NOT done and its term changes."""
     base = {"steps": [{"code": c, "label": l, "hint": h} for c, l, h in STAGE_STEPS], "new_due": None, "attention": False}
     if not snap["found"]:
         return base | {"code": "not_found", "n": None, "label": "Не найдена на сайте", "hint": ""}
     if snap["repeatable"] and json.loads(snap["periods"] or "[]"):
         return base | {"code": "periodic", "n": None, "label": "Периодическая задача", "hint": "Этапы считаются по каждому периоду отдельно"}
+    answers = json.loads(snap["answers"] or "[]")
+    cur = current_answer(answers)
+    t = cur["sender_type"] if cur else None
     done = classify(snap, due, dates=False)["status"] == "done"
-    answers = sorted((a for a in json.loads(snap["answers"] or "[]") if a.get("sender_type") is not None), key=lambda a: a.get("at_ms") or 0)
-    types = [a["sender_type"] for a in answers]
-    last = types[-1] if types else None
     if done:
         return base | {"code": "removed", "n": 4, "label": "Назоратдан ечилди", "hint": "Снята с контроля: выполнена"}
-    if last == T_FINAL:
+    if t in T_DONE:   # the answer of removal is there, the status on the site has not followed yet
+        return base | {"code": "removed_wait", "n": 4, "label": "Назоратдан ечилди", "hint": "Ответ о снятии получен, статус задачи на сайте ещё не обновился"}
+    if t in T_INFO:
         nd = _day(snap["due_ms"])
-        return base | {"code": "info", "n": 3, "label": "Маълумот учун қабул қилинди", "hint": "Счётная палата приняла ответ к сведению: задача НЕ выполнена, срок изменён",
+        accepted = any(w in (cur.get("text") or "").lower() for w in ACCEPTED_WORDS)
+        return base | {"code": "info", "n": 3, "label": "Маълумот учун қабул қилинди" if accepted else "Қўшимча маълумот сўрови",
+                       "hint": "Счётная палата вернула задачу" + (": ответ принят к сведению" if accepted else " с запросом информации") + ". Задача НЕ выполнена, срок изменён",
                        "attention": True, "new_due": nd.isoformat() if nd and dates else None}
-    if last in (T_REWORK, T_REJECT, T_INFO):
-        name = {T_REWORK: "Возврат на доработку", T_REJECT: "Отрицательное решение", T_INFO: "Запрос дополнительной информации"}[last]
+    if t in T_REWORK or t in T_RETAKEN:
+        name = "Возврат на доработку" if t in T_REWORK else "Снова взята на контроль"
         return base | {"code": "returned", "n": 0, "label": name, "hint": "Нужны действия исполнителя", "attention": True}
-    if last == T_REMOVAL:
+    if t == T_REMOVAL:
         return base | {"code": "chamber", "n": 3, "label": "Ҳисоб палатасида", "hint": "Кабинет подтвердил снятие, решает Счётная палата"}
-    if last == T_AGREED:
+    if t == T_AGREED:
         return base | {"code": "cab", "n": 2, "label": "Вазирлар Маҳкамасида", "hint": "Минюст согласовал, дело в Кабинете Министров"}
-    if last == T_ANSWER:
+    if t in (T_ANSWER, 20):
         return base | {"code": "moj", "n": 1, "label": "Адлия вазирлигида", "hint": "Ответ введён, идёт согласование в Минюсте"}
-    if T_REMOVAL in types:   # an answer of a type we do not know after the Cabinet: the Chamber has said something, but not "removed"
-        return base | {"code": "chamber_other", "n": 3, "label": f"Ответ Ҳисоб палатаси (тип {last})", "hint": "Тип ответа не распознан: уточните на сайте", "attention": True}
+    if t is not None:   # a type we do not know: shown, not guessed
+        return base | {"code": "chamber_other", "n": 3, "label": f"Ответ типа {t}", "hint": "Тип ответа не распознан: уточните на сайте", "attention": True}
     if snap["site_status"] == 2:
         return base | {"code": "answered", "n": 0, "label": "Киритилди", "hint": "Ответ введён; этап уточнится при следующей проверке (нет данных об ответах)"}
     return base | {"code": "none", "n": -1, "label": "Ответ не введён", "hint": "Исполнитель ещё не ответил"}
@@ -96,7 +125,7 @@ def auto_apply(c, task_id: int) -> list[str]:
 
 FUNNEL = [("none", "Ответ не введён", "Исполнитель ещё не ответил"), ("moj", "Адлия вазирлигида", "Ответ введён, согласование в Минюсте"),
           ("cab", "Вазирлар Маҳкамасида", "В Кабинете Министров"), ("chamber", "Ҳисоб палатасида", "Ждёт решения Счётной палаты"),
-          ("info", "Маълумот учун қабул қилинди", "Принято к сведению: НЕ выполнена, срок изменён"), ("returned", "Возврат / запрос", "Нужны действия исполнителя")]
+          ("info", "Ҳисоб палатаси вернула", "Принято к сведению или запрос информации: НЕ выполнена, срок изменён"), ("returned", "Возврат / запрос", "Нужны действия исполнителя")]
 _FUNNEL_OF = {"none": "none", "answered": "moj", "moj": "moj", "cab": "cab", "chamber": "chamber", "chamber_other": "chamber", "info": "info", "returned": "returned"}
 
 
@@ -226,7 +255,8 @@ def classify(snap, due: str | None = None, dates: bool = True) -> dict:
         return {"status": "progress", "label": "Ответ дан, идёт согласование", "note": "", "known": True}
     if st == 0:
         return {"status": "todo", "label": "В работе, ответа нет", "note": "", "known": True}
-    return {"status": None, "label": f"Неизвестный статус на сайте ({st})", "note": "Смысл этого значения ещё не определён: статус не меняется", "known": False}
+    note = "Задача лежит на вкладке «Выполнено» сайта, но смысл статуса 31 не определён: статус у нас не меняется" if st == 31 else "Смысл этого значения ещё не определён: статус не меняется"
+    return {"status": None, "label": f"Неизвестный статус на сайте ({st})", "note": note, "known": False}
 
 
 def card_link(snap, c=None) -> str:
