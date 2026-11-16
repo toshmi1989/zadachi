@@ -35,7 +35,7 @@ const DATA = {
 const ANSWERS = { "r-xpg": [{ sender_type: 10, state: 1, active: true, created_at: DATE(due - 10 * DAY), comment: "Ответ исполнителя, текст" }], "r-sec": [{ sender_type: 10, state: 1, comment: "СЕКРЕТНЫЙ ТЕКСТ" }, { sender_type: 45, state: 1, comment: "" }],
   "r-ojn": [{ sender_type: 10, state: 1, comment: "a" }, { sender_type: 25, state: 1 }, { sender_type: 35, state: 1 }, { sender_type: 45, state: 1 }] };
 const typeIdsOf = Object.fromEntries(Object.entries({ president: ["58f0be6d53aa2e226ea922e1"], government: ["63eb32785d0ebf50170ca672"], president_admin: ["67a1c6578b31062d692ce3f6"] }));
-let flaky = 0, wrongSession = false, calls = [];
+let flaky = 0, wrongSession = false, calls = [], layout = "normal";
 const encodeWithDates = obj => { // MessagePack with real ExtType 13 dates
   const walk = v => v && typeof v === "object" ? (v.__date !== undefined ? { __ext: v.__date } : Array.isArray(v) ? v.map(walk) : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]))) : v;
   const marker = "\u0001EXT\u0001"; const exts = [];
@@ -55,7 +55,10 @@ const fake = http.createServer((req, res) => {
       if (body.recipient_db_id !== "ORG1") return send(200, []);
       if (body.task_code === "REP0001" && flaky++ === 0) return send(429);
       const sec = Object.keys(typeIdsOf).find(s => body.type_ids.includes(typeIdsOf[s][0]));
-      return send(201, (DATA[sec] || []).filter(i => i.task_code === body.task_code));
+      const hit = (DATA[sec] || []).filter(i => i.task_code === body.task_code);
+      if (layout === "empty") return send(201, { data: [], total: 0 });
+      if (layout === "nested") return send(201, { data: hit.map(i => ({ id: i.id, status: i.status, is_done: i.is_done, task: { task_code: i.task_code, name: "x" } })), total: hit.length });
+      return send(201, hit);
     }
     if (req.url.endsWith("/task-requests/list")) return send(201, ANSWERS[body.recipient_id] || []);
     send(404);
@@ -124,7 +127,20 @@ const fake = http.createServer((req, res) => {
   const x2 = await admin("GET", "/api/tasks/" + id("XPG5469"));
   ok(evil.stored === 1 && !x2.site.found, "a malformed record is stored harmlessly (not found), nothing is executed");
   const diag = await core.diagnose({ server, client: mk() });
-  ok(diag.code_field === "task_code" && diag.item.status !== undefined && !JSON.stringify(diag).includes("Ответ исполнителя"), "diagnostics describes fields without leaking text");
+  ok(diag.found && diag.code_path === "task_code" && diag.item.status !== undefined && !JSON.stringify(diag).includes("Ответ исполнителя"), "diagnostics describes fields without leaking text");
+
+  // another layout of the answer: the list wrapped in {data, total}, the code one level deeper
+  layout = "nested";
+  const nested = await mk().find("XPG5469", { id: "president", type_ids: typeIdsOf.president });
+  ok(nested && core.codePath(nested, "XPG5469") === "task.task_code", "finds the task when the answer is wrapped and the code is nested: " + core.codePath(nested || {}, "XPG5469"));
+  const snapNested = core.snapshotOf("XPG5469", "president", nested, [], false);
+  ok(snapNested.recipient_id === "r-xpg" && snapNested.status === 2, "status and id are still read from the top level");
+  // the site answers, but nothing matches: the diagnostics explain what came back (shapes only)
+  layout = "empty";
+  const lost = await core.diagnose({ server, client: mk(), session: { id: "live-session", year: 2026, recipientDb: "ORG1", template: { statuses: [], limit: 50 } } });
+  ok(lost.error && lost.probes.length === 9 && lost.probes.every(p => p.http === 201 || p.http === 200), "nothing found: 9 probes (3 sections x 3 variants) say what the site answered");
+  ok(lost.session.has_recipient_db_id && lost.session.has_session_id && !JSON.stringify(lost).includes("live-session") && !JSON.stringify(lost).includes("ORG1"), "the diagnostics never contain the session id or the organisation id");
+  layout = "normal";
 
   fake.close(); console.log(fails ? fails + " FAILED" : "ALL PASS"); process.exit(fails ? 1 : 0);
 })().catch(e => { console.error("ERROR", e); process.exit(1); });

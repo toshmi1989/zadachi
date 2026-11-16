@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.0.0
+// @version      1.0.1
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -116,13 +116,35 @@
     if (r && typeof r === "object") { for (const k of ["data", "items", "list", "results", "rows", "tasks", "content"]) if (Array.isArray(r[k])) return r[k]; for (const k in r) if (Array.isArray(r[k])) return r[k]; }
     return [];
   };
-  const itemCode = it => {   // the field that holds the code is looked up, not assumed
-    for (const k of ["task_code", "code", "taskCode"]) if (typeof it[k] === "string") return it[k];
-    for (const k in it) if (typeof it[k] === "string" && /^[A-Z]{3}\d{4}$/.test(it[k])) return it[k];
-    return "";
+  /* where the code of the task sits in an element of the answer is looked up, not assumed: the usual field names first,
+     then any text value (up to three levels deep) that equals a task code */
+  const CODE_RE = /^[A-Z]{3}\d{4}$/i;
+  const codePath = (it, want) => {
+    for (const k of ["task_code", "code", "taskCode"]) if (typeof it[k] === "string" && (!want || it[k].toUpperCase() === want.toUpperCase())) return k;
+    const walk = (o, path, depth) => {
+      if (!o || typeof o !== "object" || depth > 3) return null;
+      for (const k of Object.keys(o)) {
+        const v = o[k];
+        if (typeof v === "string" && CODE_RE.test(v) && (!want || v.toUpperCase() === want.toUpperCase())) return path.concat(k).join(".");
+        if (v && typeof v === "object" && !(v instanceof Uint8Array)) { const r = walk(v, path.concat(Array.isArray(v) ? k + "[]" : k), depth + 1); if (r) return r; if (Array.isArray(v)) { for (const e of v.slice(0, 3)) { const r2 = walk(e, path.concat(k + "[]"), depth + 1); if (r2) return r2; } } }
+      }
+      return null;
+    };
+    return walk(it, [], 0);
   };
+  const getPath = (o, path) => path.split(".").reduce((a, k) => a == null ? a : a[k.replace("[]", "")], o);
+  const itemCode = it => { const p = codePath(it, null); const v = p ? getPath(it, p) : ""; return typeof v === "string" ? v : ""; };
+  const hasCode = (it, code) => { const p = codePath(it, code); return !!p; };
 
   function makeClient({ pageFetch, getSession, apiBase, sleep }) {
+    async function raw(path, body) {   // one request, answer as is (for diagnostics)
+      const s = getSession();
+      if (!s.id) throw new SessionError("Не удалось получить сессию ijro: откройте любой раздел «Топшириқлар» на сайте и повторите.");
+      const res = await pageFetch(apiBase + path, { method: "POST", headers: { "Content-Type": "application/octet-stream", "x-session-id": s.id, "x-year": String(s.year), "x-request-id": rid() }, body: encode(body) });
+      let data = null, err = null;
+      try { data = decode(new Uint8Array(await res.arrayBuffer())); } catch (e) { err = String(e.message || e); }
+      return { status: res.status, data, err };
+    }
     async function call(path, body, tries = 2) {
       const s = getSession();
       if (!s.id) throw new SessionError("Не удалось получить сессию ijro: откройте любой раздел «Топшириқлар» на сайте и повторите.");
@@ -139,10 +161,11 @@
         recipient_db_id: s.recipientDb, document_number: null, document_type_id: null, from_due_date: null, to_due_date: null, document_from_date: null, document_to_date: null, tasks: [] });
       if (!body.recipient_db_id) throw new SessionError("Не удалось узнать вашу организацию: откройте на сайте раздел «Топшириқлар», дождитесь списка и повторите.");
       const items = listOf(await call("/task/v2/list-by-recipient", body));
-      return items.find(it => itemCode(it).toUpperCase() === code.toUpperCase()) || null;
+      return items.find(it => hasCode(it, code)) || null;
     }
     const answers = async recipientId => listOf(await call("/task-requests/list", { recipient_id: recipientId, period_id: null }));
-    return { call, find, answers };
+    const bodyFor = (code, section, over) => { const s = getSession(); return Object.assign({}, DEFAULT_BODY, s.template || {}, { limit: 20, offset: 0, statuses: [], type_ids: section.type_ids, task_code: code, year: null, strict_search: false, recipient_db_id: s.recipientDb, document_number: null, document_type_id: null, from_due_date: null, to_due_date: null, document_from_date: null, document_to_date: null, tasks: [] }, over || {}); };
+    return { call, raw, find, answers, bodyFor };
   }
 
   function snapshotOf(code, sectionId, it, answerList, loaded) {
@@ -193,23 +216,42 @@
   }
 
   /* what the answers look like, without any values that could be personal: names of fields and their types */
-  async function diagnose({ server, client }) {
+  const shapeDeep = (v, depth) => {
+    if (v === null) return "null"; if (v instanceof Uint8Array) return "bytes";
+    if (Array.isArray(v)) return depth > 0 && v.length ? { "array": v.length, "first": shapeDeep(v[0], depth - 1) } : "array(" + v.length + ")";
+    if (typeof v === "object") { if (depth <= 0) return "object"; const r = {}; for (const k of Object.keys(v).slice(0, 60)) r[k] = shapeDeep(v[k], depth - 1); return r; }
+    if (typeof v === "string") return "string(" + v.length + ")";
+    if (typeof v === "boolean" || (typeof v === "number" && Math.abs(v) < 1000)) return v;
+    return typeof v;
+  };
+  /* what the answers look like, without any value that could be personal: names of fields, their types, small numbers */
+  async function diagnose({ server, client, session }) {
     const job = await server("GET", "/api/sync/job");
-    const shape = o => { const r = {}; for (const k in (o || {})) { const v = o[k]; r[k] = v === null ? "null" : Array.isArray(v) ? "array(" + v.length + ")" : (typeof v === "number" && Math.abs(v) < 1000) || typeof v === "boolean" ? v : typeof v === "string" ? "string(" + v.length + ")" : typeof v; } return r; };
+    const out = { script: "1.0.1", session: session ? { has_session_id: !!session.id, year: session.year, has_recipient_db_id: !!session.recipientDb, page_template_seen: !!session.template, template_keys: session.template ? Object.keys(session.template) : [] } : null, job_items: job.items.length, probes: [] };
     for (const t of job.items.slice(0, 15)) {
       for (const s of job.sections) {
         const it = await client.find(t.code, s);
         if (it) {
           const ans = await client.answers(it.id ?? it.recipient_id).catch(() => []);
-          const per = Array.isArray(it.repeat_periods) && it.repeat_periods[0] ? shape(it.repeat_periods[0]) : null;
-          return { section: s.id, code_field: Object.keys(it).find(k => it[k] === t.code || (typeof it[k] === "string" && it[k].toUpperCase() === t.code)) || null, item: shape(it), repeat_period: per, answers_count: ans.length, answer: shape(ans[0]) };
+          const per = Array.isArray(it.repeat_periods) && it.repeat_periods[0] ? shapeDeep(it.repeat_periods[0], 1) : null;
+          return Object.assign(out, { found: true, section: s.id, code_path: codePath(it, t.code), item: shapeDeep(it, 2), repeat_period: per, answers_count: ans.length, answer: shapeDeep(ans[0], 2) });
         }
       }
     }
-    return { error: "Ни одна из первых задач не найдена на сайте" };
+    // nothing found: show what the site answers to the same question, to see what differs
+    const t = job.items[0];
+    for (const s of job.sections) {
+      for (const [name, over] of [["как в скрипте", {}], ["без типов документов", { type_ids: [] }], ["без кода, 1 запись", { type_ids: [], task_code: "", limit: 1 }]]) {
+        const r = await client.raw("/task/v2/list-by-recipient", client.bodyFor(t.code, s, over));
+        const list = listOf(r.data);
+        out.probes.push({ section: s.id, variant: name, http: r.status, decode_error: r.err, answer: shapeDeep(r.data, 2), list_length: list.length, code_path_in_first: list[0] ? codePath(list[0], null) : null, code_is_here: list.some(x => hasCode(x, t.code)), sent_type_ids: (over.type_ids || s.type_ids).length });
+      }
+    }
+    out.error = "Ни одна из первых задач не найдена на сайте";
+    return out;
   }
 
-  const core = { encode, decode, makeClient, runSync, diagnose, snapshotOf, itemCode, listOf, toMs, SessionError, RateError, DEFAULT_BODY };
+  const core = { encode, decode, makeClient, runSync, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, DEFAULT_BODY };
   if (typeof module !== "undefined" && module.exports) { module.exports = core; return; }
   if (typeof GM_xmlhttpRequest === "undefined" || typeof document === "undefined") return;
 
@@ -276,7 +318,7 @@
     $("stop").onclick = () => { stop = true; };
     $("diag").onclick = async () => {
       if (running) return; running = true; log("Диагностика…");
-      try { const r = await diagnose({ server, client: client() }); const t = JSON.stringify(r, null, 2); log(t); try { await navigator.clipboard.writeText(t); log("Скопировано в буфер обмена. Отправьте это разработчику.\n" + t); } catch (e) { /* shown anyway */ } }
+      try { const r = await diagnose({ server, client: client(), session: state }); const t = JSON.stringify(r, null, 2); log(t); try { await navigator.clipboard.writeText(t); log("Скопировано в буфер обмена. Отправьте это разработчику.\n" + t); } catch (e) { /* shown anyway */ } }
       catch (e) { log("Ошибка: " + e.message); } running = false;
     };
     $("go").onclick = async () => {
