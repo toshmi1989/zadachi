@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS users (
     remind INTEGER NOT NULL DEFAULT 1,
     remind_days TEXT NOT NULL DEFAULT '',
     remind_overdue INTEGER,
-    notify_assign INTEGER NOT NULL DEFAULT 1
+    notify_assign INTEGER NOT NULL DEFAULT 1,
+    pw_set INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
@@ -130,6 +131,7 @@ DEFAULT_SETTINGS = {
     "rem_overdue": "1",           # repeat overdue tasks every N days (0 = never)
     "rem_by": "close",            # which term the reminders use: close | due
     "rem_admin": "1",             # summary for administrators
+    "login_list": "1",            # show the list of employees on the sign-in page
     "rem_max": "15",              # tasks listed in one message
     "public_url": "",             # site address for links in messages
 }
@@ -142,7 +144,12 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN remind_days TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN remind_overdue INTEGER",
     "ALTER TABLE users ADD COLUMN notify_assign INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE users ADD COLUMN pw_set INTEGER NOT NULL DEFAULT 0",
 ]
+# pw_set = somebody has issued this person a password (people created by the Excel import have none yet)
+BACKFILL_PW_SET = """UPDATE users SET pw_set=1 WHERE role='admin'
+    OR id IN (SELECT user_id FROM audit WHERE action='login.ok' AND user_id IS NOT NULL)
+    OR id IN (SELECT entity_id FROM audit WHERE action IN ('user.password','user.create') AND entity_id IS NOT NULL)"""
 
 
 def connect() -> sqlite3.Connection:
@@ -176,6 +183,8 @@ def init_db() -> None:
         for stmt in MIGRATIONS:
             try:
                 c.execute(stmt)
+                if "pw_set" in stmt:
+                    c.execute(BACKFILL_PW_SET)  # column just added to an existing database: work out who already has a password
             except sqlite3.OperationalError as e:  # "duplicate column name": already there
                 if "duplicate column" not in str(e):
                     raise

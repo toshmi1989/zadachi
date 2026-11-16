@@ -31,7 +31,7 @@ async def lifespan(_app):
 app = FastAPI(title="Zadachi", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
-OPEN_PATHS = ("/healthz", "/login")
+OPEN_PATHS = ("/healthz", "/login", "/api/login-users")
 ADMIN_ONLY = re.compile(r"^/api/(users|import|settings|backup|audit|reminders/(settings|preview|run|log))(/|$)")
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -116,8 +116,40 @@ def index():
 LOGIN_HTML = open(os.path.join(STATIC, "login.html"), encoding="utf-8").read()
 
 
-def login_page(error: str = "", status: int = 200):
-    return HTMLResponse(LOGIN_HTML.replace("{{error}}", error), status, headers={"Cache-Control": "no-store"})
+def login_page(error: str = "", status: int = 200, uid: str = "", login: str = ""):
+    import html
+    page = (LOGIN_HTML.replace("{{error}}", html.escape(error)).replace("{{uid}}", html.escape(uid if uid.isdigit() else ""))
+            .replace("{{login}}", html.escape(login[:60])))
+    return HTMLResponse(page, status, headers={"Cache-Control": "no-store"})
+
+
+def pickable(c):
+    """People shown on the sign-in page: active, with a password, not administrators (those type their login)."""
+    return c.execute("SELECT id, name FROM users WHERE active=1 AND pw_set=1 AND role != 'admin' ORDER BY name").fetchall()
+
+
+def login_for_uid(uid: str) -> str:
+    if not uid.isdigit() or setting("login_list") != "1":
+        return ""
+    c = connect()
+    try:
+        if not any(r["id"] == int(uid) for r in pickable(c)):
+            return ""
+        return c.execute("SELECT login FROM users WHERE id=?", (int(uid),)).fetchone()["login"]
+    finally:
+        c.close()
+
+
+@app.get("/api/login-users")
+def api_login_users():
+    """Public on purpose: the sign-in page lets people pick their name. Only ids and names, never logins; the administrator can switch it off."""
+    if setting("login_list") != "1":
+        return {"enabled": False, "items": []}
+    c = connect()
+    try:
+        return {"enabled": True, "items": [{"id": r["id"], "name": r["name"]} for r in pickable(c)]}
+    finally:
+        c.close()
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -126,16 +158,18 @@ def login_get(request: Request):
 
 
 @app.post("/login")
-def login_post(request: Request, login: str = Form(...), password: str = Form(...)):
+def login_post(request: Request, login: str = Form(""), password: str = Form(...), uid: str = Form("")):
     ip = client_ip(request)
     if auth.too_many_fails(ip):
-        return login_page("Слишком много попыток. Подождите 15 минут.", 429)
-    res = auth.login(login, password)
+        return login_page("Слишком много попыток. Подождите 15 минут.", 429, uid, login)
+    if uid:  # a person picked from the list: the login is looked up on the server, the browser never sees it
+        login = login_for_uid(uid)
+    res = auth.login(login, password) if login else None
     if not res:
         auth.record_fail(ip)
         with tx() as c:
-            audit(c, "login.fail", "user", None, {"login": login[:60]})
-        return login_page("Неверный логин или пароль.", 401)
+            audit(c, "login.fail", "user", None, {"login": login[:60], "picked": bool(uid)})
+        return login_page("Неверный пароль." if uid else "Неверный логин или пароль.", 401, uid, login if not uid else "")
     auth.clear_fails(ip)
     auth.CURRENT.set({"id": res["user_id"]})
     with tx() as c:
@@ -366,7 +400,7 @@ async def api_user_create(request: Request):
         bad("Пароль не короче 8 символов")
     try:
         with tx() as c:
-            cur = c.execute("INSERT INTO users(login, name, password_hash, role, excel_name, created_at) VALUES (?,?,?,?,?,?)",
+            cur = c.execute("INSERT INTO users(login, name, password_hash, role, excel_name, created_at, pw_set) VALUES (?,?,?,?,?,?,1)",
                             (login, name, auth.hash_password(password), role, str(b.get("excel_name") or "").strip(), now()))
             linked = relink(c, cur.lastrowid, name, b.get("excel_name") or "")
             audit(c, "user.create", "user", cur.lastrowid, {"login": login, "role": role, "linked_tasks": linked})
@@ -411,7 +445,7 @@ async def api_user_password(request: Request, uid: int):
     elif len(password) < 8:
         bad("Пароль не короче 8 символов")
     with tx() as c:
-        if not c.execute("UPDATE users SET password_hash=? WHERE id=?", (auth.hash_password(password), uid)).rowcount:
+        if not c.execute("UPDATE users SET password_hash=?, pw_set=1 WHERE id=?", (auth.hash_password(password), uid)).rowcount:
             bad("Пользователь не найден", 404)
         if uid != me(request)["id"]:  # other devices of this person are logged out, the admin keeps their own session
             c.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
@@ -434,7 +468,7 @@ async def api_my_password(request: Request):
     if len(new) < 8:
         bad("Новый пароль не короче 8 символов")
     with tx() as c:
-        c.execute("UPDATE users SET password_hash=? WHERE id=?", (auth.hash_password(new), u["id"]))
+        c.execute("UPDATE users SET password_hash=?, pw_set=1 WHERE id=?", (auth.hash_password(new), u["id"]))
         audit(c, "password.change", "user", u["id"], {})
     return {"ok": True}
 
@@ -469,18 +503,26 @@ def api_import_history():
 
 @app.get("/api/settings")
 def api_settings():
-    return {"users_tasks": setting("users_tasks"), "backup": {"files": len(backup._files()), "latest": backup.verify_latest()}}
+    return {"users_tasks": setting("users_tasks"), "login_list": setting("login_list") == "1",
+            "backup": {"files": len(backup._files()), "latest": backup.verify_latest()}}
 
 
 @app.put("/api/settings")
 async def api_settings_put(request: Request):
     b = await _json(request)
-    v = b.get("users_tasks")
-    if v not in ("all", "own", "none"):
-        bad("Допустимо: all, own, none")
+    values = {}
+    if "users_tasks" in b:
+        if b["users_tasks"] not in ("all", "own", "none"):
+            bad("Допустимо: all, own, none")
+        values["users_tasks"] = b["users_tasks"]
+    if "login_list" in b:
+        values["login_list"] = "1" if b["login_list"] else "0"
+    if not values:
+        bad("Нечего менять")
     with tx() as c:
-        c.execute("INSERT INTO settings(key, value) VALUES ('users_tasks', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (v,))
-        audit(c, "settings.update", "settings", None, {"users_tasks": v})
+        from .db import put_settings
+        put_settings(c, values)
+        audit(c, "settings.update", "settings", None, values)
     return {"ok": True}
 
 

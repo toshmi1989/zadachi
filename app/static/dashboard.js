@@ -72,7 +72,7 @@ routes.dashboard = async function (page) {
   paintKpi(true);
 
   /* ---- people: bars + legend ---- */
-  const legend = KEYS.map(k => `<button type="button" class="lg k-${k}" data-key="${k}"><i></i>${LABEL[k]}</button>`).join("");
+  const legend = KEYS.map(k => `<button type="button" class="lgd k-${k}" data-key="${k}"><i></i>${LABEL[k]}</button>`).join("");
   page.insertAdjacentHTML("beforeend", `
     <section class="grid2">
       <div class="card rise" style="--i:6">
@@ -123,9 +123,9 @@ routes.dashboard = async function (page) {
   /* legend = focus one category across all people */
   let focus = "";
   $("#legend", page).onclick = e => {
-    const b = e.target.closest(".lg"); if (!b) return;
+    const b = e.target.closest(".lgd"); if (!b) return;
     focus = focus === b.dataset.key ? "" : b.dataset.key;
-    $$("#legend .lg", page).forEach(x => x.classList.toggle("off", !!focus && x.dataset.key !== focus));
+    $$("#legend .lgd", page).forEach(x => x.classList.toggle("off", !!focus && x.dataset.key !== focus));
     $$(".bar", peopleBox).forEach(bar => { bar.classList.toggle("dim", !!focus); $$(".seg-b", bar).forEach(s => s.classList.toggle("hit", s.dataset.key === focus)); });
   };
 
@@ -211,7 +211,7 @@ routes.dashboard = async function (page) {
   const colMax = {}; MCOL.forEach(([k]) => colMax[k] = Math.max(1, ...people.map(p => p[k])));
   function paintMatrix() {
     const pc = Z.mode === "pct";
-    const head = `<thead><tr><th>Сотрудник</th><th>Всего</th>${MCOL.map(([k, l]) => `<th><button class="lg k-${k}" data-h="${k}" style="font-weight:500"><i></i>${l}</button></th>`).join("")}<th>% вып.</th></tr></thead>`;
+    const head = `<thead><tr><th>Сотрудник</th><th>Всего</th>${MCOL.map(([k, l]) => `<th><button class="lgd k-${k}" data-h="${k}" style="font-weight:500"><i></i>${l}</button></th>`).join("")}<th>% вып.</th></tr></thead>`;
     const cell = (p, k) => {
       const n = p[k], a = n ? (0.14 + 0.5 * n / colMax[k]).toFixed(2) : 0;
       return `<td><button class="cell k-${k}${n ? "" : " z"}" style="--a:${a}" data-id="${p.id}" data-key="${k}" data-tip="<b>${esc(p.name)}</b>${LABEL[k]}: ${n} (${pct(n, p.total)}%)"><span>${n ? (pc ? pct(n, p.total) + "%" : n) : "·"}</span></button></td>`;

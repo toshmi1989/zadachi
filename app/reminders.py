@@ -265,7 +265,8 @@ def run_due(at: datetime | None = None, *, force: bool = False, dry: bool = Fals
             if dry:
                 rec["status"] = "would_send"
                 continue
-            ok, err = telegram.send(u["tg_chat_id"], rec["text"])
+            from . import botui
+            ok, err = telegram.send(u["tg_chat_id"], rec["text"], markup=botui.digest_markup(g, u["id"]))
             rec.update(status="sent" if ok else "error", reason=err)
             kind = "digest" if ok and not force else ("manual" if ok else "error")
             c.execute("INSERT OR IGNORE INTO reminder_log(user_id, day, kind, ok, count, overdue, detail, created_at) VALUES (?,?,?,?,?,?,?,?)",
@@ -296,6 +297,7 @@ def notify_assigned(pairs: list[tuple[int, int]]) -> None:
                 text += f"\nи ещё {len(ts) - 5}…"
             if g["public_url"]:
                 text += f"\n<a href=\"{esc(g['public_url'])}/#/tasks?assignee={uid}&amp;status=open\">Открыть мои задачи</a>"
-            telegram.send_async(u["tg_chat_id"], text)
+            from . import botui
+            telegram.send_async(u["tg_chat_id"], text, botui.digest_markup(g, uid))
     finally:
         c.close()

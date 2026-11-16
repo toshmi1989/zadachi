@@ -52,7 +52,7 @@ def ensure_admin(c: sqlite3.Connection) -> None:
     generated = not password
     if generated:
         password = generate_password()
-    c.execute("INSERT INTO users(login, name, password_hash, role, created_at) VALUES ('admin', 'Администратор', ?, 'admin', ?)",
+    c.execute("INSERT INTO users(login, name, password_hash, role, created_at, pw_set) VALUES ('admin', 'Администратор', ?, 'admin', ?, 1)",
               (hash_password(password), now()))
     if generated:
         print(f'Создан администратор: логин "admin", пароль "{password}". Запишите его и смените на странице «Пользователи».', flush=True)

@@ -8,18 +8,40 @@
 <link rel="stylesheet" href="/static/styles.css">
 <script src="/static/theme.js"></script>
 </head>
-<body class="login-page">
+<body class="login-page" data-uid="{{uid}}">
 <div class="orb o1"></div><div class="orb o2"></div>
 <main class="login">
   <div class="brand big"><span class="logo"><svg viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg></span><span><b>Задачи</b><small>контроль исполнения поручений</small></span></div>
-  <form method="post" action="/login" class="card login-card">
-    <h1>Вход</h1>
-    <p class="err" role="alert">{{error}}</p>
-    <div class="fld"><label for="login">Логин</label><input id="login" name="login" autocomplete="username" autocapitalize="off" spellcheck="false" required autofocus></div>
-    <div class="fld"><label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
-    <button class="btn pri big">Войти</button>
-    <p class="hint">Логин и пароль выдаёт администратор.</p>
+  <form method="post" action="/login" class="card login-card" id="f" autocomplete="off">
+    <input type="hidden" name="uid" id="uid" value="">
+    <h1 id="title">Вход</h1>
+    <p class="err" role="alert" id="err">{{error}}</p>
+
+    <!-- 1. pick yourself (shown by login.js when the list is available) -->
+    <section id="s-pick" hidden>
+      <div class="search"><input id="q" type="search" placeholder="Найти себя в списке" autocomplete="off"></div>
+      <div class="plist" id="plist" role="listbox" aria-label="Сотрудники"></div>
+      <p class="hint" style="margin:12px 0 0"><button type="button" class="linkbtn" id="to-manual">Войти по логину</button></p>
+    </section>
+
+    <!-- 2. password of the chosen person -->
+    <section id="s-pass" hidden>
+      <div class="who-sel"><span class="av lg" id="who-av"></span><div><b id="who-name"></b><br><button type="button" class="linkbtn" id="to-pick">Это не я</button></div></div>
+      <div class="fld" style="margin-top:16px"><label for="pw1">Пароль</label>
+        <div class="pwbox"><input id="pw1" type="password" autocomplete="current-password"><button type="button" class="eye" id="eye1" aria-label="Показать пароль"></button></div></div>
+      <button class="btn pri big">Войти</button>
+    </section>
+
+    <!-- 3. login and password by hand (also the only form when JavaScript is off) -->
+    <section id="s-manual">
+      <div class="fld"><label for="login">Логин</label><input id="login" name="login" value="{{login}}" autocomplete="username" autocapitalize="off" spellcheck="false"></div>
+      <div class="fld"><label for="pw2">Пароль</label><input id="pw2" type="password" autocomplete="current-password"></div>
+      <button class="btn pri big">Войти</button>
+      <p class="hint" style="margin:12px 0 0"><button type="button" class="linkbtn" id="to-pick2" hidden>Выбрать себя из списка</button><span id="nolist">Логин и пароль выдаёт администратор.</span></p>
+    </section>
+    <input type="hidden" name="password" id="password">
   </form>
 </main>
+<script src="/static/login.js"></script>
 </body>
 </html>

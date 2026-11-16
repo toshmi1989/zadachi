@@ -105,13 +105,16 @@ routes.settings = async function (page) {
   const b = s.backup.latest;
   page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Настройки</h1></div></div>
     <div class="card rise" style="--i:1;max-width:760px"><div class="card-head"><div><h2>Что видит пользователь</h2><p class="sub">Администратор всегда видит и редактирует всё.</p></div></div><div class="opts" id="opts">${opts.map(o => `<button class="opt${s.users_tasks === o[0] ? " on" : ""}" data-v="${o[0]}"><span class="rd" style="margin-top:2px"></span><div><b>${o[1]}</b><span>${o[2]}</span></div></button>`).join("")}</div></div>
-    <div class="card rise" style="--i:2;max-width:760px;margin-top:16px"><div class="card-head"><div><h2>${icon("db")}Резервные копии</h2><p class="sub">Автоматически каждые 6 часов, хранятся 14 последних — на этом же сервере.</p></div><button class="btn" id="bk">Сделать копию сейчас</button></div>
+    <div class="card rise" style="--i:2;max-width:760px;margin-top:16px"><div class="card-head"><div><h2>${icon("users")}Страница входа</h2><p class="sub">Можно выбрать себя из списка и ввести только пароль.</p></div></div>
+      <div class="row" style="padding-top:0"><div class="lb"><b>Показывать список сотрудников</b><span>Имена видны любому, кто откроет страницу входа. Администраторы в список не попадают, они вводят логин. Выключите, если имена сотрудников не должны быть видны посторонним.</span></div><label class="sw"><input type="checkbox" id="ll"${s.login_list ? " checked" : ""}><span class="trk"><i></i></span></label></div></div>
+    <div class="card rise" style="--i:3;max-width:760px;margin-top:16px"><div class="card-head"><div><h2>${icon("db")}Резервные копии</h2><p class="sub">Автоматически каждые 6 часов, хранятся 14 последних — на этом же сервере.</p></div><button class="btn" id="bk">Сделать копию сейчас</button></div>
       <p id="bkinfo">${b.ok ? `Последняя копия проверена: <b>${esc(b.file)}</b> · задач внутри: ${b.tasks}` : `<span style="color:var(--c-overdue)">${esc(b.error || "копия не проверена")}</span>`}</p>
       <p class="hint">Копии лежат в папке данных (<code>/data/backups</code>). Периодически копируйте её на другой компьютер — иначе потеря сервера уносит и копии.</p></div>`;
   $("#opts", page).onclick = async e => {
     const o = e.target.closest(".opt"); if (!o || o.classList.contains("on")) return;
     try { await api("/api/settings", { method: "PUT", json: { users_tasks: o.dataset.v } }); $$(".opt", page).forEach(x => x.classList.toggle("on", x === o)); toast("Сохранено"); } catch (er) { toast(er.message, "error"); }
   };
+  $("#ll", page).onchange = async e => { try { await api("/api/settings", { method: "PUT", json: { login_list: e.target.checked } }); toast(e.target.checked ? "Список на странице входа включён" : "Список на странице входа выключен"); } catch (er) { toast(er.message, "error"); e.target.checked = !e.target.checked; } };
   $("#bk", page).onclick = async ev => {
     ev.target.disabled = true;
     try { const r = await api("/api/backup", { method: "POST", json: {} }); toast("Копия создана: " + r.file); route(); } catch (er) { toast(er.message, "error"); ev.target.disabled = false; }

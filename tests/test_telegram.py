@@ -185,3 +185,72 @@ def test_link_requires_token_and_unlink(sidorov, monkeypatch):
     assert sidorov.post("/api/telegram/link").status_code == 400
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", TOKEN)
     assert sidorov.post("/api/telegram/unlink").status_code == 200
+
+
+# ---------------------------------------------------------------- buttons
+
+def flat(markup):
+    rows = markup.get("inline_keyboard") or markup.get("keyboard") or []
+    return [b for row in rows for b in row]
+
+
+def test_buttons_menu_and_navigation(admin, sidorov):
+    link = sidorov.post("/api/telegram/link").json()
+    FAKE.push(CHAT + 1, f"/start {link['code']}", "sidor2")
+    telegram.poll_once()
+    chat = CHAT + 1
+    kb = FAKE.last_markup(chat)
+    labels = [b["text"] for b in flat(kb)]
+    assert "📋 Мои задачи" in labels and "⚙️ Настройки" in labels and "📊 Сводка" not in labels   # the summary button is for administrators
+    assert kb["is_persistent"] and kb["resize_keyboard"]
+    FAKE.push(chat, "🔴 Просрочено"); telegram.poll_once()
+    assert "TG0001" in FAKE.texts(chat)[-1] and "TG0003" not in FAKE.texts(chat)[-1]
+    assert {b.get("callback_data") for b in flat(FAKE.last_markup(chat))} >= {"v:all", "v:overdue", "v:week", "s:open"}
+    FAKE.push(chat, "📅 Эта неделя"); telegram.poll_once()
+    assert "TG0003" in FAKE.texts(chat)[-1] and "TG0001" not in FAKE.texts(chat)[-1]
+    FAKE.push_callback(chat, "v:all", 77); telegram.poll_once()             # inline button edits the message in place
+    e = FAKE.edits[-1]
+    assert e["message_id"] == 77 and "TG0001" in e["text"] and "TG0003" in e["text"]
+    assert FAKE.answers[-1]["callback_query_id"].startswith("cb")
+
+
+def test_buttons_settings_change_only_own_rules(admin, sidorov):
+    chat = CHAT + 1
+    sidorov.put("/api/reminders/me", json={"remind": True, "notify_assign": True, "days": None, "overdue": None})
+    FAKE.push(chat, "⚙️ Настройки"); telegram.poll_once()
+    assert "Настройки напоминаний" in FAKE.texts(chat)[-1] and "как у всех" in FAKE.texts(chat)[-1]
+    FAKE.push_callback(chat, "s:d:5"); telegram.poll_once()                  # add "5 days before" to the effective list 7,3,1,0
+    mine = sidorov.get("/api/reminders/me").json()["mine"]
+    assert mine["days"] == [7, 5, 3, 1, 0] and mine["custom_days"]
+    assert "✅ 5 дн." in str(FAKE.edits[-1]["reply_markup"])
+    FAKE.push_callback(chat, "s:d:7"); telegram.poll_once()
+    assert sidorov.get("/api/reminders/me").json()["mine"]["days"] == [5, 3, 1, 0]
+    FAKE.push_callback(chat, "s:o:3"); telegram.poll_once()
+    assert sidorov.get("/api/reminders/me").json()["mine"]["overdue"] == 3
+    FAKE.push_callback(chat, "s:asg"); telegram.poll_once()
+    assert sidorov.get("/api/reminders/me").json()["mine"]["notify_assign"] is False
+    FAKE.push_callback(chat, "s:on"); telegram.poll_once()
+    assert sidorov.get("/api/reminders/me").json()["mine"]["remind"] is False
+    FAKE.push_callback(chat, "s:on"); FAKE.push_callback(chat, "s:asg"); FAKE.push_callback(chat, "s:reset"); telegram.poll_once()
+    m = sidorov.get("/api/reminders/me").json()["mine"]
+    assert m["remind"] and m["notify_assign"] and not m["custom_days"] and not m["custom_overdue"]
+    FAKE.push_callback(chat, "s:d:99"); FAKE.push_callback(chat, "s:o:99"); FAKE.push_callback(chat, "s:nonsense"); telegram.poll_once()   # junk is ignored
+    assert not sidorov.get("/api/reminders/me").json()["mine"]["custom_days"]
+
+
+def test_buttons_stranger_and_digest_markup(admin, sidorov):
+    FAKE.push_callback(31337, "s:on"); telegram.poll_once()
+    assert FAKE.answers[-1].get("text") == "Telegram не привязан к аккаунту" and not FAKE.edits[-1]["chat_id"] == 31337
+    admin.put("/api/reminders/settings", json={"public_url": "https://z.example.uz"})
+    reminders.run_due(MON_9, force=True)
+    mk = FAKE.last_markup(CHAT + 1)
+    urls = [b.get("url") for b in flat(mk) if b.get("url")]
+    assert urls == ["https://z.example.uz/#/tasks?assignee=%d&status=open" % sidorov.uid]
+    admin.put("/api/reminders/settings", json={"public_url": "http://localhost:8766"})
+    reminders.run_due(MON_9, force=True)
+    assert not [b for b in flat(FAKE.last_markup(CHAT + 1)) if b.get("url")]               # Telegram would reject a local address
+
+
+def test_unlink_removes_keyboard():
+    FAKE.push(CHAT + 1, "/unlink"); telegram.poll_once()
+    assert FAKE.last_markup(CHAT + 1) == {"remove_keyboard": True}

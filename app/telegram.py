@@ -72,12 +72,14 @@ def esc(s) -> str:
     return html.escape(str(s or ""), quote=False)
 
 
-def send(chat_id: str, text: str, *, silent: bool = False) -> tuple[bool, str]:
+def send(chat_id: str, text: str, *, silent: bool = False, markup: dict | None = None) -> tuple[bool, str]:
     """(ok, error). A user who blocked the bot is unlinked, so nothing is sent into the void every morning."""
     for attempt in (1, 2):
         try:
-            api("sendMessage", {"chat_id": chat_id, "text": text[:4000], "parse_mode": "HTML", "disable_web_page_preview": True,
-                                "disable_notification": silent})
+            payload = {"chat_id": chat_id, "text": text[:4000], "parse_mode": "HTML", "disable_web_page_preview": True, "disable_notification": silent}
+            if markup:
+                payload["reply_markup"] = markup
+            api("sendMessage", payload)
             return True, ""
         except TgError as e:
             if e.code == 429 and attempt == 1:
@@ -91,8 +93,24 @@ def send(chat_id: str, text: str, *, silent: bool = False) -> tuple[bool, str]:
     return False, "не удалось отправить"
 
 
-def send_async(chat_id: str, text: str) -> None:
-    threading.Thread(target=send, args=(chat_id, text), daemon=True).start()
+def send_async(chat_id: str, text: str, markup: dict | None = None) -> None:
+    threading.Thread(target=send, args=(chat_id, text), kwargs={"markup": markup}, daemon=True).start()
+
+
+def edit(chat_id: str, message_id: int, text: str, markup: dict | None) -> None:
+    try:
+        api("editMessageText", {"chat_id": chat_id, "message_id": message_id, "text": text[:4000], "parse_mode": "HTML",
+                                "disable_web_page_preview": True, "reply_markup": markup or {"inline_keyboard": []}})
+    except TgError as e:
+        if "not modified" not in e.description:   # pressing the same button twice is not an error
+            raise
+
+
+def answer(callback_id: str, text: str = "") -> None:
+    try:
+        api("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
+    except TgError:
+        pass
 
 
 # ---------------------------------------------------------------- linking
@@ -117,17 +135,48 @@ def link(code: str, chat_id: str, username: str) -> str:
         c.execute("UPDATE users SET tg_chat_id=?, tg_username=?, tg_code='', tg_code_exp='', remind=1 WHERE id=?", (chat_id, username, u["id"]))
         audit(c, "telegram.link", "user", u["id"], {})
     return (f"Готово, {esc(auth.short_name(u['name']))}. Напоминания включены.\n\n"
-            "Команды: /my — мои задачи сейчас, /stop — выключить, /start — включить, /unlink — отвязать, /help.")
+            "Кнопки внизу покажут ваши задачи и настройки. Каждое утро я пришлю сводку.")
 
 
-HELP = ("<b>Команды</b>\n/my — мои задачи: просрочено и ближайшие сроки\n/stop — выключить напоминания\n"
-        "/start — включить обратно\n/unlink — отвязать этот Telegram\n\n"
-        "Что и когда приходит, настраивается на сайте, раздел «Напоминания».")
+HELP = ("<b>Что умеет бот</b>\nКнопки внизу: мои задачи, просрочено, эта неделя, настройки.\n"
+        "Команды: /my, /overdue, /week, /settings, /stop (выключить), /start (включить), /unlink (отвязать Telegram).\n\n"
+        "Что и когда приходит, настраивается кнопкой «⚙️ Настройки» здесь или на сайте, раздел «Напоминания».")
+
+
+def _user_by_chat(chat_id: str):
+    c = connect()
+    try:
+        return c.execute("SELECT * FROM users WHERE tg_chat_id=? AND active=1", (chat_id,)).fetchone()
+    finally:
+        c.close()
+
+
+def handle_callback(cq: dict) -> None:
+    from . import botui
+
+    msg = cq.get("message") or {}
+    chat_id = str((msg.get("chat") or {}).get("id", ""))
+    me = _user_by_chat(chat_id) if chat_id else None
+    if not me:
+        answer(cq["id"], "Telegram не привязан к аккаунту")
+        return
+    data = cq.get("data", "")
+    if data.startswith("s:") and data != "s:open":
+        botui.apply(me["id"], data)
+    if data.startswith("v:"):
+        text, markup = botui.view(me["id"], data[2:])
+    else:
+        text, markup = botui.settings_view(me["id"])
+    edit(chat_id, msg["message_id"], text, markup)
+    answer(cq["id"])
 
 
 def handle_update(u: dict) -> None:
-    from . import reminders
+    from . import botui
 
+    if u.get("callback_query"):
+        handle_callback(u["callback_query"])
+        return
     msg = u.get("message") or {}
     chat = msg.get("chat") or {}
     if chat.get("type") != "private" or not msg.get("text"):
@@ -136,19 +185,19 @@ def handle_update(u: dict) -> None:
     uname = (msg.get("from") or {}).get("username", "")
     parts = text.split(maxsplit=1)
     cmd = parts[0].split("@")[0].lower()
-    c = connect()
-    try:
-        me = c.execute("SELECT * FROM users WHERE tg_chat_id=? AND active=1", (chat_id,)).fetchone()
-    finally:
-        c.close()
-    reply = ""
+    kind = botui.MENU.get(text) or {"/my": "all", "/tasks": "all", "/overdue": "overdue", "/week": "week", "/settings": "settings",
+                                     "/summary": "summary", "/help": "help"}.get(cmd, "")
+    me = _user_by_chat(chat_id)
+    reply, markup = "", None
     if cmd == "/start" and len(parts) == 2:
         reply = link(parts[1].strip(), chat_id, uname)
+        me = _user_by_chat(chat_id)
+        markup = botui.main_keyboard(me["role"] == "admin") if me else None
     elif cmd == "/start":
         if me:
             with tx() as c:
                 c.execute("UPDATE users SET remind=1 WHERE id=?", (me["id"],))
-            reply = "Напоминания включены."
+            reply, markup = "Напоминания включены.", botui.main_keyboard(me["role"] == "admin")
         else:
             reply = "Здравствуйте! Чтобы привязать Telegram, откройте на сайте раздел «Напоминания» и нажмите «Привязать Telegram»."
     elif not me:
@@ -156,24 +205,28 @@ def handle_update(u: dict) -> None:
     elif cmd == "/stop":
         with tx() as c:
             c.execute("UPDATE users SET remind=0 WHERE id=?", (me["id"],))
-        reply = "Напоминания выключены. Включить обратно: /start"
+        reply = "Напоминания выключены. Включить обратно: /start или «⚙️ Настройки»."
     elif cmd == "/unlink":
         with tx() as c:
             c.execute("UPDATE users SET tg_chat_id='', tg_username='' WHERE id=?", (me["id"],))
             audit(c, "telegram.unlink", "user", me["id"], {"by": "bot"})
-        reply = "Telegram отвязан."
-    elif cmd in ("/my", "/tasks"):
-        reply = reminders.my_now(me["id"])
+        reply, markup = "Telegram отвязан. Кнопки убраны.", {"remove_keyboard": True}
+    elif kind in ("all", "overdue", "week"):
+        reply, markup = botui.view(me["id"], kind)
+    elif kind == "settings":
+        reply, markup = botui.settings_view(me["id"])
+    elif kind == "summary" and me["role"] == "admin":
+        reply, markup = botui.summary(me["id"])
     else:
-        reply = HELP
+        reply, markup = HELP, botui.main_keyboard(me["role"] == "admin")
     if reply:
-        send(chat_id, reply)
+        send(chat_id, reply, markup=markup)
 
 
 def poll_once(timeout: int = 0) -> int:
     """One getUpdates round; returns the number of updates handled. The offset is kept in the database."""
     offset = int(setting("tg_offset") or 0)
-    updates = api("getUpdates", {"offset": offset, "timeout": timeout, "allowed_updates": ["message"]}, timeout=timeout + 10)
+    updates = api("getUpdates", {"offset": offset, "timeout": timeout, "allowed_updates": ["message", "callback_query"]}, timeout=timeout + 10)
     for u in updates:
         try:
             handle_update(u)
@@ -191,7 +244,13 @@ def _status(error: str = "") -> None:
 
 
 def _poll_loop() -> None:
+    from . import botui
+
     bot_username()
+    try:  # the blue "Menu" button next to the input field
+        api("setMyCommands", {"commands": [{"command": c, "description": d} for c, d in botui.COMMANDS]})
+    except TgError:
+        pass
     while True:
         try:
             poll_once(25)

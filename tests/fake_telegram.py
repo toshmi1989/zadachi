@@ -10,12 +10,23 @@ TOKEN = "123456:TEST-TOKEN"
 class Fake:
     def __init__(self):
         self.sent, self.updates, self.fail_next, self.n = [], [], None, 0
+        self.edits, self.answers, self.commands = [], [], []
         self.lock = threading.Lock()
 
     def push(self, chat_id, text, username="tester"):
         with self.lock:
             self.n += 1
             self.updates.append({"update_id": self.n, "message": {"chat": {"id": chat_id, "type": "private"}, "from": {"username": username}, "text": text}})
+
+    def push_callback(self, chat_id, data, message_id=42):
+        with self.lock:
+            self.n += 1
+            self.updates.append({"update_id": self.n, "callback_query": {"id": f"cb{self.n}", "data": data, "message": {"message_id": message_id, "chat": {"id": chat_id, "type": "private"}}}})
+
+    def last_markup(self, chat_id):
+        for m in reversed(self.sent):
+            if str(m["chat_id"]) == str(chat_id) and m.get("reply_markup"):
+                return m["reply_markup"]
 
     def texts(self, chat_id):
         return [m["text"] for m in self.sent if str(m["chat_id"]) == str(chat_id)]
@@ -55,6 +66,12 @@ class H(BaseHTTPRequestHandler):
                 time.sleep(1)  # a real long poll waits; this keeps a running app from spinning
             with FAKE.lock:
                 out = {"ok": True, "result": [u for u in FAKE.updates if u["update_id"] >= body.get("offset", 0)]}
+        elif method == "editMessageText":
+            FAKE.edits.append(body)
+        elif method == "answerCallbackQuery":
+            FAKE.answers.append(body)
+        elif method == "setMyCommands":
+            FAKE.commands = body.get("commands", [])
         elif method == "sendMessage":
             if FAKE.fail_next:
                 (code, desc), FAKE.fail_next = FAKE.fail_next, None

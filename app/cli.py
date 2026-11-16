@@ -27,7 +27,7 @@ def main(argv: list[str]) -> int:
     if cmd == "password" and len(argv) == 2:
         password = auth.generate_password()
         with tx() as c:
-            n = c.execute("UPDATE users SET password_hash=? WHERE login=?", (auth.hash_password(password), argv[1])).rowcount
+            n = c.execute("UPDATE users SET password_hash=?, pw_set=1 WHERE login=?", (auth.hash_password(password), argv[1])).rowcount
             c.execute("DELETE FROM sessions WHERE user_id=(SELECT id FROM users WHERE login=?)", (argv[1],))
             audit(c, "password.reset_cli", "user", None, {"login": argv[1]})
         print(f"new password for {argv[1]}: {password}" if n else "no such user")
