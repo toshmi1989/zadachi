@@ -177,5 +177,5 @@ def test_resume_skips_what_was_just_checked(admin, key):
     assert {"SY0001", "SY0002"} <= full
     anon.post("/api/sync/ingest", json={"items": [item("SY0001")]}, headers=bearer(key))
     rest = {i["code"] for i in anon.get("/api/sync/job?resume=1", headers=bearer(key)).json()["items"]}
-    assert "SY0001" not in rest and "SY0002" in rest                                                        # an interrupted run goes on where it stopped
+    assert "SY0001" not in rest and "SY0002" not in rest and rest                                           # checked a moment ago: skipped; never checked tasks stay
     assert "SY0001" in {i["code"] for i in anon.get("/api/sync/job", headers=bearer(key)).json()["items"]}  # a normal run reads everything again
