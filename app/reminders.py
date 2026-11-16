@@ -105,8 +105,9 @@ def _plural(n, one, few, many):
 def build_digest(c, u, g: dict, cfg: dict, today: date, *, overdue_due: bool, everything: bool = False) -> dict | None:
     """What this person should hear today: overdue (if it is time to repeat), term today, terms in N days.
     everything=True is the /my command: overdue plus the next 7 days regardless of the rules."""
-    rows = c.execute(tasks.SELECT.format(e=tasks.eff_sql(g["by"])) + " WHERE t.assignee_id=? AND t.status IN ('todo','progress')", (u["id"],)).fetchall()
-    items = [tasks.row_out(r, g["by"]) for r in rows]
+    by = tasks.norm_by(g["by"], u)  # people who are not administrators are only ever told the closing date
+    rows = c.execute(tasks.SELECT.format(e=tasks.eff_sql(by)) + " WHERE t.assignee_id=? AND t.status IN ('todo','progress')", (u["id"],)).fetchall()
+    items = [tasks.row_out(r, by) for r in rows]
     overdue, groups = [], {}
     wanted = set(range(0, 8)) if everything else set(cfg["days"])
     for t in items:
@@ -289,8 +290,9 @@ def notify_assigned(pairs: list[tuple[int, int]]) -> None:
             u = c.execute("SELECT * FROM users WHERE id=? AND active=1", (uid,)).fetchone()
             if not u or not u["tg_chat_id"] or not u["notify_assign"] or not u["remind"] or not g["enabled"]:
                 continue
-            rows = c.execute(tasks.SELECT.format(e=tasks.eff_sql(g["by"])) + f" WHERE t.id IN ({','.join('?' * len(tids))})", tids).fetchall()
-            ts = [tasks.row_out(r, g["by"]) for r in rows]
+            by = tasks.norm_by(g["by"], u)
+            rows = c.execute(tasks.SELECT.format(e=tasks.eff_sql(by)) + f" WHERE t.id IN ({','.join('?' * len(tids))})", tids).fetchall()
+            ts = [tasks.row_out(r, by) for r in rows]
             text = f"📌 <b>Вам назначено {'задач' if len(ts) > 4 else 'задача'}: {len(ts)}</b>\n" if len(ts) > 1 else "📌 <b>Вам назначена задача</b>\n"
             text += "\n".join(_line(t, g) if t["eff"] else f"• <code>{esc(t['code'])}</code> {esc((t['text'] or '')[:90])}" for t in ts[:5])
             if len(ts) > 5:

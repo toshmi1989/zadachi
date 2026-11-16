@@ -26,7 +26,7 @@ def _finish(d: dict) -> dict:
 
 
 def dashboard(c, by: str = "close") -> dict:
-    by = "due" if by == "due" else "close"
+    by = by if by in ("due", "strict") else "close"
     t = today()
     rows = c.execute("""SELECT t.id, t.assignee_id, t.status, t.due, t.close_date, t.kind, t.doc_no, t.code, t.point, t.text, t.done_at, u.unit_id
                         FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id""").fetchall()

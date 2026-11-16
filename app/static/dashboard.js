@@ -33,7 +33,7 @@ routes.dashboard = async function (page) {
     <div class="pagehead rise" style="--i:0"><div><h1>Дашборд</h1><p>${esc(todayStr)} · на контроле ${T.total} ${plural(T.total, "задача", "задачи", "задач")}</p></div>
       <div class="controls" id="ctl"></div></div>`;
   const ctl = $("#ctl", page);
-  ctl.appendChild(byToggle(() => route()));
+  if (Z.me.role === "admin") ctl.appendChild(byToggle(() => route()));   // only the administrator can switch between the closing date and the official term
   const modeBox = document.createElement("div"); modeBox.className = "ctl"; modeBox.innerHTML = "<span>Показывать:</span>";
   modeBox.appendChild(seg([["count", "Количество"], ["pct", "Проценты"]], Z.mode, v => { Z.mode = v; try { localStorage.setItem("mode", v); } catch (e) {} applyMode(); }));
   ctl.appendChild(modeBox);

@@ -21,13 +21,26 @@ class TaskError(Exception):
         self.message, self.status = message, status
 
 
+def norm_by(by: str | None, user) -> str:
+    """Which date the numbers are built on. An administrator chooses: "close" (closing date, else the official term) or "due".
+    Everybody else always gets "strict": the closing date only. The official term is not shown to them anywhere, so it also
+    must not leak through a fallback, a sort order, an export or a reminder."""
+    if not user or user["role"] != "admin":
+        return "strict"
+    return "due" if by == "due" else "close"
+
+
 def eff_sql(by: str) -> str:
     """The date a task is judged by. "close": the planned closing date, else the official term; "due": the other way round."""
+    if by == "strict":
+        return "t.close_date"
     return "COALESCE(t.due, t.close_date)" if by == "due" else "COALESCE(t.close_date, t.due)"
 
 
 def eff_value(row, by: str) -> str | None:
     due, close = row["due"], row["close_date"]
+    if by == "strict":
+        return close
     return (due or close) if by == "due" else (close or due)
 
 
@@ -118,7 +131,7 @@ def row_out(r, by: str) -> dict:
     t = today()
     return {
         "id": r["id"], "code": r["code"], "num": r["seq"], "kind": r["kind"], "doc_no": r["doc_no"], "doc_date": r["doc_date"],
-        "point": r["point"], "text": r["text"], "due": r["due"], "close_date": r["close_date"], "eff": eff,
+        "point": r["point"], "text": r["text"], "due": None if by == "strict" else r["due"], "close_date": r["close_date"], "eff": eff,
         "days": (date.fromisoformat(eff) - t).days if eff else None,
         "status": r["status"], "tag": r["tag"], "bucket": bucket_of(r["status"], eff, t),
         "assignee_id": r["assignee_id"], "assignee": auth.short_name(r["a_name"]) if r["a_name"] else "",
@@ -132,11 +145,13 @@ SELECT = """SELECT t.*, a.name AS a_name, a.unit_id AS a_unit, un.name AS unit_n
 
 
 def list_tasks(c, f: dict, user: dict, own_only: bool, *, limit: int | None = 50, offset: int = 0) -> dict:
-    by = "due" if f.get("by") == "due" else "close"
+    by = norm_by(f.get("by"), user)
     if str(f.get("unit") or "").isdigit() and f["unit"] != "0":
         f = dict(f, _unit_ids=unit_tree_ids(c, int(f["unit"])))
     where, p = _where(f, by, user, own_only)
     key = f.get("sort") if f.get("sort") in SORTS else "eff"
+    if by == "strict" and key == "due":
+        key = "eff"  # sorting by the official term would reveal its order
     direction = "DESC" if f.get("dir") == "desc" else "ASC"
     col = "eff" if key == "eff" else SORTS[key]
     nulls = f"({col} IS NULL) ASC"  # empty values always go last
@@ -149,6 +164,7 @@ def list_tasks(c, f: dict, user: dict, own_only: bool, *, limit: int | None = 50
 
 
 def get_task(c, task_id: int, user: dict, own_only: bool, by: str = "close") -> dict:
+    by = norm_by(by, user)
     r = c.execute(SELECT.format(e=eff_sql(by)) + " WHERE t.id=?", (task_id,)).fetchone()
     if not r or (own_only and r["assignee_id"] != user["id"]):
         raise TaskError("Задача не найдена", 404)

@@ -213,10 +213,10 @@ def api_me(request: Request):
 
 
 @app.get("/api/dashboard")
-def api_dashboard(by: str = "close"):
+def api_dashboard(request: Request, by: str = "close"):
     c = connect()
     try:
-        return stats.dashboard(c, by)
+        return stats.dashboard(c, tasks.norm_by(by, me(request)))
     finally:
         c.close()
 
@@ -274,12 +274,15 @@ def api_tasks_xlsx(request: Request):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Задачи"
-    ws.append(["№", "Код", "Тип", "Документ", "Пункт", "Содержание", "Срок (официальный)", "Дата закрытия", "Ответственный", "Статус", "Группа срока", "Дней до срока"])
+    admin = me(request)["role"] == "admin"
+    head = ["№", "Код", "Тип", "Документ", "Пункт", "Содержание"] + (["Срок (официальный)"] if admin else []) + ["Дата закрытия", "Ответственный", "Статус", "Группа срока", "Дней до срока"]
+    widths = [6, 10, 9, 18, 22, 70] + ([14] if admin else []) + [14, 30, 14, 16, 10]
+    ws.append(head)
     for t in data["items"]:
-        ws.append([t["num"] or None, t["code"], t["kind"], t["doc_no"], t["point"], t["text"], t["due"], t["close_date"], t["assignee_name"],
-                   STATUSES[t["status"]], tasks.BUCKETS.get(t["bucket"], STATUSES.get(t["bucket"], "")), t["days"]])
-    for col, w in zip("ABCDEFGHIJKL", (6, 10, 9, 18, 22, 70, 14, 14, 30, 14, 16, 10)):
-        ws.column_dimensions[col].width = w
+        ws.append([t["num"] or None, t["code"], t["kind"], t["doc_no"], t["point"], t["text"]] + ([t["due"]] if admin else []) +
+                  [t["close_date"], t["assignee_name"], STATUSES[t["status"]], tasks.BUCKETS.get(t["bucket"], STATUSES.get(t["bucket"], "")), t["days"]])
+    for i, w in enumerate(widths):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i + 1)].width = w
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
     buf = io.BytesIO()

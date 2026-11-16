@@ -45,11 +45,11 @@ routes.tasks = async function (page, params) {
       ${admin ? '<th style="width:36px"><input type="checkbox" class="cb" id="all" aria-label="Выбрать все на странице"></th>' : ""}
       <th class="s" data-s="num" style="width:60px">№</th><th class="s" data-s="doc">Документ<span class="arr">↑</span></th><th>Содержание</th>
       <th class="s" data-s="assignee">Ответственный<span class="arr">↑</span></th><th class="s" data-s="eff">Срок<span class="arr">↑</span></th>
-      <th class="s" data-s="close">Дата закрытия<span class="arr">↑</span></th><th class="s" data-s="status">Статус<span class="arr">↑</span></th>${admin ? '<th style="width:44px"></th>' : ""}
+      ${admin ? '<th class="s" data-s="close">Дата закрытия<span class="arr">↑</span></th>' : ""}<th class="s" data-s="status">Статус<span class="arr">↑</span></th>${admin ? '<th style="width:44px"></th>' : ""}
     </tr></thead><tbody id="rows"></tbody></table></div><div class="pager" id="pager"></div></div>`;
 
   const ctl = $("#ctl", page);
-  ctl.appendChild(byToggle(() => { load(); }));
+  if (admin) ctl.appendChild(byToggle(() => { load(); }));
   const exp = document.createElement("a"); exp.className = "btn"; exp.innerHTML = icon("download") + "Excel"; exp.title = "Скачать текущий список в Excel";
   ctl.appendChild(exp);
   const set = (id, v) => { const el = $(id, page); if (el) el.value = v; };
@@ -114,7 +114,7 @@ routes.tasks = async function (page, params) {
       <td class="doc"><b>${esc(t.doc_no)}</b><small>${esc(t.kind)}${t.doc_date ? " · " + fdate(t.doc_date) : ""}</small></td>
       <td>${t.point ? `<span class="pt">${esc(t.point)}</span>` : ""}<div class="tx">${esc(t.text)}</div></td>
       <td>${who}</td><td>${deadlineCell(t)}</td>
-      <td>${t.close_date ? fdate(t.close_date) : '<span style="color:var(--text-3)">—</span>'}</td>
+      ${admin ? `<td>${t.close_date ? fdate(t.close_date) : '<span style="color:var(--text-3)">—</span>'}</td>` : ""}
       <td>${statusChip(t)}${t.tag ? `<div class="hint" style="margin-top:3px">${esc(t.tag)}</div>` : ""}</td>
       ${admin ? `<td class="c-q">${t.status === "todo" || t.status === "progress" ? `<button class="quick" data-quick aria-label="Отметить выполненной" data-tip="Отметить выполненной">${icon("check")}</button>` : ""}</td>` : ""}</tr>`;
   }
@@ -190,8 +190,8 @@ async function openTask(id, onChange) {
       ${t.point ? `<div class="sec-t" style="margin-top:0">${esc(t.point)}</div>` : ""}
       <div class="dtext">${esc(t.text)}</div>
       <div class="kv">
-        <div><div class="k">Официальный срок</div><div class="v">${fdate(t.due)}</div></div>
-        <div><div class="k">Дата закрытия</div>${admin ? `<div style="display:flex;gap:6px"><input type="date" id="e-close" value="${esc(t.close_date || "")}"><button class="btn sm" id="e-clear" title="Очистить" ${t.close_date ? "" : "disabled"}>${icon("x")}</button></div>` : `<div class="v">${fdate(t.close_date)}</div>`}</div>
+        ${admin ? `<div><div class="k">Официальный срок</div><div class="v">${fdate(t.due)}</div></div>` : ""}
+        <div${admin ? "" : ' class="full"'}><div class="k">${admin ? "Дата закрытия" : "Срок (дата закрытия)"}</div>${admin ? `<div style="display:flex;gap:6px"><input type="date" id="e-close" value="${esc(t.close_date || "")}"><button class="btn sm" id="e-clear" title="Очистить" ${t.close_date ? "" : "disabled"}>${icon("x")}</button></div>` : `<div class="v">${fdate(t.close_date)}</div>`}</div>
         <div class="full"><div class="k">Ответственный</div>${admin ? `<select id="e-as"><option value="">— не назначен —</option>${people.map(p => `<option value="${p.id}"${p.id === t.assignee_id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select>` : `<div class="v" style="display:flex;gap:8px;align-items:center">${t.assignee_id ? avatar(t.assignee_id, t.assignee_name, "sm") + esc(t.assignee_name) : "Не назначен"}</div>`}
           ${t.unit ? `<span class="hint">Отдел: ${esc(t.unit)}</span>` : ""}
           ${t.assignee_raw && t.assignee_raw !== t.assignee_name ? `<span class="hint">В выгрузке: ${esc(t.assignee_raw)}</span>` : ""}</div>
