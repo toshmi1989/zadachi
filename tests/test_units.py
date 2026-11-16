@@ -32,8 +32,9 @@ def user(admin, login):
 def test_seed_matches_the_structure_of_the_department(admin):
     items = admin.get("/api/units").json()["items"]
     tops = [u for u in items if not u["parent_id"]]
-    assert [u["num"] for u in tops] == ["I", "II", "III", "IV", "V", "VI"]
+    assert [u["num"] for u in tops] == ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"]
     assert tops[0]["name"] == "Тиббий хизматлар бошқармаси" and tops[5]["name"] == "Ташхислаш хизмати бўлими"
+    assert [u["name"] for u in tops[6:]] == ["Даволаш-профилактика ёрдамини ташкиллаштириш департаменти", "Стандартлар ва клиник қўлланмаларни ишлаб чиқиш ва жорий қилиш бошқармаси", "Иккинчи бўлим"]
     kids = lambda t: [u["name"] for u in items if u["parent_id"] == t["id"]]
     assert len(kids(tops[0])) == 4 and len(kids(tops[2])) == 2 and kids(tops[1]) == [] and kids(tops[3]) == []
     assert kids(tops[0])[2] == "Тез тиббий ёрдам бўлими"
@@ -94,7 +95,7 @@ def test_edit_structure(admin):
     assert r.status_code == 200
     nid = r.json()["id"]
     new = [u for u in admin.get("/api/units").json()["items"] if u["id"] == nid][0]
-    assert new["num"] == "VII" and not new["parent_id"]
+    assert new["num"] == "X" and not new["parent_id"]
     d = admin.post("/api/units", json={"name": "Новый отдел", "parent_id": nid}).json()["id"]
     assert [u for u in admin.get("/api/units").json()["items"] if u["id"] == d][0]["num"] == "1"
     items = admin.get("/api/units").json()["items"]
@@ -143,3 +144,35 @@ def test_month_split_of_a_person(admin):
     n = admin.get(f"/api/tasks?assignee={mona['id']}&date_from=2026-11-11&date_to=2026-11-15").json()["total"]
     assert n == nov["d15"]
     assert admin.get(f"/api/tasks?assignee={mona['id']}&date_from=2026-11-01&date_to=2026-11-30&status=done").json()["total"] == nov["done"]
+
+
+def test_missing_departments_are_added_once_to_an_existing_structure():
+    import sqlite3
+    from app import db
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.executescript("CREATE TABLE units (id INTEGER PRIMARY KEY, num TEXT, name TEXT, parent_id INTEGER, sort INTEGER DEFAULT 0, active INTEGER DEFAULT 1); CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);")
+    top = {}
+    for i, (num, name, parent) in enumerate(db.UNITS_SEED[:-3]):                      # the first structure, as an older database has it
+        cur = c.execute("INSERT INTO units(num, name, parent_id, sort) VALUES (?,?,?,?)", (num, name, top.get(parent) if parent else None, i))
+        if parent is None:
+            top[num] = cur.lastrowid
+    c.execute("UPDATE units SET num='VII' WHERE num='VI'")                              # the person has used a number already
+    db.add_missing_units(c)
+    names = [r["name"] for r in c.execute("SELECT name FROM units ORDER BY sort")]
+    assert names[-3:] == [n for _, n, _ in db.UNITS_EXTRA] and len(names) == len(db.UNITS_SEED)
+    nums = [r["num"] for r in c.execute("SELECT num FROM units WHERE parent_id IS NULL")]
+    assert len(set(nums)) == len(nums)                                                  # a number taken by the person is not reused
+    db.add_missing_units(c)
+    assert c.execute("SELECT COUNT(*) FROM units").fetchone()[0] == len(db.UNITS_SEED)  # once only
+    c.execute("DELETE FROM units WHERE name='Иккинчи бўлим'")
+    db.add_missing_units(c)
+    assert c.execute("SELECT COUNT(*) FROM units WHERE name='Иккинчи бўлим'").fetchone()[0] == 0      # deleted on purpose: does not come back
+
+
+def test_the_three_names_of_the_site_find_their_units():
+    from app import site_import
+    for latin, cyr in (("Davolash-profilaktika yordamini tashkillashtirish departamenti", "Даволаш-профилактика ёрдамини ташкиллаштириш департаменти"),
+                       ("Standartlar va klinik qoʻllanmalarni ishlab chiqish va joriy qilish boshqarmasi", "Стандартлар ва клиник қўлланмаларни ишлаб чиқиш ва жорий қилиш бошқармаси"),
+                       ("Ikkinchi boʻlim", "Иккинчи бўлим")):
+        assert site_import.similarity(latin, cyr) >= site_import.AUTO_MATCH

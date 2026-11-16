@@ -23,7 +23,12 @@ UNITS_SEED = [
     ("IV", "Фармацевтика маҳсулотлари сиёсати бошқармаси", None),
     ("V", "Тиббий реабилитация, паллиатив ёрдам ва ижтимоий ҳимояга муҳтож аҳолига тиббий хизматлар кўрсатишни мувофиқлаштириш бошқармаси", None),
     ("VI", "Ташхислаш хизмати бўлими", None),
+    ("VII", "Даволаш-профилактика ёрдамини ташкиллаштириш департаменти", None),
+    ("VIII", "Стандартлар ва клиник қўлланмаларни ишлаб чиқиш ва жорий қилиш бошқармаси", None),
+    ("IX", "Иккинчи бўлим", None),
 ]
+# the departments the first structure lacked (the full structure of the customer): added once to a database that already has units
+UNITS_EXTRA = UNITS_SEED[-3:]
 STATUSES = {"todo": "Не выполнено", "progress": "В работе", "done": "Выполнено", "info": "К сведению"}
 OPEN = ("todo", "progress")
 
@@ -272,6 +277,7 @@ def init_db() -> None:
         c.executescript(INDEXES)
         c.executescript(TRIGGERS)
         seed_units(c)
+        add_missing_units(c)
         if not c.execute("SELECT 1 FROM settings WHERE key='own_default_applied'").fetchone():   # once: employees see only their own tasks
             put_settings(c, {"users_tasks": "own", "own_default_applied": "1"})
         auth.ensure_admin(c)
@@ -287,6 +293,30 @@ def seed_units(c) -> None:
         if parent is None:
             top[num] = cur.lastrowid
     c.execute("INSERT INTO settings(key, value) VALUES ('units_seeded', '1')")
+
+
+ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX"]
+
+
+def add_missing_units(c) -> None:
+    """Once: the structure of the customer has three more departments than the first one (the department itself, standards, the second section).
+    Added to a database that already has units, unless a unit with that name is already there (compared in Latin and Cyrillic alike). A flag keeps
+    a department that was deleted on purpose from coming back."""
+    if c.execute("SELECT 1 FROM settings WHERE key='units_extra_1'").fetchone():
+        return
+    from .site_import import similarity
+    have = c.execute("SELECT num, name, parent_id FROM units").fetchall()
+    if have:
+        used = {r["num"] for r in have if r["parent_id"] is None}
+        sort = (c.execute("SELECT COALESCE(MAX(sort), 0) FROM units").fetchone()[0] or 0) + 1
+        for num, name, _ in UNITS_EXTRA:
+            if any(similarity(name, r["name"]) >= 0.9 for r in have):
+                continue
+            free = num if num not in used else next((x for x in ROMAN if x not in used), num)
+            c.execute("INSERT INTO units(num, name, parent_id, sort) VALUES (?,?,NULL,?)", (free, name, sort))
+            used.add(free)
+            sort += 1
+    c.execute("INSERT INTO settings(key, value) VALUES ('units_extra_1', '1') ON CONFLICT(key) DO NOTHING")
 
 
 def unit_tree_ids(c, unit_id: int) -> list[int]:
