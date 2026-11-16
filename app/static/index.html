@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Задачи</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="/static/theme.js"></script>
+</head>
+<body>
+<header class="top" id="top">
+  <a class="brand" href="#/dashboard" aria-label="На дашборд"><span class="logo"><svg viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg></span><b>Задачи</b></a>
+  <nav class="tabs" id="tabs" aria-label="Разделы"><span class="ink" id="ink"></span></nav>
+  <div class="top-r">
+    <button class="icon-btn" id="theme" title="Тема: авто / светлая / тёмная" aria-label="Сменить тему"></button>
+    <button class="me" id="me" aria-haspopup="true"><span class="av" id="me-av"></span><span class="me-t"><b id="me-name"></b><small id="me-role"></small></span></button>
+  </div>
+</header>
+<main id="view" tabindex="-1"></main>
+<nav class="bottom" id="bottom" aria-label="Разделы"></nav>
+<div id="drawer-root"></div>
+<div id="modal-root"></div>
+<div id="toasts" aria-live="polite"></div>
+<div id="tip" role="tooltip"></div>
+<script src="/static/core.js"></script>
+<script src="/static/dashboard.js"></script>
+<script src="/static/tasks.js"></script>
+<script src="/static/admin.js"></script>
+<script src="/static/main.js"></script>
+</body>
+</html>

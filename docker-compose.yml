@@ -1,0 +1,11 @@
+# Запуск на сервере: docker compose up -d --build. На общей платформе порт ниже убирается,
+# трафик идёт через её HTTPS-прокси (manage.py deploy zadachi).
+services:
+  app:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/data
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

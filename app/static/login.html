@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Вход · Задачи</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="/static/theme.js"></script>
+</head>
+<body class="login-page">
+<div class="orb o1"></div><div class="orb o2"></div>
+<main class="login">
+  <div class="brand big"><span class="logo"><svg viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg></span><span><b>Задачи</b><small>контроль исполнения поручений</small></span></div>
+  <form method="post" action="/login" class="card login-card">
+    <h1>Вход</h1>
+    <p class="err" role="alert">{{error}}</p>
+    <div class="fld"><label for="login">Логин</label><input id="login" name="login" autocomplete="username" autocapitalize="off" spellcheck="false" required autofocus></div>
+    <div class="fld"><label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
+    <button class="btn pri big">Войти</button>
+    <p class="hint">Логин и пароль выдаёт администратор.</p>
+  </form>
+</main>
+</body>
+</html>
