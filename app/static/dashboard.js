@@ -293,36 +293,62 @@ routes.dashboard = async function (page) {
   });
   $$(".urow", page).forEach(b => b.onclick = () => { if (Z.me.tasks === "none") return; openTask(+b.dataset.id); });
 
-  /* ---- matrix: exact numbers ---- */
+  /* ---- matrix "people x deadlines": the whole picture, or one month split by the day of the month ---- */
   const MCOL = [["overdue", "Просрочено"], ["week", "≤ 7 дн."], ["month", "8–30 дн."], ["later", "> 30 дн."], ["nodate", "Без срока"], ["done", "Выполнено"]];
+  const RANGES = [["d10", "до 10 числа", "1–10 числа", "k-week", 1, 10], ["d15", "до 15 числа", "11–15 числа", "k-month", 11, 15],
+                  ["d20", "до 20 числа", "16–20 числа", "k-later", 16, 20], ["d31", "после 20 числа", "21 число и до конца месяца", "k-nodate", 21, 31]];
+  const MONTH_NAMES = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
+  const monthLabel = ym => MONTH_NAMES[+ym.slice(5, 7) - 1] + " " + ym.slice(0, 4);
+  let period = "all"; try { const saved = localStorage.getItem("mxPeriod"); if (saved && d.months.includes(saved)) period = saved; } catch (e) {}
+  const ZERO = { d10: 0, d15: 0, d20: 0, d31: 0, total: 0, done: 0 };
+  const mOf = p => (p.months && p.months[period]) || ZERO;
   page.insertAdjacentHTML("beforeend", `
-    <section class="card rise" style="--i:10;margin-bottom:16px"><div class="card-head"><div><h2>Сотрудники × сроки</h2><p class="sub">Точные цифры. Чем насыщеннее цвет, тем больше задач в столбце. Нажмите на ячейку — откроется список.</p></div></div>
+    <section class="card rise" style="--i:10;margin-bottom:16px"><div class="card-head"><div><h2>Сотрудники × сроки</h2><p class="sub" id="mx-sub"></p></div><div id="mx-ctl"></div></div>
       <div class="tablewrap"><table class="mx" id="mx"></table></div></section>`);
   /* "Сотрудники × сроки" stands right under "Отделы × типы документов" */
   const mxSection = $("#mx", page).closest("section");
   mxSection.style.setProperty("--i", 7);
   umSection.after(mxSection);
-  const colMax = {}; MCOL.forEach(([k]) => colMax[k] = Math.max(1, ...people.map(p => p[k])));
+  $("#mx-ctl", page).appendChild(seg([["all", "Всего"]].concat(d.months.map(m => [m, monthLabel(m)])), period, v => { period = v; try { localStorage.setItem("mxPeriod", v); } catch (e) {} paintMatrix(); }));
+  const monthBounds = (ym, a, b) => { const last = new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate(); return { date_from: `${ym}-${String(a).padStart(2, "0")}`, date_to: `${ym}-${String(Math.min(b, last)).padStart(2, "0")}` }; };
   function paintMatrix() {
-    const pc = Z.mode === "pct";
-    const head = `<thead><tr><th>Сотрудник</th><th>Всего</th>${MCOL.map(([k, l]) => `<th><button class="lgd k-${k}" data-h="${k}" style="font-weight:500"><i></i>${l}</button></th>`).join("")}<th>% вып.</th></tr></thead>`;
-    const cell = (p, k) => {
-      const n = p[k], a = n ? (0.14 + 0.5 * n / colMax[k]).toFixed(2) : 0;
-      return `<td><button class="cell k-${k}${n ? "" : " z"}" style="--a:${a}" data-id="${p.id}" data-key="${k}" data-tip="<b>${esc(p.name)}</b>${LABEL[k]}: ${n} (${pct(n, p.total)}%)"><span>${n ? (pc ? pct(n, p.total) + "%" : n) : "·"}</span></button></td>`;
+    const pc = Z.mode === "pct", month = period !== "all";
+    $("#mx-sub", page).textContent = month
+      ? `Задачи со сроком в месяце «${monthLabel(period)}»: сколько приходится на каждую часть месяца. Срок считается по выбранной выше дате. Нажмите на ячейку — откроется список.`
+      : "Точные цифры. Чем насыщеннее цвет, тем больше задач в столбце. Нажмите на ячейку — откроется список.";
+    const cols = month ? RANGES.map(r => ({ key: r[0], label: r[1], tip: r[2], cls: r[3] })).concat([{ key: "done", label: "Выполнено", tip: "Выполнено из задач месяца", cls: "k-done" }])
+                       : MCOL.map(([k, l]) => ({ key: k, label: l, tip: l, cls: "k-" + k }));
+    const val = (p, k) => month ? mOf(p)[k] : p[k];
+    const tot = p => month ? mOf(p).total : p.total;
+    const doneOf = p => month ? mOf(p).done : p.done;
+    const pdone = p => { const t = tot(p) - (month ? 0 : p.info); return t > 0 ? Math.round(100 * doneOf(p) / t) : 0; };
+    const colMax = {}; cols.forEach(c => colMax[c.key] = Math.max(1, ...people.map(p => val(p, c.key))));
+    const head = `<thead><tr><th>Сотрудник</th><th>${month ? "За месяц" : "Всего"}</th>${cols.map(c => `<th><button class="lgd ${c.cls}" data-h="${c.key}" ${c.tip !== c.label ? `data-tip="<b>${esc(c.label)}</b>${esc(c.tip)}"` : ""} style="font-weight:500"><i></i>${esc(c.label)}</button></th>`).join("")}<th>% вып.</th></tr></thead>`;
+    const cell = (p, c) => {
+      const n = val(p, c.key), a = n ? (0.14 + 0.5 * n / colMax[c.key]).toFixed(2) : 0, t = tot(p);
+      return `<td><button class="cell ${c.cls}${n ? "" : " z"}" style="--a:${a}" data-id="${p.id}" data-key="${c.key}" data-tip="<b>${esc(p.name)}</b>${esc(c.label)}: ${n} (${pct(n, t)}% его задач${month ? " месяца" : ""})"><span>${n ? (pc ? pct(n, t) + "%" : n) : "·"}</span></button></td>`;
     };
     const rows = people.map(p => `<tr class="r"><td><button class="pname" data-id="${p.id}">${avatar(p.id, p.name, "sm")}<span>${esc(p.id ? p.short : p.name)}</span></button></td>
-      <td><button class="cell" data-id="${p.id}" data-key="all"><span>${p.total}</span></button></td>${MCOL.map(([k]) => cell(p, k)).join("")}
-      <td><div class="mini"><span class="num" style="min-width:34px">${p.pct_done}%</span><span class="m"><i style="width:${p.pct_done}%"></i></span></div></td></tr>`).join("");
-    const sum = `<tr class="r" style="font-weight:700"><td style="padding:8px 14px">Итого</td><td><button class="cell" data-key="all"><span>${T.total}</span></button></td>${MCOL.map(([k]) => `<td><button class="cell" data-key="${k}"><span>${pc ? pct(T[k], T.total) + "%" : T[k]}</span></button></td>`).join("")}<td><div class="mini"><span class="num" style="min-width:34px">${T.pct_done}%</span><span class="m"><i style="width:${T.pct_done}%"></i></span></div></td></tr>`;
+      <td><button class="cell" data-id="${p.id}" data-key="all"><span>${tot(p)}</span></button></td>${cols.map(c => cell(p, c)).join("")}
+      <td><div class="mini"><span class="num" style="min-width:34px">${pdone(p)}%</span><span class="m"><i style="width:${pdone(p)}%"></i></span></div></td></tr>`).join("");
+    const sumOf = k => people.reduce((a, p) => a + val(p, k), 0), sumTot = people.reduce((a, p) => a + tot(p), 0), sumDone = people.reduce((a, p) => a + doneOf(p), 0);
+    const sumPct = month ? pct(sumDone, sumTot) : T.pct_done;
+    const sum = `<tr class="r" style="font-weight:700"><td style="padding:8px 14px">Итого</td><td><button class="cell" data-key="all"><span>${month ? sumTot : T.total}</span></button></td>${cols.map(c => { const n = month ? sumOf(c.key) : T[c.key]; return `<td><button class="cell" data-key="${c.key}"><span>${pc ? pct(n, month ? sumTot : T.total) + "%" : n}</span></button></td>`; }).join("")}<td><div class="mini"><span class="num" style="min-width:34px">${sumPct}%</span><span class="m"><i style="width:${sumPct}%"></i></span></div></td></tr>`;
     $("#mx", page).innerHTML = head + "<tbody>" + rows + sum + "</tbody>";
   }
   $("#mx", page).addEventListener("click", e => {
     const c = e.target.closest("[data-key],[data-h],.pname"); if (!c) return;
     const id = c.dataset.id; const extra = id !== undefined && id !== "" ? { assignee: id } : {};
-    if (c.dataset.h) return bucketDrill(c.dataset.h);
+    const key = c.dataset.h || c.dataset.key;
     if (c.classList.contains("pname")) return drill(extra);
-    if (c.dataset.key === "all") return drill(extra);
-    bucketDrill(c.dataset.key, extra);
+    if (period === "all") {
+      if (c.dataset.h) return bucketDrill(c.dataset.h);
+      return key === "all" ? drill(extra) : bucketDrill(key, extra);
+    }
+    // a month is open: the list is limited to the days of that part of the month
+    const r = RANGES.find(x => x[0] === key);
+    const bounds = r ? monthBounds(period, r[4], r[5]) : monthBounds(period, 1, 31);
+    drill(Object.assign({}, extra, bounds, key === "done" ? { status: "done" } : {}));
   });
 
   /* ---- kinds & documents ---- */

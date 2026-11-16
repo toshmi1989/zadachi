@@ -120,3 +120,26 @@ def test_hidden_unit_leaves_pickers_but_keeps_history(admin):
     assert r not in [u["id"] for u in admin.get("/api/meta").json()["units"]]
     assert admin.patch(f"/api/users/{user(admin, 'gulov.g')['id']}", json={"unit_id": r}).status_code == 400   # cannot assign to a hidden unit
     assert admin.delete(f"/api/units/{r}").status_code == 200
+
+
+# ---------------------------------------------------------------- people x deadlines, split by the day of the month
+
+MROWS = [[i + 1, "Қарор", f"МД-{i} \n 01.01.2026", f"{i}-банд\nM{i}", "31.12.2026", d, "Monthly Mona", st, f"MN000{i}"]
+         for i, (d, st) in enumerate([("2026-11-05", "Бажарилмаган"), ("2026-11-10", "Бажарилган"), ("2026-11-12", "Бажарилмаган"), ("2026-11-15", "Бажарилмаган"),
+                                      ("2026-11-18", "Бажарилмаган"), ("2026-11-25", "Бажарилмаган"), ("2026-11-30", "Бажарилмаган"), ("2026-12-03", "Бажарилмаган"), (None, "Бажарилмаган")])]
+
+
+def test_month_split_of_a_person(admin):
+    assert admin.post("/api/import?dry=0", files={"file": ("x.xlsx", xlsx(MROWS))}).status_code == 200
+    d = admin.get("/api/dashboard").json()
+    assert "2026-11" in d["months"] and "2026-12" in d["months"] and d["months"] == sorted(d["months"])
+    mona = [p for p in d["people"] if p["name"] == "Monthly Mona"][0]
+    nov, dec = mona["months"]["2026-11"], mona["months"]["2026-12"]
+    assert (nov["d10"], nov["d15"], nov["d20"], nov["d31"]) == (2, 2, 1, 2)       # 5th and 10th | 12th and 15th | 18th | 25th and 30th
+    assert nov["total"] == 7 and nov["done"] == 1                                  # the 10th is done
+    assert dec["d10"] == 1 and dec["d31"] == 1 and dec["total"] == 2              # the 3rd, and the task without a closing date: the administrator's fallback is the official term, 31 Dec
+    assert mona["total"] == 9 and nov["total"] + dec["total"] == 9
+    # the list opened from a cell has exactly the same tasks
+    n = admin.get(f"/api/tasks?assignee={mona['id']}&date_from=2026-11-11&date_to=2026-11-15").json()["total"]
+    assert n == nov["d15"]
+    assert admin.get(f"/api/tasks?assignee={mona['id']}&date_from=2026-11-01&date_to=2026-11-30&status=done").json()["total"] == nov["done"]

@@ -32,6 +32,8 @@ def dashboard(c, by: str = "close") -> dict:
                         FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id""").fetchall()
     users = {u["id"]: u for u in c.execute("SELECT id, name, active, role FROM users")}
     unit_cells: dict[tuple[int, str], dict] = {}
+    per_month: dict[int, dict[str, dict]] = {}   # person -> "YYYY-MM" -> how many tasks fall on days 1-10 / 11-15 / 16-20 / 21-end
+    months_seen: set[str] = set()
     total, per = _blank(), {}
     kinds, docs, open_rows, windows = {}, {}, [], [0] * 8
     closed_14d = 0
@@ -45,6 +47,13 @@ def dashboard(c, by: str = "close") -> dict:
             acc[b] += 1
             if r["status"] in OPEN:
                 acc["open"] += 1
+        if eff:
+            ym, day = eff[:7], int(eff[8:10])
+            m = per_month.setdefault(pid, {}).setdefault(ym, {"d10": 0, "d15": 0, "d20": 0, "d31": 0, "total": 0, "done": 0})
+            m["d10" if day <= 10 else "d15" if day <= 15 else "d20" if day <= 20 else "d31"] += 1
+            m["total"] += 1
+            m["done"] += r["status"] == "done"
+            months_seen.add(ym)
         uacc = unit_cells.setdefault((r["unit_id"] or 0, r["kind"]), _blank())
         uacc["total"] += 1
         uacc[b] += 1
@@ -64,10 +73,10 @@ def dashboard(c, by: str = "close") -> dict:
         name = u["name"] if u else "Не назначен"
         if u and not u["active"] and d["total"] == 0:
             continue
-        people.append({"id": pid, "name": name, "short": auth.short_name(name) if u else name, **_finish(d)})
+        people.append({"id": pid, "name": name, "short": auth.short_name(name) if u else name, **_finish(d), "months": per_month.get(pid, {})})
     for u in users.values():  # active employees with no tasks are still shown: "nobody gave them anything" is information too
         if u["role"] == "user" and u["active"] and u["id"] not in per:
-            people.append({"id": u["id"], "name": u["name"], "short": auth.short_name(u["name"]), **_finish(_blank())})
+            people.append({"id": u["id"], "name": u["name"], "short": auth.short_name(u["name"]), **_finish(_blank()), "months": {}})
     people.sort(key=lambda p: (-p["open"], -p["overdue"], p["name"]))
     timeline = [{"key": "overdue", "label": "Просрочено", "count": total["overdue"], "to": (t - timedelta(days=1)).isoformat()}]
     last = max([i for i, n in enumerate(windows) if n] + [3])  # no empty weeks at the tail
@@ -90,7 +99,7 @@ def dashboard(c, by: str = "close") -> dict:
                          "text": (r["text"] or "").split("\n")[0][:140], "assignee": auth.short_name(a["name"]) if a else "Не назначен"})
     doc_list = sorted(({"doc": k, **_finish(v)} for k, v in docs.items()), key=lambda x: (-x["open"], x["doc"]))[:10]
     return {
-        "units": _units(c, unit_cells, kinds), "today": t.isoformat(), "by": by, "totals": _finish(total), "closed_14d": closed_14d, "people": people,
+        "units": _units(c, unit_cells, kinds), "months": sorted(months_seen), "today": t.isoformat(), "by": by, "totals": _finish(total), "closed_14d": closed_14d, "people": people,
         "timeline": timeline, "kinds": sorted(({"kind": k, **_finish(v)} for k, v in kinds.items()), key=lambda x: -x["total"]),
         "docs": doc_list, "upcoming": upcoming, "bucket_labels": BUCKETS,
     }
