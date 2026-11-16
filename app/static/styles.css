@@ -482,3 +482,12 @@ table.um{min-width:760px}
 .badges{display:flex;flex-wrap:wrap;gap:6px}
 .badges .chip{max-width:100%;overflow:hidden;text-overflow:ellipsis}
 @media (max-width:760px){#uflt{width:100%}#uflt .seg{width:100%}#uflt .seg button{flex:1;padding:6px 6px;font-size:12px}}
+
+/* ───────── ijro links and the site block ───────── */
+a.ext{display:inline-flex;align-items:center;gap:4px;color:var(--brand);font-weight:600}
+a.ext .ic{width:12px;height:12px;opacity:.7}
+a.ext:hover{text-decoration:underline;text-underline-offset:3px}
+.site-box{background:var(--surface-2);border-radius:14px;padding:14px 16px;margin-bottom:6px}
+.site-box .warn{align-items:center}
+@media (max-width:760px){#f-seg{width:100%}#f-seg .seg{width:100%}#f-seg .seg button{padding:6px 10px}}
+.scroll-x{overflow-x:auto;max-width:100%}

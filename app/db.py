@@ -110,6 +110,44 @@ CREATE TABLE IF NOT EXISTS imports (
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- Synchronisation with edo.ijro.uz. The collector runs in an administrator's own browser (where they are signed in) and
+-- sends what it read here. The key below is a key to THIS platform; nothing of the ijro account is ever stored.
+CREATE TABLE IF NOT EXISTS sync_keys (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    key_hash TEXT NOT NULL UNIQUE,
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    last_used TEXT NOT NULL DEFAULT '',
+    revoked INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS sync_runs (
+    id INTEGER PRIMARY KEY,
+    key_id INTEGER REFERENCES sync_keys(id),
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL DEFAULT '',
+    expected INTEGER NOT NULL DEFAULT 0,
+    received INTEGER NOT NULL DEFAULT 0,
+    found INTEGER NOT NULL DEFAULT 0
+);
+-- The last thing read from the site about a task. It never changes the task by itself: the administrator applies it.
+CREATE TABLE IF NOT EXISTS ijro_snapshots (
+    task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    found INTEGER NOT NULL DEFAULT 0,
+    section TEXT NOT NULL DEFAULT '',
+    recipient_id TEXT NOT NULL DEFAULT '',
+    site_status INTEGER,
+    is_done INTEGER NOT NULL DEFAULT 0,
+    overdue INTEGER,
+    repeatable INTEGER NOT NULL DEFAULT 0,
+    due_ms INTEGER,
+    done_ms INTEGER,
+    periods TEXT NOT NULL DEFAULT '[]',
+    is_secret INTEGER NOT NULL DEFAULT 0,
+    answers TEXT NOT NULL DEFAULT '[]',
+    checked_at TEXT NOT NULL,
+    run_id INTEGER
+);
 -- What the bot sent and when. One digest per person per day is guaranteed by the unique index below.
 CREATE TABLE IF NOT EXISTS reminder_log (
     id INTEGER PRIMARY KEY,
@@ -161,6 +199,7 @@ DEFAULT_SETTINGS = {
     "login_list": "1",            # show the list of employees on the sign-in page
     "rem_max": "15",              # tasks listed in one message
     "public_url": "",             # site address for links in messages
+    "ijro_card_tpl": "",          # address of a task card on edo.ijro.uz: {section_path} and {id} are substituted
 }
 MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN tg_chat_id TEXT NOT NULL DEFAULT ''",

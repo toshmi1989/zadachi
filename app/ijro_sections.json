@@ -1,0 +1,69 @@
+{
+  "api_tasks": "https://adliya.ijro.uz/api",
+  "sections": [
+    {
+      "id": "president",
+      "name": "Президент ҳужжатлари",
+      "path": "president-assignments",
+      "kinds": [
+        "Фармон",
+        "Қарор",
+        "Баён"
+      ],
+      "type_ids": [
+        "58f0be6d53aa2e226ea922e1",
+        "58f0be6d53aa2e226ea922e2",
+        "58f0be6d53aa2e226ea922e3",
+        "58f0be6d53aa2e226ea922fd",
+        "59a404a8e4b4b059a515c000"
+      ]
+    },
+    {
+      "id": "government",
+      "name": "Вазирлар Маҳкамаси",
+      "path": "government-assignments",
+      "kinds": [
+        "ВМ"
+      ],
+      "type_ids": [
+        "63eb327841aae4501798008e",
+        "63eb32785bca3350177317b9",
+        "63eb32785d0ebf50170ca672",
+        "63eb327861c95d5017e2fc41",
+        "63eb32788ee7915017928502",
+        "6e147ea99a5ed60001e8f5b6",
+        "6e147ea99a5ed60001e8f5a6",
+        "64a2f3fd62ed8c15bb82c596",
+        "5e147ea99a5ed60001e8f555",
+        "5e147ea99a5ed60001e8f666",
+        "64da5745eae0ebec8b1cf805",
+        "5e147ea99a5ed60001e8f777",
+        "64da575e6a3cedec8b77a0ed",
+        "5e147ea99a5ed60001e8f888",
+        "66cb1ecec122962ez3eb32zd",
+        "66cb1ecec122962ez3eb42zd",
+        "66cb1ecec122962ez3eb52zd",
+        "66cb1ecec122962ez3eb62zd",
+        "66cb1ecec122962ez3eb72zd",
+        "66cb1ecec122962ez3eb82zd",
+        "68d805f2c8d2f3123184e0f4"
+      ]
+    },
+    {
+      "id": "president_admin",
+      "name": "Президент администрацияси раҳбари",
+      "path": "president-adminstration-assignments",
+      "kinds": [
+        "ПА"
+      ],
+      "type_ids": [
+        "67a1c6578b31062d692ce3f6",
+        "68ceb9823e5b4e27e33b7aaf",
+        "61827e6cbe52a224ae559bc9",
+        "685fbc130d718616c69ee047",
+        "622a1d7588fe977422257433",
+        "62f292c08cb9b9364dfecf04"
+      ]
+    }
+  ]
+}

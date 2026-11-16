@@ -6,7 +6,7 @@
   const nav = [["dashboard", "Дашборд", "dash"]];
   if (me.tasks !== "none") nav.push(["tasks", "Задачи", "list"]);
   nav.push(["reminders", "Напоминания", "bell"]);
-  if (admin) nav.push(["users", "Пользователи", "users"], ["import", "Импорт", "upload"], ["settings", "Настройки", "gear"]);
+  if (admin) nav.push(["users", "Пользователи", "users"], ["import", "Импорт", "upload"], ["sync", "Синхронизация", "sync"], ["settings", "Настройки", "gear"]);
   $("#tabs").insertAdjacentHTML("beforeend", nav.map(n => `<a href="#/${n[0]}" data-r="${n[0]}">${icon(n[2])}${n[1]}</a>`).join(""));
   $("#bottom").innerHTML = nav.map(n => `<a href="#/${n[0]}" data-r="${n[0]}">${icon(n[2])}${n[1]}</a>`).join("");
   $("#me-av").outerHTML = avatar(me.id, me.name, "").replace("<span", '<span id="me-av"');

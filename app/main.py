@@ -1,5 +1,6 @@
 """Zadachi: task tracking with a dashboard. Single-page UI + JSON API; roles are enforced here, not in the browser."""
 import io
+import json
 import os
 import re
 import sqlite3
@@ -11,7 +12,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, backup, importer, reminders, stats, tasks, telegram
+from . import auth, backup, importer, ijro, reminders, stats, tasks, telegram
 from .db import STATUSES, audit, connect, init_db, now, setting, tx
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -31,8 +32,9 @@ async def lifespan(_app):
 app = FastAPI(title="Zadachi", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
-OPEN_PATHS = ("/healthz", "/login", "/api/login-users")
-ADMIN_ONLY = re.compile(r"^/api/(users|units|import|settings|backup|audit|reminders/(settings|preview|run|log))(/|$)")
+OPEN_PATHS = ("/healthz", "/login", "/api/login-users", "/ijro-sync.user.js")
+BEARER_PATHS = ("/api/sync/job", "/api/sync/ingest")   # opened with a key of the platform (collector in a browser), not with a cookie
+ADMIN_ONLY = re.compile(r"^/api/(users|units|import|settings|backup|audit|sync/(keys|review|apply|settings)|reminders/(settings|preview|run|log))(/|$)")
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -54,6 +56,26 @@ async def guard(request: Request, call_next):
     path = request.url.path
     ip_token = auth.CURRENT_IP.set(client_ip(request))
     try:
+        if path in BEARER_PATHS:   # the collector: no cookie, no Origin check (a browser attack cannot carry this key)
+            ip = client_ip(request)
+            if auth.too_many_fails(ip):
+                return JSONResponse({"error": "Слишком много неверных ключей. Подождите 15 минут."}, 429)
+            c = connect()
+            try:
+                key = ijro.check_key(c, request.headers.get("authorization"))
+                c.commit()
+            finally:
+                c.close()
+            if not key:
+                auth.record_fail(ip)
+                return JSONResponse({"error": "Ключ синхронизации не подошёл или отозван"}, 401)
+            request.state.key = key
+            request.state.user = None
+            resp = await call_next(request)
+            for k, v in SECURITY_HEADERS.items():
+                resp.headers.setdefault(k, v)
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
         origin = request.headers.get("origin")
         if request.method not in ("GET", "HEAD", "OPTIONS") and origin and origin != "null":
             host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
@@ -258,7 +280,10 @@ def api_tasks(request: Request, page: int = 1, size: int = 50):
     size = max(1, min(size, 200))
     c = connect()
     try:
-        return tasks.list_tasks(c, filters(request), me(request), scope == "own", limit=size, offset=(max(page, 1) - 1) * size) | {"page": max(page, 1), "size": size}
+        out = tasks.list_tasks(c, filters(request), me(request), scope == "own", limit=size, offset=(max(page, 1) - 1) * size) | {"page": max(page, 1), "size": size}
+        if me(request)["role"] == "admin":
+            ijro.brief(c, out["items"])
+        return out
     finally:
         c.close()
 
@@ -296,7 +321,11 @@ def api_task(request: Request, task_id: int, by: str = "close"):
     scope = need_tasks(request)
     c = connect()
     try:
-        return tasks.get_task(c, task_id, me(request), scope == "own", "due" if by == "due" else "close")
+        out = tasks.get_task(c, task_id, me(request), scope == "own", "due" if by == "due" else "close")
+        if me(request)["role"] == "admin":   # what the site says is for administrators only
+            snap = c.execute("SELECT * FROM ijro_snapshots WHERE task_id=?", (task_id,)).fetchone()
+            out["site"] = ijro.site_info(snap, out["status"]) if snap else None
+        return out
     finally:
         c.close()
 
@@ -774,3 +803,109 @@ def api_unit_delete(unit_id: int):
             bad("Отдел не найден", 404)
         audit(c, "unit.delete", "unit", unit_id, {})
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- synchronisation with edo.ijro.uz
+
+@app.get("/ijro-sync.user.js")
+def ijro_script(request: Request):
+    """The collector for the administrator's browser (Tampermonkey). It holds no secret: the key is typed in once, in the browser."""
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    origin = f"{proto}://{host}"
+    text = open(os.path.join(STATIC, "ijro-sync.user.js"), encoding="utf-8").read().replace("{{ORIGIN}}", origin).replace("{{HOST}}", host.split(":")[0])
+    return Response(text, media_type="text/javascript; charset=utf-8", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/sync/job")
+def api_sync_job(request: Request):
+    c = connect()
+    try:
+        out = ijro.job(c, request.state.key["id"])
+        c.commit()
+        return out
+    finally:
+        c.close()
+
+
+@app.post("/api/sync/ingest")
+async def api_sync_ingest(request: Request):
+    raw = await request.body()
+    if len(raw) > 2_000_000:
+        bad("Слишком большой пакет", 413)
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        bad("Ожидался JSON")
+    if not isinstance(body, dict):
+        bad("Ожидался объект JSON")
+    with tx() as c:
+        try:
+            out = ijro.ingest(c, request.state.key, body)
+        except ValueError as e:
+            bad(str(e))
+    return out
+
+
+@app.get("/api/sync/keys")
+def api_sync_keys():
+    c = connect()
+    try:
+        return {"items": [{"id": r["id"], "name": r["name"], "created_at": r["created_at"], "last_used": r["last_used"], "revoked": bool(r["revoked"])}
+                          for r in c.execute("SELECT * FROM sync_keys ORDER BY id DESC")]}
+    finally:
+        c.close()
+
+
+@app.post("/api/sync/keys")
+async def api_sync_key_create(request: Request):
+    b = await _json(request)
+    with tx() as c:
+        key = ijro.new_key(c, str(b.get("name") or ""), me(request)["id"])
+        audit(c, "sync.key_create", "sync", None, {"name": str(b.get("name") or "")[:60]})
+    return {"key": key}   # shown once: only a hash stays here
+
+
+@app.delete("/api/sync/keys/{key_id}")
+def api_sync_key_revoke(key_id: int):
+    with tx() as c:
+        if not c.execute("UPDATE sync_keys SET revoked=1 WHERE id=?", (key_id,)).rowcount:
+            bad("Ключ не найден", 404)
+        audit(c, "sync.key_revoke", "sync", key_id, {})
+    return {"ok": True}
+
+
+@app.get("/api/sync/review")
+def api_sync_review():
+    c = connect()
+    try:
+        out = ijro.review(c)
+        out["card_tpl"] = setting("ijro_card_tpl")
+        return out
+    finally:
+        c.close()
+
+
+@app.put("/api/sync/settings")
+async def api_sync_settings(request: Request):
+    b = await _json(request)
+    tpl = str(b.get("card_tpl") or "").strip()
+    if tpl and not re.fullmatch(r"https://edo\.ijro\.uz/[^\s]*", tpl):
+        bad("Адрес должен начинаться с https://edo.ijro.uz/ и без пробелов")
+    if tpl and "{id}" not in tpl:
+        bad("В адресе нужна метка {id}: на её место подставится номер задачи на сайте")
+    with tx() as c:
+        from .db import put_settings
+        put_settings(c, {"ijro_card_tpl": tpl})
+        audit(c, "sync.settings", "sync", None, {"card_tpl": tpl})
+    return {"ok": True}
+
+
+@app.post("/api/sync/apply")
+async def api_sync_apply(request: Request):
+    b = await _json(request)
+    ids = b.get("task_ids")
+    if not isinstance(ids, list) or not ids or len(ids) > 1000 or not all(isinstance(i, int) for i in ids):
+        bad("Выберите от 1 до 1000 задач")
+    with tx() as c:
+        return ijro.apply(c, ids, me(request)["id"])
