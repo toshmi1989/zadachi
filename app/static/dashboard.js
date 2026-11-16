@@ -194,10 +194,10 @@ routes.dashboard = async function (page) {
     <section class="card rise" style="--i:8;margin-bottom:16px"><div class="card-head"><div><h2>Нагрузка по отделам</h2>
       <p class="sub">Сроки по задачам каждого отдела. У управления — сумма с его отделами. Нажмите на цвет — увидите эти задачи.</p></div></div>
       <div class="people" id="ubars"></div></section>`);
-  /* the department matrix is the first block of the page: it goes above the KPI cards */
+  /* the department matrix is the block right under the KPI cards, above the workload per person */
   const umSection = $("#um", page).closest("section");
-  umSection.style.setProperty("--i", 1); umSection.style.marginBottom = "16px";
-  $(".kpis", page).before(umSection);
+  umSection.style.setProperty("--i", 6); umSection.style.marginBottom = "16px";
+  $(".kpis", page).after(umSection);
   $("#um-ctl", page).appendChild(seg(METRICS, metric, v => { metric = v; try { localStorage.setItem("umMetric", v); } catch (e) {} paintUnits(); }));
   const unitLabel = r => (r.num ? (r.level ? r.num + ". " : r.num + " · ") : "") + r.name;
   function paintUnits() {
