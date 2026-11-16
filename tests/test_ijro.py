@@ -169,3 +169,13 @@ def test_detection_refuses_bad_input(admin):
         assert r.status_code == 400 and word in r.json()["error"], (url, r.text)
     anon = TestClient(app)
     assert anon.post("/api/sync/detect-template", json={"url": "https://edo.ijro.uz/x"}).status_code == 401
+
+
+def test_resume_skips_what_was_just_checked(admin, key):
+    anon = TestClient(app)
+    full = {i["code"] for i in anon.get("/api/sync/job", headers=bearer(key)).json()["items"]}
+    assert {"SY0001", "SY0002"} <= full
+    anon.post("/api/sync/ingest", json={"items": [item("SY0001")]}, headers=bearer(key))
+    rest = {i["code"] for i in anon.get("/api/sync/job?resume=1", headers=bearer(key)).json()["items"]}
+    assert "SY0001" not in rest and "SY0002" in rest                                                        # an interrupted run goes on where it stopped
+    assert "SY0001" in {i["code"] for i in anon.get("/api/sync/job", headers=bearer(key)).json()["items"]}  # a normal run reads everything again

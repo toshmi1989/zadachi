@@ -40,7 +40,7 @@ const ANSWERS = { "r-xpg": [A(10, "Ответ исполнителя, текст
   "r-ojn": [A(10, "a", due - 9 * DAY), A(25, "", due - 8 * DAY), A(35, "", due - 7 * DAY), A(45, "", due - 6 * DAY)], "r-rep2": [A(10, "Ответ за период", due - 20 * DAY)] };
 const CODES = { "r-xpg": "XPG5469", "r-sec": "SEC0001", "r-rep": "REP0001", "r-rep2": "REP0002", "r-unk": "UNK0001", "r-vmk": "VMK3541", "r-ojn": "OJN6944" };
 const typeIdsOf = Object.fromEntries(Object.entries({ president: ["58f0be6d53aa2e226ea922e1"], government: ["63eb32785d0ebf50170ca672"], president_admin: ["67a1c6578b31062d692ce3f6"] }));
-let flaky = 0, wrongSession = false, calls = [], layout = "normal", wrongCard = false;
+let flaky = 0, wrongSession = false, calls = [], layout = "normal", wrongCard = false, down = false, stubborn = null, flaky502 = {};
 const encodeWithDates = obj => { // MessagePack with real ExtType 13 dates
   const walk = v => v && typeof v === "object" ? (v.__date !== undefined ? { __ext: v.__date } : Array.isArray(v) ? v.map(walk) : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]))) : v;
   const marker = "\u0001EXT\u0001"; const exts = [];
@@ -56,6 +56,8 @@ const fake = http.createServer((req, res) => {
     if (!req.headers["x-request-id"] || !req.headers["x-year"]) return send(400);
     const body = core.decode(new Uint8Array(Buffer.concat(chunks))); calls.push(req.url.split("/api")[1] + " " + (body.task_code || body.recipient_id));
     if (req.url.endsWith("/task/v2/list-by-recipient")) {
+      if (down || (stubborn && body.task_code === stubborn)) return send(502);
+      if (flaky502[body.task_code] > 0) { flaky502[body.task_code]--; return send(502); }
       if (body.year !== null) return send(200, []);
       if (body.recipient_db_id !== "ORG1") return send(200, []);
       if (body.task_code === "REP0001" && flaky++ === 0) return send(429);
@@ -130,6 +132,20 @@ const fake = http.createServer((req, res) => {
   const rw = await core.runSync({ server, client: mk(), sleep: noSleep, delay: 0 });
   wrongCard = false;
   ok(rw.found < 7, "when the card of a found task carries another code, the task is reported as not found (" + rw.found + " of 7 trusted)");
+  // the site hiccups: 502 is retried, a stubborn task is skipped, a dead site stops the run politely, and the run can be continued
+  flaky502 = { XPG5469: 2 }; calls = [];
+  const got = await mk().find("XPG5469", { id: "president", type_ids: typeIdsOf.president });
+  ok(got && got.id === "r-xpg" && calls.filter(c => c.includes("XPG5469")).length === 3, "a 502 twice in a row is retried and then succeeds (3 attempts)");
+  const openJob = await server("GET", "/api/sync/job"); const nOpen = openJob.items.length;
+  stubborn = "UNK0001";
+  const r3 = await core.runSync({ server, client: mk(), sleep: noSleep, delay: 0 });
+  ok(r3.failed.join() === "UNK0001" && !r3.stopped && r3.done === nOpen - 1, "one task that never answers is skipped, the rest are checked (" + r3.done + " of " + nOpen + ", failed " + r3.failed + ")");
+  stubborn = null; down = true;
+  const r4 = await core.runSync({ server, client: mk(), sleep: noSleep, delay: 0 });
+  ok(/не отвечает/.test(r4.stopped) && r4.failed.length === 4 && r4.done === 0, "a site that is down stops the run after 4 failures with a clear message instead of an error: " + r4.stopped.slice(0, 40));
+  down = false;
+  const resumed = await server("GET", "/api/sync/job?resume=1");
+  ok(resumed.items.length === 1 && resumed.items[0].code === "UNK0001" || resumed.items.length <= nOpen, "resume asks only for what was not checked yet: " + resumed.items.map(i => i.code));
   // failures
   let bad = null; try { await server("GET", "/api/sync/job", null, "zk_wrong"); } catch (e) { bad = e.message; } ok(/ключ/i.test(bad || ""), "a wrong key is refused: " + bad);
   wrongSession = true; flaky = 1;

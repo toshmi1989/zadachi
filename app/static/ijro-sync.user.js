@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.0.4
+// @version      1.0.5
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.0.4";
+  const VERSION = "1.0.5";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -106,6 +106,7 @@
   /* ───────────── reading the site ───────────── */
   class SessionError extends Error {}
   class RateError extends Error {}
+  class TransientError extends Error {}   // the site is overloaded or unreachable right now: worth waiting, not worth giving up
   const DEFAULT_BODY = { limit: 20, offset: 0, statuses: [], type_ids: [], recipient_db_id: null, year: null, task_code: "", strict_search: false, document_number: null,
     document_type_id: null, from_due_date: null, to_due_date: null, document_from_date: null, document_to_date: null, undistributed_tasks: false, seen: null,
     main_recipient: false, is_rayosat: false, not_rayosat: false, tasks: [], due_date_sort: null, active_state_high_org_id: null, repeatable: false, recipient_user_id: null };
@@ -149,15 +150,25 @@
       try { data = decode(new Uint8Array(await res.arrayBuffer())); } catch (e) { err = String(e.message || e); }
       return { status: res.status, data, err };
     }
-    async function call(path, body, tries = 2) {
-      const s = getSession();
-      if (!s.id) throw new SessionError("Не удалось получить сессию ijro: откройте любой раздел «Топшириқлар» на сайте и повторите.");
-      const res = await pageFetch(apiBase + path, { method: "POST", headers: { "Content-Type": "application/octet-stream", "x-session-id": s.id, "x-year": String(s.year), "x-request-id": rid() }, body: encode(body) });
-      if (res.status === 401 || res.status === 403) throw new SessionError("Сессия ijro закончилась или доступ закрыт (" + res.status + "). Войдите заново и повторите.");
-      if (res.status === 429) throw new RateError("Сайт просит замедлиться (429)");
-      if (res.status >= 500 && tries > 1) { await sleep(2000); return call(path, body, tries - 1); }
-      if (!res.ok) throw new Error("ijro ответил " + res.status);
-      return decode(new Uint8Array(await res.arrayBuffer()));
+    const BACKOFF = [2000, 5000, 10000, 20000, 30000];
+    const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
+    async function call(path, body) {
+      for (let attempt = 0; ; attempt++) {
+        const s = getSession();
+        if (!s.id) throw new SessionError("Не удалось получить сессию ijro: откройте любой раздел «Топшириқлар» на сайте и повторите.");
+        let res = null, why = "";
+        try {
+          res = await withTimeout(pageFetch(apiBase + path, { method: "POST", headers: { "Content-Type": "application/octet-stream", "x-session-id": s.id, "x-year": String(s.year), "x-request-id": rid() }, body: encode(body) }), 40000);
+        } catch (e) { why = "нет ответа от ijro"; }
+        if (res) {
+          if (res.status === 401 || res.status === 403) throw new SessionError("Сессия ijro закончилась или доступ закрыт (" + res.status + "). Войдите заново и повторите.");
+          if (res.status === 429 || res.status >= 500) why = "ijro отвечает " + res.status;
+          else if (!res.ok) throw new Error("ijro ответил " + res.status);
+          else return decode(new Uint8Array(await res.arrayBuffer()));
+        }
+        if (attempt >= BACKOFF.length) throw new TransientError(why);
+        await sleep(BACKOFF[attempt] * (0.8 + Math.random() * 0.4));   // 2, 5, 10, 20, 30 seconds: an overloaded site gets time to recover
+      }
     }
     /* The site's list does not repeat the code of the task in its elements, but it filters by it (task_code) on the server. So a
        single hit for a full code IS that task. Several hits mean the filter was loose: ask again with the strict flag. An element
@@ -198,46 +209,50 @@
   }
 
   /* ───────────── one synchronisation run ───────────── */
-  async function runSync({ server, client, onProgress, shouldStop, sleep, chunk = 40, delay = 250 }) {
-    const job = await server("GET", "/api/sync/job");
+  async function runSync({ server, client, onProgress, shouldStop, sleep, chunk = 40, delay = 250, resume = false }) {
+    const job = await server("GET", "/api/sync/job" + (resume ? "?resume=1" : ""));
     const sections = Object.fromEntries(job.sections.map(s => [s.id, s]));
     const order = hint => hint && sections[hint] ? [sections[hint]].concat(job.sections.filter(s => s.id !== hint)) : job.sections;
-    const buffer = []; let done = 0, found = 0, sent = 0, stopped = "";
+    const buffer = [], failed = []; let done = 0, found = 0, sent = 0, stopped = "", pace = delay, streak = 0, okRun = 0;
     const flush = async () => { if (!buffer.length) return; const items = buffer.splice(0, buffer.length); await server("POST", "/api/sync/ingest", { run_id: job.run_id, items }); sent += items.length; };
+    const total = job.items.length;
+    const progress = () => { if (onProgress) onProgress({ done: done + failed.length, total, found, failed: failed.length }); };
+    // one task: the snapshot to send (found or not), or a TransientError when the site could not answer after all retries
+    async function checkOne(t) {
+      let it = null, sec = null;
+      for (const s of order(t.section)) { it = await client.find(t.code, s); await sleep(pace); if (it) { sec = s; break; } }
+      if (!it) return { code: t.code, found: false };
+      let ans = [], loaded = false, secret = !!it.is_secret;
+      if (it.status !== 0 || it.is_done || it.repeatable) {
+        const id = it.id ?? it.recipient_id;
+        try {
+          const cd = await client.card(id); secret = secret || cd.is_secret;
+          if (cd.code && cd.code.toUpperCase() !== t.code.toUpperCase()) return { code: t.code, found: false };   // the card says it is another task: never trust it
+        } catch (e) { if (e instanceof SessionError || e instanceof TransientError) throw e; secret = true; }   // a card that cannot be read: treated as secret, no answer text
+        await sleep(pace);
+        try { ans = await client.answers(id); loaded = true; } catch (e) { if (e instanceof SessionError || e instanceof TransientError) throw e; }
+        await sleep(pace);
+      }
+      return Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded), { is_secret: secret });
+    }
     try {
       for (const t of job.items) {
         if (shouldStop && shouldStop()) { stopped = "Остановлено вами"; break; }
-        let it = null, sec = null, tries = 0;
-        for (const s of order(t.section)) {
-          for (;;) {
-            try { it = await client.find(t.code, s); break; }
-            catch (e) { if (e instanceof RateError && ++tries <= 3) { await sleep(5000 * tries); continue; } throw e; }
-          }
-          await sleep(delay);
-          if (it) { sec = s; break; }
+        try {
+          const snap = await checkOne(t);
+          buffer.push(snap); done++; if (snap.found) found++;
+          streak = 0; if (++okRun >= 20 && pace > delay) { pace = Math.max(delay, Math.round(pace / 2)); okRun = 0; }
+        } catch (e) {
+          if (!(e instanceof TransientError)) throw e;
+          failed.push(t.code); streak++; okRun = 0; pace = Math.min(pace * 2, 2500);   // a stubborn task is skipped, the whole run is not lost; the pace slows down
+          if (streak >= 4) { stopped = "Сайт ijro сейчас не отвечает (" + e.message + "). Подождите несколько минут и нажмите «Продолжить»: уже проверенное повторно не читается."; break; }
         }
-        if (!it) buffer.push({ code: t.code, found: false });
-        else {
-          found++;
-          let ans = [], loaded = false, secret = !!it.is_secret;
-          if (it.status !== 0 || it.is_done || it.repeatable) {
-            const id = it.id ?? it.recipient_id;
-            // when the card cannot be read the task is treated as secret: no answer text is copied
-            let wrong = false;
-            try { const cd = await client.card(id); secret = secret || cd.is_secret; wrong = !!cd.code && cd.code.toUpperCase() !== t.code.toUpperCase(); } catch (e) { if (e instanceof SessionError || e instanceof RateError) throw e; secret = true; }
-            await sleep(delay);
-            if (wrong) { found--; buffer.push({ code: t.code, found: false }); done++; if (onProgress) onProgress({ done, total: job.items.length, found }); continue; }   // the card says it is another task: never trust it
-            ans = await client.answers(id).catch(e => { if (e instanceof SessionError || e instanceof RateError) throw e; return []; }); loaded = true; await sleep(delay);
-          }
-          buffer.push(Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded), { is_secret: secret }));
-        }
-        done++;
-        if (onProgress) onProgress({ done, total: job.items.length, found });
+        progress();
         if (buffer.length >= chunk) await flush();
       }
     } catch (e) { stopped = e.message || String(e); if (!(e instanceof SessionError || e instanceof RateError)) { await flush().catch(() => {}); throw e; } }
     await flush();
-    return { done, total: job.items.length, found, sent, stopped, run_id: job.run_id };
+    return { done, total, found, sent, stopped, failed, run_id: job.run_id };
   }
 
   /* what the answers look like, without any values that could be personal: names of fields and their types */
@@ -280,7 +295,7 @@
     return out;
   }
 
-  const core = { encode, decode, makeClient, runSync, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, DEFAULT_BODY };
+  const core = { encode, decode, makeClient, runSync, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
   if (typeof module !== "undefined" && module.exports) { module.exports = core; return; }
   if (typeof GM_xmlhttpRequest === "undefined" || typeof document === "undefined") return;
 
@@ -325,7 +340,7 @@
   });
   const client = () => makeClient({ pageFetch, getSession: () => state, apiBase: "https://adliya.ijro.uz/api", sleep });
 
-  let stop = false, running = false;
+  let stop = false, running = false, resume = false;
   function panel() {
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;font:14px/1.4 system-ui,sans-serif";
@@ -353,10 +368,11 @@
     $("go").onclick = async () => {
       if (running) return; running = true; stop = false; $("go").disabled = true; $("stop").disabled = false; $("bar").style.width = "0"; log("Запрашиваю список задач…");
       try {
-        const r = await runSync({ server, client: client(), sleep, shouldStop: () => stop, onProgress: p => { $("bar").style.width = Math.round(100 * p.done / Math.max(1, p.total)) + "%"; log(`Проверено ${p.done} из ${p.total} · найдено на сайте ${p.found}`); } });
-        log(`${r.stopped ? "Остановлено: " + r.stopped + "\n" : ""}Проверено ${r.done} из ${r.total}, найдено ${r.found}, передано ${r.sent}.\nОткройте в платформе раздел «Синхронизация»: там список изменений.`);
-      } catch (e) { log("Ошибка: " + e.message); }
-      running = false; $("go").disabled = false; $("stop").disabled = true;
+        const r = await runSync({ server, client: client(), sleep, resume, shouldStop: () => stop, onProgress: p => { $("bar").style.width = Math.round(100 * p.done / Math.max(1, p.total)) + "%"; log(`Проверено ${p.done} из ${p.total} · найдено на сайте ${p.found}${p.failed ? " · пропущено (сайт не ответил) " + p.failed : ""}`); } });
+        resume = !!(r.stopped || r.failed.length);   // after an interrupted run the same button continues where it stopped
+        log(`${r.stopped ? r.stopped + "\n" : ""}Проверено ${r.done} из ${r.total}, найдено ${r.found}, передано ${r.sent}.${r.failed.length ? "\nНе удалось проверить " + r.failed.length + " (сайт не отвечал): " + r.failed.slice(0, 8).join(", ") + (r.failed.length > 8 ? "…" : "") + ". Нажмите «Продолжить»." : ""}\nОткройте в платформе раздел «Синхронизация»: там список изменений.`);
+      } catch (e) { resume = true; log("Ошибка: " + e.message + "\nНажмите «Продолжить»: уже проверенное повторно не читается."); }
+      running = false; $("go").disabled = false; $("stop").disabled = true; $("go").textContent = resume ? "Продолжить" : "Синхронизировать";
     };
     document.documentElement.appendChild(host);
   }

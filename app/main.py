@@ -818,10 +818,10 @@ def ijro_script(request: Request):
 
 
 @app.get("/api/sync/job")
-def api_sync_job(request: Request):
+def api_sync_job(request: Request, resume: int = 0):
     c = connect()
     try:
-        out = ijro.job(c, request.state.key["id"])
+        out = ijro.job(c, request.state.key["id"], bool(resume))
         c.commit()
         return out
     finally:

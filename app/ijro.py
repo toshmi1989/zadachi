@@ -54,9 +54,19 @@ def check_key(c, header: str | None):
 
 # ---------------------------------------------------------------- what to check
 
-def job(c, key_id: int) -> dict:
-    """The tasks the collector must look up: everything still open. The section order for each follows the document kind."""
-    rows = c.execute("SELECT id, code, kind FROM tasks WHERE status IN ('todo','progress') ORDER BY seq, id").fetchall()
+RESUME_HOURS = 6
+
+
+def job(c, key_id: int, resume: bool = False) -> dict:
+    """The tasks the collector must look up: everything still open. The section order for each follows the document kind.
+    With resume, what was checked in the last hours is skipped: the run goes on where an interrupted one stopped."""
+    sql = "SELECT id, code, kind FROM tasks WHERE status IN ('todo','progress')"
+    args: list = []
+    if resume:
+        from datetime import timedelta
+        sql += " AND id NOT IN (SELECT task_id FROM ijro_snapshots WHERE checked_at >= ?)"
+        args.append((datetime.now(TZ) - timedelta(hours=RESUME_HOURS)).strftime("%Y-%m-%d %H:%M:%S"))
+    rows = c.execute(sql + " ORDER BY seq, id", args).fetchall()
     by_kind = {k: s["id"] for s in SECTIONS["sections"] for k in s["kinds"]}
     cur = c.execute("INSERT INTO sync_runs(key_id, started_at, expected) VALUES (?,?,?)", (key_id, now(), len(rows)))
     return {"run_id": cur.lastrowid, "api_tasks": SECTIONS["api_tasks"], "sections": SECTIONS["sections"],
