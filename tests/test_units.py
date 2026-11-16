@@ -32,9 +32,10 @@ def user(admin, login):
 def test_seed_matches_the_structure_of_the_department(admin):
     items = admin.get("/api/units").json()["items"]
     tops = [u for u in items if not u["parent_id"]]
-    assert [u["num"] for u in tops] == ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"]
+    assert [u["num"] for u in tops] == ["I", "II", "III", "IV", "V", "VI", "VII"]
     assert tops[0]["name"] == "Тиббий хизматлар бошқармаси" and tops[5]["name"] == "Ташхислаш хизмати бўлими"
-    assert [u["name"] for u in tops[6:]] == ["Даволаш-профилактика ёрдамини ташкиллаштириш департаменти", "Стандартлар ва клиник қўлланмаларни ишлаб чиқиш ва жорий қилиш бошқармаси", "Иккинчи бўлим"]
+    assert [u["name"] for u in tops[6:]] == ["Даволаш-профилактика ёрдамини ташкиллаштириш департаменти"]
+    assert not any("Иккинчи" in u["name"] or "Стандартлар" in u["name"] for u in items)                  # not part of the structure
     kids = lambda t: [u["name"] for u in items if u["parent_id"] == t["id"]]
     assert len(kids(tops[0])) == 4 and len(kids(tops[2])) == 2 and kids(tops[1]) == [] and kids(tops[3]) == []
     assert kids(tops[0])[2] == "Тез тиббий ёрдам бўлими"
@@ -95,7 +96,7 @@ def test_edit_structure(admin):
     assert r.status_code == 200
     nid = r.json()["id"]
     new = [u for u in admin.get("/api/units").json()["items"] if u["id"] == nid][0]
-    assert new["num"] == "X" and not new["parent_id"]
+    assert new["num"] == "VIII" and not new["parent_id"]
     d = admin.post("/api/units", json={"name": "Новый отдел", "parent_id": nid}).json()["id"]
     assert [u for u in admin.get("/api/units").json()["items"] if u["id"] == d][0]["num"] == "1"
     items = admin.get("/api/units").json()["items"]
@@ -153,26 +154,39 @@ def test_missing_departments_are_added_once_to_an_existing_structure():
     c.row_factory = sqlite3.Row
     c.executescript("CREATE TABLE units (id INTEGER PRIMARY KEY, num TEXT, name TEXT, parent_id INTEGER, sort INTEGER DEFAULT 0, active INTEGER DEFAULT 1); CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);")
     top = {}
-    for i, (num, name, parent) in enumerate(db.UNITS_SEED[:-3]):                      # the first structure, as an older database has it
+    for i, (num, name, parent) in enumerate(db.UNITS_SEED[:-1]):                      # the first structure, as an older database has it
         cur = c.execute("INSERT INTO units(num, name, parent_id, sort) VALUES (?,?,?,?)", (num, name, top.get(parent) if parent else None, i))
         if parent is None:
             top[num] = cur.lastrowid
     c.execute("UPDATE units SET num='VII' WHERE num='VI'")                              # the person has used a number already
     db.add_missing_units(c)
     names = [r["name"] for r in c.execute("SELECT name FROM units ORDER BY sort")]
-    assert names[-3:] == [n for _, n, _ in db.UNITS_EXTRA] and len(names) == len(db.UNITS_SEED)
+    assert names[-1:] == [n for _, n, _ in db.UNITS_EXTRA] and len(names) == len(db.UNITS_SEED)
     nums = [r["num"] for r in c.execute("SELECT num FROM units WHERE parent_id IS NULL")]
     assert len(set(nums)) == len(nums)                                                  # a number taken by the person is not reused
     db.add_missing_units(c)
     assert c.execute("SELECT COUNT(*) FROM units").fetchone()[0] == len(db.UNITS_SEED)  # once only
-    c.execute("DELETE FROM units WHERE name='Иккинчи бўлим'")
+    c.execute("DELETE FROM units WHERE name LIKE 'Даволаш%'")
     db.add_missing_units(c)
-    assert c.execute("SELECT COUNT(*) FROM units WHERE name='Иккинчи бўлим'").fetchone()[0] == 0      # deleted on purpose: does not come back
+    assert c.execute("SELECT COUNT(*) FROM units WHERE name LIKE 'Даволаш%'").fetchone()[0] == 0      # deleted on purpose: does not come back
 
 
-def test_the_three_names_of_the_site_find_their_units():
+def test_the_department_itself_is_found_by_the_name_of_the_site():
     from app import site_import
-    for latin, cyr in (("Davolash-profilaktika yordamini tashkillashtirish departamenti", "Даволаш-профилактика ёрдамини ташкиллаштириш департаменти"),
-                       ("Standartlar va klinik qoʻllanmalarni ishlab chiqish va joriy qilish boshqarmasi", "Стандартлар ва клиник қўлланмаларни ишлаб чиқиш ва жорий қилиш бошқармаси"),
-                       ("Ikkinchi boʻlim", "Иккинчи бўлим")):
-        assert site_import.similarity(latin, cyr) >= site_import.AUTO_MATCH
+    assert site_import.similarity("Davolash-profilaktika yordamini tashkillashtirish departamenti", "Даволаш-профилактика ёрдамини ташкиллаштириш департаменти") >= site_import.AUTO_MATCH
+
+
+def test_the_two_wrong_departments_are_removed_once_unless_somebody_works_in_them():
+    import sqlite3
+    from app import db
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.executescript("CREATE TABLE units (id INTEGER PRIMARY KEY, num TEXT, name TEXT, parent_id INTEGER, sort INTEGER DEFAULT 0, active INTEGER DEFAULT 1); CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);"
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY, unit_id INTEGER); CREATE TABLE unit_aliases (alias_key TEXT PRIMARY KEY, unit_id INTEGER);")
+    c.execute("INSERT INTO units(id, num, name) VALUES (1,'VIII','Стандартлар ва клиник қўлланмаларни ишлаб чиқиш ва жорий қилиш бошқармаси'), (2,'IX','Иккинчи бўлим'), (3,'I','Тиббий хизматлар бошқармаси')")
+    c.execute("INSERT INTO users(id, unit_id) VALUES (10, 1)")                         # somebody works in the first one: it stays
+    db.remove_wrong_units(c)
+    assert [r["id"] for r in c.execute("SELECT id FROM units ORDER BY id")] == [1, 3]
+    c.execute("DELETE FROM users")
+    db.remove_wrong_units(c)
+    assert [r["id"] for r in c.execute("SELECT id FROM units ORDER BY id")] == [1, 3]   # once only: not touched again

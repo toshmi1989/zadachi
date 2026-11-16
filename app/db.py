@@ -24,11 +24,11 @@ UNITS_SEED = [
     ("V", "Тиббий реабилитация, паллиатив ёрдам ва ижтимоий ҳимояга муҳтож аҳолига тиббий хизматлар кўрсатишни мувофиқлаштириш бошқармаси", None),
     ("VI", "Ташхислаш хизмати бўлими", None),
     ("VII", "Даволаш-профилактика ёрдамини ташкиллаштириш департаменти", None),
-    ("VIII", "Стандартлар ва клиник қўлланмаларни ишлаб чиқиш ва жорий қилиш бошқармаси", None),
-    ("IX", "Иккинчи бўлим", None),
 ]
-# the departments the first structure lacked (the full structure of the customer): added once to a database that already has units
-UNITS_EXTRA = UNITS_SEED[-3:]
+# the department the first structure lacked: added once to a database that already has units
+UNITS_EXTRA = UNITS_SEED[-1:]
+# departments that were added by mistake (they are not part of the structure): removed once, unless somebody works in them
+UNITS_NOT_OURS = ["Стандартлар ва клиник қўлланмаларни ишлаб чиқиш ва жорий қилиш бошқармаси", "Иккинчи бўлим"]
 STATUSES = {"todo": "Не выполнено", "progress": "В работе", "done": "Выполнено", "info": "К сведению"}
 OPEN = ("todo", "progress")
 
@@ -278,6 +278,7 @@ def init_db() -> None:
         c.executescript(TRIGGERS)
         seed_units(c)
         add_missing_units(c)
+        remove_wrong_units(c)
         if not c.execute("SELECT 1 FROM settings WHERE key='own_default_applied'").fetchone():   # once: employees see only their own tasks
             put_settings(c, {"users_tasks": "own", "own_default_applied": "1"})
         auth.ensure_admin(c)
@@ -317,6 +318,20 @@ def add_missing_units(c) -> None:
             used.add(free)
             sort += 1
     c.execute("INSERT INTO settings(key, value) VALUES ('units_extra_1', '1') ON CONFLICT(key) DO NOTHING")
+
+
+def remove_wrong_units(c) -> None:
+    """Once: two departments (Standards, the Second section) were added to the structure by mistake; they are deleted again when nobody is in them."""
+    if c.execute("SELECT 1 FROM settings WHERE key='units_wrong_removed'").fetchone():
+        return
+    from .site_import import similarity
+    for u in c.execute("SELECT id, name FROM units").fetchall():
+        if any(similarity(u["name"], bad) >= 0.9 for bad in UNITS_NOT_OURS):
+            busy = c.execute("SELECT 1 FROM users WHERE unit_id=?", (u["id"],)).fetchone() or c.execute("SELECT 1 FROM units WHERE parent_id=?", (u["id"],)).fetchone()
+            if not busy:
+                c.execute("DELETE FROM unit_aliases WHERE unit_id=?", (u["id"],))
+                c.execute("DELETE FROM units WHERE id=?", (u["id"],))
+    c.execute("INSERT INTO settings(key, value) VALUES ('units_wrong_removed', '1') ON CONFLICT(key) DO NOTHING")
 
 
 def unit_tree_ids(c, unit_id: int) -> list[int]:
