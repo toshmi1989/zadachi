@@ -7,7 +7,10 @@ of the task and on the document. So the proposal is made in two steps:
      same document) — this works without any outside service;
   2. when an AI key is set in the settings, the language model chooses the template for each task, seeing the templates, their frequency and the
      closest earlier decisions. The model chooses a TEMPLATE only; the date is always computed here, so it cannot be an impossible one.
-Whatever the model returns that is not a known template is replaced by the answer of step 1. A proposal is marked on the task (close_src) until a
+Whatever the model returns that is not a known template is replaced by the answer of step 1.
+What the specialist's December list shows beyond the templates (and what the proposal obeys): the closing date is never closer to the official term than
+a buffer for the approval (Justice, Cabinet, Chamber) — 10 days in 95% of the cases, 4–6 days when the term itself is near — and never earlier than
+"at once". So a template is fitted into that window; when it does not fit (a near term), it is moved to the nearest habitual day inside the window. A proposal is marked on the task (close_src) until a
 person confirms or changes it. On the test data (leave-one-out over the specialist's December list) step 1 picks the same template as he did in
 about 6 cases of 10; the rest has to be reviewed."""
 import calendar
@@ -83,13 +86,14 @@ class Model:
 
     def __init__(self, c):
         self.h = []
-        for r in c.execute("""SELECT id, code, doc_no, text, due, close_date, created_at FROM tasks
+        for r in c.execute("""SELECT id, code, doc_no, text, due, close_date, created_at, assignee_raw FROM tasks
                               WHERE close_date IS NOT NULL AND due IS NOT NULL AND close_src='' AND text != ''"""):
             due, close = _d(r["due"]), _d(r["close_date"])
             if not due or not close:
                 continue
             created = _d(r["created_at"])
-            self.h.append({"code": r["code"], "doc": (r["doc_no"] or "").strip(), "text": r["text"], "due": due, "close": close, "created": created,
+            doc = (r["doc_no"] or "").strip()
+            self.h.append({"code": r["code"], "doc": doc, "text": r["text"], "due": due, "close": close, "created": created, "group": (r["assignee_raw"] or "", doc, due.isoformat()),
                            "tmpl": template_of(due, close, created), "tok": _tokens(r["text"])})
         raw = Counter(x["tmpl"] for x in self.h)
         self.snap = self._snap(raw)
@@ -98,6 +102,10 @@ class Model:
         self.freq = Counter(x["tmpl"] for x in self.h)
         leads = [(x["close"] - x["created"]).days for x in self.h if x["tmpl"] == "asap" and x["created"]]
         self.lead = min(max(int(statistics.median(leads)), 1), 5) if leads else 2
+        gaps = sorted((x["due"] - x["close"]).days for x in self.h if x["tmpl"] != "asap")
+        self.buffer = min(max(gaps[len(gaps) // 20], 7), 12) if len(gaps) >= 20 else 10     # the 5th percentile of the distance to the term (10 in the specialist's data)
+        days = Counter(x["close"].day for x in self.h if x["tmpl"] != "asap")
+        self.anchors = {d for d, n in days.most_common(8) if n >= 5}                         # the days of the month he habitually uses (15, 27, 25, 10 ...)
         df = Counter()
         for x in self.h:
             df.update(set(x["tok"]))
@@ -128,22 +136,22 @@ class Model:
     def ready(self) -> bool:
         return len(self.h) >= MIN_HISTORY
 
-    def neighbours(self, text: str, doc: str, k: int = K, skip_code: str | None = None) -> list[tuple[float, dict]]:
+    def neighbours(self, text: str, doc: str, k: int = K, skip_code: str | None = None, skip_group: tuple | None = None) -> list[tuple[float, dict]]:
         tok = _tokens(text)
         v = self._vec(tok)
         nv = math.sqrt(sum(x * x for x in v.values())) or 1.0
         scored = []
         for x in self.h:
-            if skip_code and x["code"] == skip_code:
+            if (skip_code and x["code"] == skip_code) or (skip_group and x["group"] == skip_group):
                 continue
             s = sum(v.get(w, 0) * y for w, y in x["v"].items()) / (nv * x["norm"]) + (SAME_DOC_BONUS if doc and x["doc"] == doc else 0)
             scored.append((s, x))
         scored.sort(key=lambda t: -t[0])
         return scored[:k]
 
-    def vote(self, text: str, doc: str, skip_code: str | None = None) -> tuple[str, float, int]:
+    def vote(self, text: str, doc: str, skip_code: str | None = None, skip_group: tuple | None = None) -> tuple[str, float, int]:
         """(template, share of the vote, how many neighbours agreed)."""
-        nb = self.neighbours(text, doc, K, skip_code)
+        nb = self.neighbours(text, doc, K, skip_code, skip_group)
         votes: Counter = Counter()
         for s, x in nb:
             votes[x["tmpl"]] += max(s, 0.01)
@@ -152,13 +160,45 @@ class Model:
 
 
 def evaluate(c) -> dict:
-    """How often the history alone picks the template the specialist picked (each task is judged by all the others)."""
+    """How often the history alone picks the template the specialist picked. Two figures: with the other tasks of the same executor, document
+    and term visible (they usually got the same date, so this flatters), and with that whole group hidden — which is what a new month looks like."""
     m = Model(c)
     if not m.ready:
         return {"history": len(m.h), "accuracy": None}
-    ok = sum(1 for x in m.h if m.vote(x["text"], x["doc"], skip_code=x["code"])[0] == x["tmpl"])
+    own = sum(1 for x in m.h if m.vote(x["text"], x["doc"], skip_code=x["code"])[0] == x["tmpl"])
+    new = sum(1 for x in m.h if m.vote(x["text"], x["doc"], skip_code=x["code"], skip_group=x["group"])[0] == x["tmpl"])
     base = m.freq.most_common(1)[0][1] / len(m.h)
-    return {"history": len(m.h), "accuracy": round(ok / len(m.h), 3), "always_the_most_common": round(base, 3)}
+    return {"history": len(m.h), "accuracy": round(new / len(m.h), 3), "accuracy_with_siblings": round(own / len(m.h), 3), "always_the_most_common": round(base, 3),
+            "buffer_days": m.buffer, "anchor_days": sorted(m.anchors)}
+
+
+def window(model: Model, due: date, now_: date) -> tuple[date, date, int]:
+    """(earliest, latest, buffer): not before "at once", not closer to the term than the buffer for the approval (smaller when the term is near)."""
+    earliest = now_ + timedelta(days=model.lead)
+    horizon = (due - now_).days
+    buf = model.buffer if horizon >= 30 else max(3, round(horizon * 0.35))
+    return earliest, due - timedelta(days=buf), buf
+
+
+def fit_date(model: Model, tmpl: str, due: date, now_: date) -> tuple[date, str]:
+    """The date of a template fitted into the window of this task; and a remark when it had to be moved."""
+    if due <= now_:
+        return now_, "срок уже наступил: дата — сегодня"
+    earliest, latest, buf = window(model, due, now_)
+    if earliest >= due or latest < earliest:
+        return min(earliest, due), f"до срока {(due - now_).days} дн.: поставлена как можно раньше"
+    cand = date_from(tmpl, due, now_, model.lead)
+    if earliest <= cand <= latest:
+        return cand, ""
+    if cand < earliest:
+        return earliest, "шаблон уже в прошлом: «сразу»"
+    d = latest                                            # beyond the buffer: the nearest habitual day inside the window
+    while d >= earliest:
+        if d.day in model.anchors:
+            return d, f"шаблон ближе {buf} дн. к сроку: сдвинута на привычный день, чтобы хватило времени на согласование"
+        d -= timedelta(days=1)
+    mid = earliest + (latest - earliest) // 2
+    return mid, f"до срока {(due - now_).days} дн.: середина между «сразу» и запасом {buf} дн. на согласование"
 
 
 # ---------------------------------------------------------------- the language model
@@ -198,7 +238,7 @@ def ai_test() -> str:
 
 
 SYSTEM = """Ты помогаешь специалисту по контролю исполнения поручений. Для каждого поручения он ставит собственную «дату закрытия»: внутренний срок, раньше официального, чтобы успеть согласовать ответ. Он всегда выбирает один из привычных ШАБЛОНОВ дат (они даны в списке templates вместе с тем, как часто он их выбирал). Выбор зависит от сути поручения и документа: сроки ближе к официальному у поручений, итог которых известен только в конце периода (показатели, проценты), и раньше у организационных действий и поручений, где нужен долгий ответ. Тебе дают новые поручения и для каждого несколько его прошлых решений по похожим поручениям (examples).
-Для каждого нового поручения выбери ровно один template из списка (поле id), опираясь на примеры. Не придумывай своих шаблонов и не считай даты сам. Верни только JSON: {"items":[{"code":"...","template":"...","reason":"не больше 12 слов по-русски"}]}."""
+Дата закрытия не может быть раньше earliest_close и позже latest_close (после неё нужно время на согласование); если дата шаблона в это окно не попадает, она будет сдвинута, поэтому по возможности выбирай шаблон, дата которого внутри окна, а если таких нет — asap. Для каждого нового поручения выбери ровно один template из списка (поле id), опираясь на примеры. Не придумывай своих шаблонов и не считай даты сам. Верни только JSON: {"items":[{"code":"...","template":"...","reason":"не больше 12 слов по-русски"}]}."""
 
 
 def ai_choose(cfg: dict, model: Model, items: list[dict]) -> dict[str, dict]:
@@ -208,7 +248,8 @@ def ai_choose(cfg: dict, model: Model, items: list[dict]) -> dict[str, dict]:
     tasks = []
     for it in items:
         ex = [{"due": x["due"].isoformat(), "close": x["close"].isoformat(), "template": x["tmpl"], "text": x["text"][:220]} for _, x in model.neighbours(it["text"], it["doc"], 6)]
-        tasks.append({"code": it["code"], "document": it["doc"], "due": it["due"].isoformat(), "text": it["text"][:600], "examples": ex})
+        lo, hi, _ = window(model, it["due"], today())
+        tasks.append({"code": it["code"], "document": it["doc"], "due": it["due"].isoformat(), "text": it["text"][:600], "earliest_close": lo.isoformat(), "latest_close": hi.isoformat(), "examples": ex})
     out = ai_call(cfg, [{"role": "system", "content": SYSTEM}, {"role": "user", "content": json.dumps({"today": today().isoformat(), "templates": templates, "tasks": tasks}, ensure_ascii=False)}])
     res = {}
     for r in (out.get("items") or []) if isinstance(out, dict) else []:
@@ -243,7 +284,7 @@ def suggest(ids: list[int] | None = None, redo: bool = False, use_ai: bool = Tru
         due = _d(r["due"])
         t, share, n = model.vote(r["text"], (r["doc_no"] or "").strip(), skip_code=r["code"])
         todo.append({"id": r["id"], "code": r["code"], "doc": (r["doc_no"] or "").strip(), "text": r["text"], "due": due, "tmpl": t, "src": "rule",
-                     "note": f"Похожие прежние задачи: {n} из {K} — {label(t, model.lead)}"})
+                     "note": f"Похожие прежние задачи: {n} из {K} — {label(t, model.lead)}" + (". Уверенность низкая" if n <= 2 else "")})
     cfg = ai_config()
     if use_ai and cfg["enabled"]:
         for i in range(0, len(todo), BATCH):
@@ -260,8 +301,10 @@ def suggest(ids: list[int] | None = None, redo: bool = False, use_ai: bool = Tru
     t0 = today()
     with tx() as c:
         for it in todo:
-            d = date_from(it["tmpl"], it["due"], t0, model.lead)
-            c.execute("UPDATE tasks SET close_date=?, close_src=?, close_note=?, updated_at=? WHERE id=?", (d.isoformat(), it["src"], it["note"][:300], now(), it["id"]))
+            d, moved = fit_date(model, it["tmpl"], it["due"], t0)
+            if moved:
+                it["note"] = (it["note"] + ". " + moved)
+            c.execute("UPDATE tasks SET close_date=?, close_src=?, close_note=?, updated_at=? WHERE id=?", (d.isoformat(), it["src"], it["note"][:400], now(), it["id"]))
             c.execute("INSERT INTO task_events(task_id, user_id, field, old, new, created_at) VALUES (?,?,?,?,?,?)",
                       (it["id"], None, "close_date", "", d.isoformat() + (" (предложено ИИ)" if it["src"] == "ai" else " (по прежним решениям)"), now()))
             summary["proposed"] += 1

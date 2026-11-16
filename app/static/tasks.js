@@ -49,6 +49,7 @@ routes.tasks = async function (page, params) {
       <select class="f" id="f-doc"><option value="">Все документы</option>${meta.docs.map(d => `<option value="${esc(d.doc)}">${esc(d.doc)} (${d.n})</option>`).join("")}</select>
     </div>
     <div class="active-chips" id="chips"></div>
+    <div id="closing-bar"></div>
     <div class="tbl rise" style="--i:2"><div class="tbl-scroll"><table class="t"><thead><tr>
       ${admin ? '<th style="width:36px"><input type="checkbox" class="cb" id="all" aria-label="Выбрать все на странице"></th>' : ""}
       <th class="s" data-s="num" style="width:60px">№</th><th class="s" data-s="doc">Документ<span class="arr">↑</span></th><th>Содержание</th>
@@ -101,6 +102,12 @@ routes.tasks = async function (page, params) {
     if (S.doc) out.push(["doc", "Документ: " + S.doc]);
     if (S.stage) out.push(["stage", "Этап: " + (STAGE_NAME[S.stage] || S.stage)]);
     if (S.closing) out.push(["closing", "Даты закрытия: предложены, не подтверждены"]);
+    const cb = $("#closing-bar", page);
+    if (cb) cb.innerHTML = admin && S.closing ? `<div class="note-bar"><span>Это предложенные даты закрытия. «Пересчитать» подберёт их заново по текущим правилам (даты, которые вы поставили или подтвердили, не меняются).</span><button class="btn sm" id="cl-redo">Пересчитать</button><button class="btn sm pri" id="cl-ok">Подтвердить все</button></div>` : "";
+    if (cb && admin && S.closing) {
+      $("#cl-redo", cb).onclick = async e => { e.target.disabled = true; try { const r = await api("/api/closing/suggest", { method: "POST", json: { redo: true } }); toast(`Пересчитано: ${r.proposed}` + (r.errors.length ? ". " + r.errors[0] : "")); load(); } catch (er) { toast(er.message, "error"); e.target.disabled = false; } };
+      $("#cl-ok", cb).onclick = async e => { if (!confirm("Подтвердить все предложенные даты?")) return; try { const r = await api("/api/closing/confirm", { method: "POST", json: {} }); toast("Подтверждено: " + r.confirmed); load(); } catch (er) { toast(er.message, "error"); } };
+    }
     $("#chips", page).innerHTML = out.map(c => `<span class="fchip" data-k="${c[0]}">${esc(c[1])}<button type="button" aria-label="Убрать фильтр">${icon("x")}</button></span>`).join("");
   }
   $("#chips", page).onclick = e => {

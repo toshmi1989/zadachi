@@ -58,7 +58,7 @@ def admin():
     with TestClient(app) as c:
         c.post("/login", data={"login": "admin", "password": "secret123"}, follow_redirects=False)
         yield c
-        cleanup(["HA%", "HB%", "HC%", "NA%", "NB%", "NC%", "AI%"], ["Hist Person"])      # the database is shared with the other test modules
+        cleanup(["HA%", "HB%", "HC%", "NA%", "NB%", "NC%", "NR%", "AI%"], ["Hist Person"])      # the database is shared with the other test modules
 
 
 def cleanup(code_likes, people):
@@ -195,3 +195,58 @@ def test_only_the_administrator_touches_this(admin):
     assert emp.get("/api/ai").status_code == 403
     anon = TestClient(app)
     assert anon.get("/api/ai").status_code == 401 and anon.post("/api/closing/confirm", json={}).status_code == 401
+
+
+# ---------------------------------------------------------------- the window: not the official date, and enough time to get through
+def _model_with(admin):
+    admin.post("/api/import?dry=0", files={"file": ("h2.xlsx", xlsx(hist_rows()))})
+    return closing.Model(connect())
+
+
+def test_a_proposal_never_repeats_the_official_date_and_leaves_time_for_the_approval(admin):
+    from datetime import date, timedelta
+    m = _model_with(admin)
+    t0 = date(2026, 11, 16)
+    assert m.buffer == 10 and {15, 27} <= m.anchors                                            # learned from the history: the 10 days of the specialist's data
+    m.anchors = {10, 15, 25, 27}                                                               # the days of the specialist's real list (the synthetic history has fewer)
+    for tmpl in ("asap", "-1:27", "0:15", "0:25", "-1:10"):
+        for due in ("2026-11-20", "2026-11-25", "2026-12-01", "2026-12-05", "2026-12-10", "2026-12-20", "2026-12-25", "2026-12-31", "2027-03-01"):
+            d = date.fromisoformat(due)
+            got, _ = closing.fit_date(m, tmpl, d, t0)
+            assert t0 < got < d, (tmpl, due, got)                                                # never the official day, never in the past
+            horizon = (d - t0).days
+            if horizon >= 30:
+                assert (d - got).days >= m.buffer, (tmpl, due, got)                              # a far term keeps the full buffer for Justice, Cabinet, Chamber
+            else:
+                assert (d - got).days >= 3, (tmpl, due, got)                                     # a near term keeps at least three days
+    assert closing.fit_date(m, "0:15", date(2026, 12, 20), t0)[0] == date(2026, 12, 10)           # the 15th is too close to the 20th: the habitual day inside the window (the 10th)
+    assert closing.fit_date(m, "0:15", date(2026, 12, 1), t0)[0] == date(2026, 11, 25)            # 1 December: the 25th, as the specialist did
+    assert closing.fit_date(m, "0:15", date(2026, 12, 25), t0)[0] == date(2026, 12, 15)           # when it fits, the template stays as it is
+    assert closing.fit_date(m, "asap", date(2026, 11, 17), t0)[0] == date(2026, 11, 17)            # a term tomorrow: nothing earlier is possible
+    got, why = closing.fit_date(m, "0:15", date(2026, 11, 10), t0)                                 # the term has passed: today
+    assert got == t0 and "наступил" in why
+
+
+def test_the_stored_proposal_for_a_near_term_is_shorter_than_the_term(admin):
+    admin.post("/api/import?dry=0", files={"file": ("near.xlsx", xlsx([
+        [900, "Қарор", "ПҚ-9 \n 01.01.2026", f"1-банд\n{A_WORDS} яқинаа", "25.11.2026", None, "Hist Person", "Бажарилмаган", "NR0001"],
+        [901, "Қарор", "ПҚ-9 \n 01.01.2026", f"2-банд\n{A_WORDS} яқинбб", "10.12.2026", None, "Hist Person", "Бажарилмаган", "NR0002"]]))})
+    r = admin.post("/api/closing/suggest", json={"ai": False, "ids": mine(admin, "NR0001", "NR0002")}).json()
+    assert r["proposed"] == 2
+    a, b = task(admin, "NR0001"), task(admin, "NR0002")
+    assert "2026-11-16" < a["close_date"] < "2026-11-25" and "2026-11-16" < b["close_date"] <= "2026-11-30"   # earlier than the term, not on it
+    assert a["close_date"] != a["due"] and b["close_date"] != b["due"]
+
+
+def test_a_recalculation_changes_only_the_unconfirmed_proposals(admin):
+    ids = mine(admin, "NR0001", "NR0002")
+    admin.post("/api/closing/confirm", json={"ids": [ids[0]]})
+    admin.patch(f"/api/tasks/{ids[0]}", json={"close_date": "2026-11-19"})
+    r = admin.post("/api/closing/suggest", json={"ai": False, "redo": True, "ids": ids}).json()
+    assert r["asked"] == 1                                                                        # the one confirmed by a person is left alone
+    assert task(admin, "NR0001")["close_date"] == "2026-11-19"
+
+
+def test_the_honest_estimate_is_lower_than_the_one_with_the_group_visible(admin):
+    ev = closing.evaluate(connect())
+    assert ev["accuracy"] is not None and ev["accuracy"] <= ev["accuracy_with_siblings"] and ev["buffer_days"] >= 7
