@@ -133,3 +133,39 @@ def test_classification_table():
     assert "Период 4 из 4" in ijro.classify(snap(repeatable=1, periods=four), "2026-12-31")["label"]
     assert ijro.classify(snap(repeatable=1, periods=ps(20, 20, 20, 20)))["status"] == "done"
     assert ijro.classify(snap(found=0))["status"] is None
+
+
+# ---------------------------------------------------------------- the address of a card
+
+def _synced(admin, key, code, rid, task_ref="", section="president"):
+    anon = TestClient(app)
+    r = anon.post("/api/sync/ingest", json={"items": [item(code, recipient_id=rid, task_ref=task_ref, section=section)]}, headers=bearer(key))
+    assert r.status_code == 200
+
+
+def test_template_is_detected_from_a_pasted_card_address(admin, key):
+    rid, ref = "6a1b2c3d4e5f60718293a4b5", "7b2c3d4e5f60718293a4b5c6"
+    _synced(admin, key, "SY0000", rid, ref)
+    r = admin.post("/api/sync/detect-template", json={"url": f"https://edo.ijro.uz/assignments/president-assignments/current-user/main/tasks/all/{rid}"}).json()
+    assert r["template"] == "https://edo.ijro.uz/assignments/{section_path}/current-user/main/tasks/all/{id}" and r["code"] == "SY0000" and r["mark"] == "{id}"
+    # the number of the task itself (not our recipient id) is recognised too
+    r2 = admin.post("/api/sync/detect-template", json={"url": f"https://edo.ijro.uz/assignments/government-assignments/current-user/main/card?task={ref.upper()}&tab=answers"}).json()
+    assert r2["template"] == "https://edo.ijro.uz/assignments/{section_path}/current-user/main/card?task={task_id}&tab=answers" and r2["mark"] == "{task_id}"
+    # the detected template saves and builds an exact link
+    assert admin.put("/api/sync/settings", json={"card_tpl": r["template"]}).status_code == 200
+    tid = admin.get("/api/tasks?q=SY0000").json()["items"][0]["id"]
+    site = admin.get(f"/api/tasks/{tid}").json()["site"]
+    assert site["exact_link"] and site["link"] == f"https://edo.ijro.uz/assignments/president-assignments/current-user/main/tasks/all/{rid}"
+    assert admin.put("/api/sync/settings", json={"card_tpl": r2["template"]}).status_code == 200            # {task_id} alone is accepted
+    assert admin.get(f"/api/tasks/{tid}").json()["site"]["link"].endswith(f"card?task={ref}&tab=answers")
+    admin.put("/api/sync/settings", json={"card_tpl": ""})
+
+
+def test_detection_refuses_bad_input(admin):
+    for url, word in (("https://evil.example/tasks/6a1b2c3d4e5f60718293a4b5", "edo.ijro.uz"), ("http://edo.ijro.uz/x/6a1b2c3d4e5f60718293a4b5", "edo.ijro.uz"),
+                      ("javascript:alert(1)", "edo.ijro.uz"), ("https://edo.ijro.uz/assignments/president-assignments/current-user/main/tasks/in_progress", "нет номера"),
+                      ("https://edo.ijro.uz/x/aaaaaaaaaaaaaaaaaaaaaaaa", "не совпал"), ("", "edo.ijro.uz")):
+        r = admin.post("/api/sync/detect-template", json={"url": url})
+        assert r.status_code == 400 and word in r.json()["error"], (url, r.text)
+    anon = TestClient(app)
+    assert anon.post("/api/sync/detect-template", json={"url": "https://edo.ijro.uz/x"}).status_code == 401

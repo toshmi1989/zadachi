@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS ijro_snapshots (
     found INTEGER NOT NULL DEFAULT 0,
     section TEXT NOT NULL DEFAULT '',
     recipient_id TEXT NOT NULL DEFAULT '',
+    task_ref TEXT NOT NULL DEFAULT '',
     site_status INTEGER,
     is_done INTEGER NOT NULL DEFAULT 0,
     overdue INTEGER,
@@ -212,6 +213,7 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN notify_assign INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE users ADD COLUMN pw_set INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN unit_id INTEGER REFERENCES units(id)",
+    "ALTER TABLE ijro_snapshots ADD COLUMN task_ref TEXT NOT NULL DEFAULT ''",
 ]
 # pw_set = somebody has issued this person a password (people created by the Excel import have none yet)
 BACKFILL_PW_SET = """UPDATE users SET pw_set=1 WHERE role='admin'

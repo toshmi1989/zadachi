@@ -121,7 +121,7 @@ def card_link(snap, c=None) -> str:
         return ""
     tpl = setting("ijro_card_tpl").strip()
     if tpl and snap["recipient_id"]:
-        return tpl.replace("{section_path}", sec["path"]).replace("{id}", str(snap["recipient_id"]))
+        return tpl.replace("{section_path}", sec["path"]).replace("{id}", str(snap["recipient_id"])).replace("{task_id}", str(snap["task_ref"] or ""))
     return f"https://edo.ijro.uz/assignments/{sec['path']}/current-user/main/tasks/in_progress"
 
 
@@ -182,14 +182,16 @@ def ingest(c, key_row, body: dict) -> dict:
                                 "active": bool(a.get("active")), "text": "" if secret else text[:MAX_TEXT]})
         rid = it.get("recipient_id")
         rid = str(rid)[:64] if isinstance(rid, (str, int)) and not isinstance(rid, bool) else ""
-        c.execute("""INSERT INTO ijro_snapshots(task_id, found, section, recipient_id, site_status, is_done, overdue, repeatable, due_ms, done_ms,
-                                                periods, is_secret, answers, checked_at, run_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                     ON CONFLICT(task_id) DO UPDATE SET found=excluded.found, section=excluded.section, recipient_id=excluded.recipient_id,
+        ref = it.get("task_ref")
+        ref = str(ref)[:64] if isinstance(ref, (str, int)) and not isinstance(ref, bool) else ""
+        c.execute("""INSERT INTO ijro_snapshots(task_id, found, section, recipient_id, task_ref, site_status, is_done, overdue, repeatable, due_ms, done_ms,
+                                                periods, is_secret, answers, checked_at, run_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     ON CONFLICT(task_id) DO UPDATE SET found=excluded.found, section=excluded.section, recipient_id=excluded.recipient_id, task_ref=excluded.task_ref,
                        site_status=excluded.site_status, is_done=excluded.is_done, overdue=excluded.overdue, repeatable=excluded.repeatable,
                        due_ms=excluded.due_ms, done_ms=excluded.done_ms, periods=excluded.periods, is_secret=excluded.is_secret,
                        answers=CASE WHEN excluded.found=1 AND ? THEN excluded.answers ELSE ijro_snapshots.answers END,
                        checked_at=excluded.checked_at, run_id=excluded.run_id""",
-                  (codes[it["code"]], int(is_found), sec if is_found else "", rid if is_found else "", _int(it.get("status")) if is_found else None,
+                  (codes[it["code"]], int(is_found), sec if is_found else "", rid if is_found else "", ref if is_found else "", _int(it.get("status")) if is_found else None,
                    int(bool(it.get("is_done"))), None if it.get("overdue") is None else int(bool(it.get("overdue"))), int(bool(it.get("repeatable"))),
                    _int(it.get("due_ms")), _int(it.get("done_ms")), json.dumps(periods), int(secret), json.dumps(answers, ensure_ascii=False), now(), run_id,
                    int(bool(it.get("answers_loaded")))))
@@ -264,3 +266,33 @@ def brief(c, items: list[dict]) -> None:
         info = site_info(r, t["status"], t["due"])
         t["site"] = {"found": info["found"], "label": info["label"], "diff": info["diff"], "link": info["link"], "exact": info["exact_link"],
                      "site_open_we_done": info["site_open_we_done"], "checked_at": info["checked_at"]}
+
+
+HEX24 = __import__("re").compile(r"[0-9a-f]{24}", __import__("re").I)
+
+
+def detect_template(c, url: str) -> dict:
+    """The address of an opened task card on the site tells where the number of the task sits: find a number we have read from the
+    site (the id of the task for us, or the id of the task itself) inside it and turn the address into a template."""
+    import re
+    from urllib.parse import urlparse
+    u = urlparse(url.strip())
+    if u.scheme != "https" or u.netloc != "edo.ijro.uz" or " " in url:
+        raise ValueError("Нужен адрес со страницы edo.ijro.uz (https://edo.ijro.uz/...)")
+    snaps = {}
+    for r in c.execute("SELECT s.recipient_id, s.task_ref, s.section, t.code FROM ijro_snapshots s JOIN tasks t ON t.id=s.task_id WHERE s.found=1"):
+        if r["recipient_id"]:
+            snaps.setdefault(r["recipient_id"].lower(), ("{id}", r))
+        if r["task_ref"]:
+            snaps.setdefault(r["task_ref"].lower(), ("{task_id}", r))
+    for m in HEX24.finditer(url):
+        hit = snaps.get(m.group(0).lower())
+        if hit:
+            mark, r = hit
+            tpl = url[:m.start()] + mark + url[m.end():]
+            for sec in SECTIONS["sections"]:
+                tpl = tpl.replace("/" + sec["path"] + "/", "/{section_path}/")
+            return {"template": tpl, "code": r["code"], "section": r["section"], "mark": mark}
+    if HEX24.search(url):
+        raise ValueError("В адресе есть номер, но он не совпал ни с одной прочитанной задачей. Откройте карточку задачи из списка, которую уже проверяла синхронизация, и вставьте её адрес.")
+    raise ValueError("В адресе нет номера задачи. Откройте карточку задачи (не список) и скопируйте адрес из строки браузера.")

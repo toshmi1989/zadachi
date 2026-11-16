@@ -30,6 +30,8 @@ routes.sync = async function (page) {
       <div id="k-shown"></div>
       ${keys.items.length ? `<div class="scroll-x"><table class="plain" style="margin-top:12px"><thead><tr><th>Ключ</th><th>Создан</th><th>Последний раз</th><th></th></tr></thead><tbody>${keys.items.map(k => `<tr class="${k.revoked ? "off" : ""}"><td>${esc(k.name)}${k.revoked ? ' <span class="chip todo">отозван</span>' : ""}</td><td class="num">${esc(k.created_at.slice(0, 10))}</td><td class="num">${k.last_used ? esc(k.last_used.slice(0, 16)) : "—"}</td><td>${k.revoked ? "" : `<button class="btn sm danger" data-rev="${k.id}">Отозвать</button>`}</td></tr>`).join("")}</tbody></table></div>` : ""}
       <div class="blk" style="margin-top:18px"><div class="k">Адрес карточки задачи на ijro<small>чтобы по клику открывалась именно задача</small></div>
+        <div class="inl" style="margin-bottom:8px"><input id="k-url" placeholder="Вставьте адрес открытой карточки любой задачи с ijro" style="flex:1;min-width:240px"><button class="btn sm pri" id="k-detect" type="button">Определить</button></div>
+        <p class="hint" style="margin:0 0 10px">Проще всего: откройте на ijro любую задачу, которую уже проверила синхронизация, скопируйте адрес из строки браузера и вставьте сюда. Шаблон определится сам.</p>
         <div class="inl"><input id="k-tpl" placeholder="https://edo.ijro.uz/assignments/{section_path}/current-user/main/tasks/all/{id}" value="${esc(rev.card_tpl || "")}" style="flex:1;min-width:240px"><button class="btn sm" id="k-tpl-save">Сохранить</button></div>
         <p class="hint" style="margin:6px 0 0">Откройте любую задачу на ijro, скопируйте адрес из строки браузера и вместо номера задачи впишите <span class="code">{id}</span>, а вместо названия раздела <span class="code">{section_path}</span> (оно подставится само: president-assignments, government-assignments, president-adminstration-assignments). Пока адрес не задан, ссылка ведёт в нужный раздел.</p></div>`;
     $("#k-new", kb).onclick = async () => {
@@ -45,6 +47,14 @@ routes.sync = async function (page) {
       if (!await formDialog({ title: "Отозвать ключ?", text: "Скрипт с этим ключом перестанет передавать данные. Это можно сделать в любой момент заново, создав новый ключ.", ok: "Отозвать", fields: [] })) return;
       await api("/api/sync/keys/" + b.dataset.rev, { method: "DELETE" }); keys = await api("/api/sync/keys"); paintKeys(); toast("Ключ отозван");
     });
+    $("#k-detect", kb).onclick = async () => {
+      const url = $("#k-url", kb).value.trim(); if (!url) { toast("Вставьте адрес карточки", "error"); return; }
+      try {
+        const r = await api("/api/sync/detect-template", { method: "POST", json: { url } });
+        $("#k-tpl", kb).value = r.template;
+        toast(`Шаблон определён по задаче ${r.code}. Проверьте и нажмите «Сохранить»`);
+      } catch (e) { toast(e.message, "error"); }
+    };
     $("#k-tpl-save", kb).onclick = async () => {
       try { await api("/api/sync/settings", { method: "PUT", json: { card_tpl: $("#k-tpl", kb).value } }); rev = await api("/api/sync/review"); toast("Адрес сохранён"); paintRev(); } catch (e) { toast(e.message, "error"); }
     };
@@ -71,7 +81,7 @@ routes.sync = async function (page) {
         <td><b>${esc(i.code)}</b> <span class="hint">${esc(i.doc_no)}${i.point ? " · " + esc(i.point) : ""}</span><div style="color:var(--text-2);font-size:13px;max-width:460px">${esc(i.text.length > 110 ? i.text.slice(0, 108) + "…" : i.text)}</div>${i.assignee ? `<span class="hint">${esc(i.assignee)}</span>` : ""}</td>
         <td><span class="chip ${i.our_status === "done" ? "done" : i.our_status === "info" ? "info" : i.our_status === "progress" ? "progress" : "todo"}">${esc(ST[i.our_status])}</span></td>
         <td><span class="chip ${CHANGE_CHIP[i.change] || "todo"}">${esc(i.site_label)}</span>${i.note ? `<div class="hint">${esc(i.note)}</div>` : ""}</td>
-        <td><a class="btn sm" href="${esc(i.link)}" target="_blank" rel="noopener noreferrer" data-tip="${i.exact_link ? "Открыть задачу на ijro" : "Открыть раздел на ijro"}">${icon("ext")}ijro</a></td></tr>`).join("")}</tbody></table></div>
+        <td><a class="btn sm" href="${esc(i.link)}" target="_blank" rel="noopener noreferrer" ${i.exact_link ? "" : `data-copycode="${esc(i.code)}"`} data-tip="${i.exact_link ? "Открыть задачу на ijro" : "Откроется раздел на ijro, код задачи скопируется"}">${icon("ext")}ijro</a></td></tr>`).join("")}</tbody></table></div>
         <div class="inl" style="margin-top:14px"><button class="btn pri" id="r-apply">Применить выбранные (<span id="r-n">0</span>)</button><button class="btn" id="r-done">Применить все «Выполнено» (${k.to_done})</button></div>`
         : `<div class="empty" style="padding:24px"><div class="big">✅</div><b>В этой группе ничего нет</b></div>`}`;
     $("#f-seg", page).appendChild(seg(FILTERS.map(f => [f[0], f[1]]), filter, v => { filter = v; chosen = new Set(); paintRev(); }));

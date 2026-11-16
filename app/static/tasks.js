@@ -110,7 +110,7 @@ routes.tasks = async function (page, params) {
     const who = t.assignee_id ? `<span class="who">${avatar(t.assignee_id, t.assignee_name, "sm")}${esc(t.assignee)}</span>` : '<span class="who none">Не назначен</span>';
     return `<tr data-id="${t.id}" style="--i:${Math.min(i, 24)}" tabindex="0">
       ${admin ? `<td class="c-cb"><input type="checkbox" class="cb" aria-label="Выбрать"></td>` : ""}
-      <td class="code num">${t.num || ""}<br>${admin && t.site && t.site.link ? `<a class="ext" href="${esc(t.site.link)}" target="_blank" rel="noopener noreferrer" data-ext data-tip="${t.site.exact ? "Открыть задачу на ijro.uz" : "Открыть раздел на ijro.uz"}">${esc(t.code)}${icon("ext")}</a>` : esc(t.code)}</td>
+      <td class="code num">${t.num || ""}<br>${admin && t.site && t.site.link ? `<a class="ext" href="${esc(t.site.link)}" target="_blank" rel="noopener noreferrer" data-ext ${t.site.exact ? "" : `data-copycode="${esc(t.code)}"`} data-tip="${t.site.exact ? "Открыть задачу на ijro.uz" : "Откроется раздел на ijro, а код задачи скопируется: вставьте его в поиск"}">${esc(t.code)}${icon("ext")}</a>` : esc(t.code)}</td>
       <td class="doc"><b>${esc(t.doc_no)}</b><small>${esc(t.kind)}${t.doc_date ? " · " + fdate(t.doc_date) : ""}</small></td>
       <td>${t.point ? `<span class="pt">${esc(t.point)}</span>` : ""}<div class="tx">${esc(t.text)}</div></td>
       <td>${who}</td><td>${deadlineCell(t)}</td>
@@ -226,7 +226,7 @@ function siteBlock(t) {
   const head = !s.found ? `<span class="chip week">Не найдена на сайте</span>` : `<span class="chip ${s.proposed === "done" ? "done" : s.proposed === "progress" ? "progress" : "todo"}">${esc(s.label)}</span>`;
   return `<div class="sec-t">С ijro.uz</div>
     <div class="site-box"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${head}<span class="hint">проверено ${esc(s.checked_at.slice(0, 16))}</span>
-      <a class="btn sm" style="margin-left:auto" href="${esc(s.link)}" target="_blank" rel="noopener noreferrer">${icon("ext")}${s.exact_link ? "Открыть задачу на ijro" : "Открыть раздел на ijro"}</a></div>
+      <a class="btn sm" style="margin-left:auto" href="${esc(s.link)}" target="_blank" rel="noopener noreferrer" ${s.exact_link ? "" : `data-copycode="${esc(t.code)}"`}>${icon("ext")}${s.exact_link ? "Открыть задачу на ijro" : "Открыть раздел и скопировать код"}</a></div>
       ${s.note ? `<p class="hint" style="margin:8px 0 0">${esc(s.note)}</p>` : ""}
       ${s.diff ? `<div class="warn" style="margin-top:10px">${icon("info")}<span>На сайте: <b>${esc(s.proposed_label)}</b>, у нас: <b>${esc(ST[t.status])}</b>.</span><button class="btn sm pri" id="site-apply" style="margin-left:auto">Применить</button></div>` : ""}
       ${s.site_open_we_done ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>У нас задача выполнена, а на сайте ещё нет: возможно, ответ не отправлен или не принят.</span></div>` : ""}

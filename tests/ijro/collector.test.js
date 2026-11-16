@@ -144,6 +144,8 @@ const fake = http.createServer((req, res) => {
   const diag = await core.diagnose({ server, client: mk() });
   ok(diag.found && diag.matched_by === "server_filter" && diag.item.status !== undefined && diag.card.ok && !JSON.stringify(diag).includes("Ответ исполнителя"), "diagnostics: found by the server filter, card read, no text leaked");
 
+  const snapRef = core.snapshotOf("XPG5469", "president", { id: "a".repeat(24), task_id: "b".repeat(24), status: 0 }, [], false);
+  ok(snapRef.recipient_id === "a".repeat(24) && snapRef.task_ref === "b".repeat(24), "the id of the task on the site is sent too (needed to recognise a card address)");
   // the site's list does not carry the code: a single hit for the code is the task; loose filters and wrong codes are handled
   layout = "multi";
   const info = {}; const strictOne = await mk().find("XPG5469", { id: "president", type_ids: typeIdsOf.president }, info);

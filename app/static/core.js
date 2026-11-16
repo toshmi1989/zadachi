@@ -238,3 +238,12 @@ function markNav(name) {
   const a = $("#tabs a.on"), ink = $("#ink");
   if (a) { ink.style.left = a.offsetLeft + "px"; ink.style.width = a.offsetWidth + "px"; ink.style.opacity = 1; } else ink.style.opacity = 0;
 }
+
+/* A link to ijro that cannot open the task itself (no card address known) leads to the section and copies the code of the task:
+   it only has to be pasted into the search field of the site. */
+document.addEventListener("click", e => {
+  const a = e.target.closest && e.target.closest("a[data-copycode]");
+  if (!a) return;
+  const code = a.dataset.copycode;
+  try { navigator.clipboard.writeText(code).then(() => toast("Код " + code + " скопирован: вставьте его в поиск на ijro"), () => {}); } catch (err) { /* the link still opens */ }
+});

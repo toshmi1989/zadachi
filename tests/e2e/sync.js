@@ -17,6 +17,9 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   await p.click('#f-seg button[data-v="apply"]'); await p.waitForTimeout(500);
   // key
   await p.fill("#k-name", "Ноутбук"); await p.click("#k-new"); await p.waitForSelector("#k-shown .pw"); ok(/^zk_/.test(await p.textContent("#k-shown .pw span")), "a key is shown once");
+  // detection of the card address: a bad address is explained
+  await p.fill("#k-url", "https://edo.ijro.uz/assignments/x/tasks/in_progress"); await p.click("#k-detect"); await p.waitForTimeout(600);
+  ok(/нет номера/.test(await p.textContent("#toasts")), "a card address without a task number is explained");
   // card template
   await p.fill("#k-tpl", "https://edo.ijro.uz/assignments/{section_path}/current-user/main/tasks/all/{id}"); await p.click("#k-tpl-save"); await p.waitForTimeout(700);
   // choose two and apply

@@ -892,13 +892,26 @@ async def api_sync_settings(request: Request):
     tpl = str(b.get("card_tpl") or "").strip()
     if tpl and not re.fullmatch(r"https://edo\.ijro\.uz/[^\s]*", tpl):
         bad("Адрес должен начинаться с https://edo.ijro.uz/ и без пробелов")
-    if tpl and "{id}" not in tpl:
-        bad("В адресе нужна метка {id}: на её место подставится номер задачи на сайте")
+    if tpl and "{id}" not in tpl and "{task_id}" not in tpl:
+        bad("В адресе нужна метка {id} (или {task_id}): на её место подставится номер задачи на сайте")
     with tx() as c:
         from .db import put_settings
         put_settings(c, {"ijro_card_tpl": tpl})
         audit(c, "sync.settings", "sync", None, {"card_tpl": tpl})
     return {"ok": True}
+
+
+@app.post("/api/sync/detect-template")
+async def api_sync_detect(request: Request):
+    b = await _json(request)
+    c = connect()
+    try:
+        try:
+            return ijro.detect_template(c, str(b.get("url") or ""))
+        except ValueError as e:
+            bad(str(e))
+    finally:
+        c.close()
 
 
 @app.post("/api/sync/apply")
