@@ -4,6 +4,9 @@
 
 function drill(p) {
   if (Z.me.tasks === "none") { toast("Список задач для вашей роли отключён администратором", "error"); return; }
+  if (Z.me.role !== "admin" && Z.me.tasks === "own" && p.assignee !== undefined && String(p.assignee) !== String(Z.me.id)) {   // the list would be empty: say why
+    toast("В списке вам доступны только ваши задачи. Откройте свою строку или карточку.", "error"); return;
+  }
   go("tasks", p);
 }
 function bucketDrill(key, extra) {
@@ -39,7 +42,7 @@ routes.dashboard = async function (page) {
   ctl.appendChild(modeBox);
 
   let hint = "";
-  try { if (!localStorage.getItem("hint1") && !scopeNote) hint = `<div class="hint-banner rise" style="--i:1" id="hint">${icon("info")}<span>Нажимайте на карточки, полосы, сектора и столбцы — откроется список именно этих задач.</span><button class="icon-btn" style="margin-left:auto;width:28px;height:28px;border:0;background:none;color:inherit" aria-label="Скрыть">${icon("x")}</button></div>`; } catch (e) {}
+  try { if (!localStorage.getItem("hint1") && !scopeNote) hint = `<div class="hint-banner rise" style="--i:1" id="hint">${icon("info")}<span>${Z.me.role !== "admin" && Z.me.tasks === "own" ? "На дашборде общая картина по всем. Нажмите на число или полосу, и в списке откроются <b>ваши</b> задачи этой группы." : "Нажимайте на карточки, полосы, сектора и столбцы — откроется список именно этих задач."}</span><button class="icon-btn" style="margin-left:auto;width:28px;height:28px;border:0;background:none;color:inherit" aria-label="Скрыть">${icon("x")}</button></div>`; } catch (e) {}
 
   const kpi = [
     { id: "all", cls: "", icon: "stack", lbl: "Всего задач", n: T.total, of: T.total, meta: `${T.open} в работе · ${T.done} выполнено`, go: () => drill({}) },

@@ -45,7 +45,7 @@ routes.tasks = async function (page, params) {
       ${admin ? '<th style="width:36px"><input type="checkbox" class="cb" id="all" aria-label="Выбрать все на странице"></th>' : ""}
       <th class="s" data-s="num" style="width:60px">№</th><th class="s" data-s="doc">Документ<span class="arr">↑</span></th><th>Содержание</th>
       <th class="s" data-s="assignee">Ответственный<span class="arr">↑</span></th><th class="s" data-s="eff">Срок<span class="arr">↑</span></th>
-      ${admin ? '<th class="s" data-s="close">Дата закрытия<span class="arr">↑</span></th>' : ""}<th class="s" data-s="status">Статус<span class="arr">↑</span></th>${admin ? '<th style="width:44px"></th>' : ""}
+      ${admin ? '<th class="s" data-s="close">Дата закрытия<span class="arr">↑</span></th>' : ""}<th class="s" data-s="status">Статус<span class="arr">↑</span></th><th style="width:44px"></th>
     </tr></thead><tbody id="rows"></tbody></table></div><div class="pager" id="pager"></div></div>`;
 
   const ctl = $("#ctl", page);
@@ -116,7 +116,7 @@ routes.tasks = async function (page, params) {
       <td>${who}</td><td>${deadlineCell(t)}</td>
       ${admin ? `<td>${t.close_date ? fdate(t.close_date) : '<span style="color:var(--text-3)">—</span>'}</td>` : ""}
       <td>${statusChip(t)}${t.tag ? `<div class="hint" style="margin-top:3px">${esc(t.tag)}</div>` : ""}${admin && t.site && t.site.diff ? `<div style="margin-top:4px"><span class="chip done" data-tip="По данным ijro (проверено ${esc(t.site.checked_at.slice(0, 16))}). Применить можно в разделе «Синхронизация» или в карточке.">на сайте: ${esc(t.site.label)}</span></div>` : ""}${admin && t.site && t.site.site_open_we_done ? '<div style="margin-top:4px"><span class="chip overdue" data-tip="У нас выполнена, а на сайте ещё нет">на сайте не закрыта</span></div>' : ""}</td>
-      ${admin ? `<td class="c-q">${t.status === "todo" || t.status === "progress" ? `<button class="quick" data-quick aria-label="Отметить выполненной" data-tip="Отметить выполненной">${icon("check")}</button>` : ""}</td>` : ""}</tr>`;
+      <td class="c-q">${t.can_edit && (t.status === "todo" || t.status === "progress") ? `<button class="quick" data-quick aria-label="Отметить выполненной" data-tip="Отметить выполненной">${icon("check")}</button>` : ""}</td></tr>`;
   }
   const flashId = { v: 0 };
   async function load() {
@@ -186,6 +186,7 @@ async function openTask(id, onChange) {
     const b = $("#dr-b", box);
     b.classList.toggle("still", !first);
     const dtext = daysText(t.days, t.status);
+    const canStatus = admin || (t.can_edit && t.status !== "info");   // an employee cannot touch a task taken "for information"
     b.innerHTML = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px">${statusChip(t)}${dtext ? `<span class="hint">${esc(dtext)}</span>` : ""}</div>
       ${t.point ? `<div class="sec-t" style="margin-top:0">${esc(t.point)}</div>` : ""}
@@ -196,24 +197,24 @@ async function openTask(id, onChange) {
         <div class="full"><div class="k">Ответственный</div>${admin ? `<select id="e-as"><option value="">— не назначен —</option>${people.map(p => `<option value="${p.id}"${p.id === t.assignee_id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select>` : `<div class="v" style="display:flex;gap:8px;align-items:center">${t.assignee_id ? avatar(t.assignee_id, t.assignee_name, "sm") + esc(t.assignee_name) : "Не назначен"}</div>`}
           ${t.unit ? `<span class="hint">Отдел: ${esc(t.unit)}</span>` : ""}
           ${t.assignee_raw && t.assignee_raw !== t.assignee_name ? `<span class="hint">В выгрузке: ${esc(t.assignee_raw)}</span>` : ""}</div>
-        <div class="full"><div class="k">Статус</div><div class="stbtns${admin ? "" : " ro"}" id="e-st">${stOpts.map(s => `<button type="button" class="${STK[s[0]]}${t.status === s[0] ? " on" : ""}" data-v="${s[0]}">${s[1]}</button>`).join("")}</div>${t.tag ? `<span class="hint">Пометка в выгрузке: ${esc(t.tag)}</span>` : ""}</div>
+        <div class="full"><div class="k">Статус${!admin && t.can_edit ? ' <span class="hint" style="font-weight:400">· вы можете менять статус своей задачи</span>' : ""}</div><div class="stbtns${canStatus ? "" : " ro"}" id="e-st">${stOpts.filter(s => admin || s[0] !== "info" || t.status === "info").map(s => `<button type="button" class="${STK[s[0]]}${t.status === s[0] ? " on" : ""}" data-v="${s[0]}">${s[1]}</button>`).join("")}</div>${t.tag ? `<span class="hint">Пометка в выгрузке: ${esc(t.tag)}</span>` : ""}</div>
       </div>
       ${admin ? siteBlock(t) : ""}
       <div class="sec-t">История изменений</div>
       ${t.events.length ? `<div class="tl">${t.events.map(e => `<div class="ev"><b>${FIELD[e.field] || esc(e.field)}:</b> ${e.old ? esc(e.old) : "—"} → <b>${e.new ? esc(e.new) : "—"}</b><br><small>${esc(e.who || "система")} · ${esc(e.created_at.slice(0, 16))}</small></div>`).join("")}</div>` : '<p class="hint">Изменений пока не было.</p>'}`;
-    if (!admin) return;
-    const sb = $("#site-apply", b);
-    if (sb) sb.onclick = async () => { try { await api("/api/sync/apply", { method: "POST", json: { task_ids: [id] } }); changed = true; const r = await api(`/api/tasks/${id}?by=${Z.by}`); t = r; paint(false); toast("Статус обновлён по данным ijro"); } catch (e) { toast(e.message, "error"); } };
     const save = async (patch, ok) => {
       try {
         const r = await api("/api/tasks/" + id + "?by=" + Z.by, { method: "PATCH", json: patch });
         t = r; changed = changed || r.changed; paint(false); if (r.changed) toast(ok || "Сохранено");
       } catch (e) { toast(e.message, "error"); paint(false); }
     };
+    if (canStatus) $("#e-st", b).onclick = e => { const x = e.target.closest("button"); if (x && !x.classList.contains("on")) save({ status: x.dataset.v }, "Статус: " + ST[x.dataset.v]); };
+    if (!admin) return;
+    const sb = $("#site-apply", b);
+    if (sb) sb.onclick = async () => { try { await api("/api/sync/apply", { method: "POST", json: { task_ids: [id] } }); changed = true; const r = await api(`/api/tasks/${id}?by=${Z.by}`); t = r; paint(false); toast("Статус обновлён по данным ijro"); } catch (e) { toast(e.message, "error"); } };
     $("#e-as", b).onchange = e => save({ assignee_id: e.target.value ? +e.target.value : null }, "Ответственный изменён");
     $("#e-close", b).onchange = e => save({ close_date: e.target.value || null }, "Дата закрытия сохранена");
     $("#e-clear", b).onclick = () => save({ close_date: null }, "Дата закрытия очищена");
-    $("#e-st", b).onclick = e => { const x = e.target.closest("button"); if (x && !x.classList.contains("on")) save({ status: x.dataset.v }, "Статус: " + ST[x.dataset.v]); };
   }
   paint(true);
 }

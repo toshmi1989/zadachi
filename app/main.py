@@ -283,6 +283,8 @@ def api_tasks(request: Request, page: int = 1, size: int = 50):
         out = tasks.list_tasks(c, filters(request), me(request), scope == "own", limit=size, offset=(max(page, 1) - 1) * size) | {"page": max(page, 1), "size": size}
         if me(request)["role"] == "admin":
             ijro.brief(c, out["items"])
+        for t in out["items"]:
+            t["can_edit"] = me(request)["role"] == "admin" or t["assignee_id"] == me(request)["id"]
         return out
     finally:
         c.close()
@@ -322,6 +324,7 @@ def api_task(request: Request, task_id: int, by: str = "close"):
     c = connect()
     try:
         out = tasks.get_task(c, task_id, me(request), scope == "own", "due" if by == "due" else "close")
+        out["can_edit"] = me(request)["role"] == "admin" or out["assignee_id"] == me(request)["id"]
         if me(request)["role"] == "admin":   # what the site says is for administrators only
             snap = c.execute("SELECT * FROM ijro_snapshots WHERE task_id=?", (task_id,)).fetchone()
             out["site"] = ijro.site_info(snap, out["status"], out["due"]) if snap else None
@@ -343,21 +346,45 @@ async def _json(request: Request) -> dict:
 EDITABLE = ("assignee_id", "status", "close_date")
 
 
+USER_STATUSES = ("todo", "progress", "done")   # an employee cannot mark a task "for information": that is a decision of the administrator
+
+
 @app.patch("/api/tasks/{task_id}")
 async def api_task_update(request: Request, task_id: int):
-    if me(request)["role"] != "admin":
-        bad("Задачи редактирует администратор", 403)
+    user = me(request)
     b = await _json(request)
     changes = {k: b[k] for k in EDITABLE if k in b}
     if not changes:
         bad("Нечего менять")
+    if user["role"] != "admin":
+        # an employee: only the status, only of their own task, only to a status they may set
+        scope = need_tasks(request)
+        c = connect()
+        try:
+            row = c.execute("SELECT assignee_id, status FROM tasks WHERE id=?", (task_id,)).fetchone()
+        finally:
+            c.close()
+        if not row or (scope == "own" and row["assignee_id"] != user["id"]):
+            bad("Задача не найдена", 404)
+        if row["assignee_id"] != user["id"]:
+            bad("Статус можно менять только у своих задач", 403)
+        if set(changes) != {"status"}:
+            bad("Сотрудник может менять только статус своей задачи", 403)
+        if changes["status"] not in USER_STATUSES:
+            bad("Этот статус ставит администратор", 403)
+        if row["status"] == "info":
+            bad("Задача принята к сведению: статус меняет администратор", 403)
     with tx() as c:
         before = c.execute("SELECT assignee_id FROM tasks WHERE id=?", (task_id,)).fetchone()
-        changed = tasks.update_task(c, task_id, changes, me(request)["id"])
+        changed = tasks.update_task(c, task_id, changes, user["id"])
         if changed:
-            audit(c, "task.update", "task", task_id, changes)
-        out = tasks.get_task(c, task_id, me(request), False)
-    if changed and before and out["assignee_id"] and out["assignee_id"] != before["assignee_id"] and out["assignee_id"] != me(request)["id"]:
+            audit(c, "task.update", "task", task_id, changes | {"by_role": user["role"]})
+        out = tasks.get_task(c, task_id, user, False)
+        out["can_edit"] = True
+        if user["role"] == "admin":
+            snap = c.execute("SELECT * FROM ijro_snapshots WHERE task_id=?", (task_id,)).fetchone()
+            out["site"] = ijro.site_info(snap, out["status"], out["due"]) if snap else None
+    if user["role"] == "admin" and changed and before and out["assignee_id"] and out["assignee_id"] != before["assignee_id"] and out["assignee_id"] != user["id"]:
         reminders.notify_assigned([(task_id, out["assignee_id"])])
     return out | {"changed": changed}
 

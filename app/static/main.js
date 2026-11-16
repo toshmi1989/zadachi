@@ -4,7 +4,7 @@
   try { Z.me = await api("/api/me"); } catch (e) { return; }
   const me = Z.me, admin = me.role === "admin";
   const nav = [["dashboard", "Дашборд", "dash"]];
-  if (me.tasks !== "none") nav.push(["tasks", "Задачи", "list"]);
+  if (me.tasks !== "none") nav.push(["tasks", !admin && me.tasks === "own" ? "Мои задачи" : "Задачи", "list"]);
   nav.push(["reminders", "Напоминания", "bell"]);
   if (admin) nav.push(["users", "Пользователи", "users"], ["import", "Импорт", "upload"], ["sync", "Синхронизация", "sync"], ["settings", "Настройки", "gear"]);
   $("#tabs").insertAdjacentHTML("beforeend", nav.map(n => `<a href="#/${n[0]}" data-r="${n[0]}">${icon(n[2])}${n[1]}</a>`).join(""));

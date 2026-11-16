@@ -147,14 +147,13 @@ def test_users_roles_and_permissions(admin):
     assert c.post("/login", data={"login": "petrov.p", "password": ""}, follow_redirects=False).status_code in (401, 422)
     u = user_client("ivanov.i", pw)
     assert u.get("/api/dashboard").status_code == 200
-    assert u.get("/api/tasks").status_code == 200                                 # default: all tasks, read-only
+    assert u.get("/api/tasks").status_code == 200                                 # default: only their own tasks
     tid = u.get("/api/tasks?q=AAA0002").json()["items"][0]["id"]
-    assert u.patch(f"/api/tasks/{tid}", json={"status": "done"}).status_code == 403
+    assert u.patch(f"/api/tasks/{tid}", json={"assignee_id": 1}).status_code == 403   # the status of their own task is theirs to change, nothing else
     assert u.post("/api/tasks/bulk", json={"ids": [tid], "status": "done"}).status_code == 403
     for path in ("/api/users", "/api/settings", "/api/import/history", "/api/audit"):
         assert u.get(path).status_code == 403, path
     assert u.post("/api/import?dry=1", files={"file": ("x.xlsx", b"x")}).status_code == 403
-    admin.put("/api/settings", json={"users_tasks": "own"})
     own = u.get("/api/tasks").json()
     assert own["total"] >= 1 and all(t["assignee_id"] == own["items"][0]["assignee_id"] for t in own["items"])
     assert u.get(f"/api/tasks/{admin.get('/api/tasks?assignee=0').json()['items'][0]['id']}").status_code == 404

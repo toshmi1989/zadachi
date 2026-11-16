@@ -372,7 +372,8 @@ table.plain{width:100%;border-collapse:collapse;font-size:13.5px}
   .t,.t tbody,.t tr,.t td{display:block}
   .t tbody tr{padding:12px 14px;border-bottom:1px solid var(--line)}
   .t td{border:0;padding:3px 0}
-  .t td.c-cb,.t td.c-q{display:none}
+  .t td.c-cb{display:none}
+  .t td.c-q{display:block;padding-top:8px}
   .t .tx{-webkit-line-clamp:3;max-width:none}
 }
 @media (prefers-reduced-motion:reduce){

@@ -7,7 +7,8 @@ const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++
   const b = await chromium.launch(); const errs = [];
   const mk = async (opts) => { const c = await b.newContext(Object.assign({ viewport: { width: 1440, height: 900 } }, opts)); const p = await c.newPage();
     p.on("pageerror", e => errs.push(e.message)); p.on("console", m => { if (m.type() === "error" && !/401|403/.test(m.text())) errs.push(m.text()); }); return p; };
-  const login = async (p, u, pw) => { await p.goto(BASE + "/login"); await p.fill("#login", u); await p.fill("#password", pw); await p.click("button.btn.pri"); await p.waitForSelector(".kpi"); await p.waitForTimeout(1500); };
+  // the sign-in page offers a list of people when there is one; the typed login is always available
+  const login = async (p, u, pw) => { await p.goto(BASE + "/login"); await p.waitForTimeout(500); if (await p.locator("#to-manual").isVisible()) await p.click("#to-manual"); await p.fill("#login", u); await p.fill("#pw2", pw); await p.click("#s-manual button.btn"); await p.waitForSelector(".kpi"); await p.waitForTimeout(1500); };
   const p = await mk(); await login(p, "admin", "secret123");
 
   // drill-down from the dashboard
@@ -78,18 +79,16 @@ const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++
   // role user
   const u = await mk(); await login(u, "test.user", pw);
   ok(await u.locator("#tabs a").count() === 3, "user sees Dashboard, Tasks and Reminders");
-  await u.click('.kpi[data-k="overdue"]'); await u.waitForSelector("#rows tr[data-id]");
-  ok(await u.locator(".cb").count() === 0 && await u.locator("[data-quick]").count() === 0, "no edit controls for a user");
-  await u.locator("#rows tr[data-id]").first().click(); await u.waitForSelector(".drawer.on"); await u.waitForTimeout(600);
-  ok(await u.locator("#e-as").count() === 0, "drawer is read-only for a user");
+  await u.goto(BASE + "/#/tasks"); await u.waitForSelector("#rows"); await u.waitForTimeout(1000);
+  ok(/Нет задач/.test(await u.textContent("#rows")) && await u.locator(".cb").count() === 0, "a new employee has no tasks of their own, so the list is empty (they never see others')");
   const st = (await u.request.patch(`${BASE}/api/tasks/${id}`, { data: { status: "done" } })).status();
-  ok(st === 403, "API refuses edit from a user: " + st);
+  ok(st === 404, "somebody else's task does not exist for an employee: " + st);
   ok((await u.request.get(`${BASE}/api/users`)).status() === 403, "API refuses /api/users for a user");
   await p.goto(BASE + "/#/settings"); await p.click('.opt[data-v="none"]'); await p.waitForTimeout(500);
   await u.goto(BASE + "/#/dashboard"); await u.reload(); await u.waitForSelector(".kpi"); await u.waitForTimeout(800);
   ok(await u.locator("#tabs a").count() === 2, "setting only-dashboard hides Tasks");
   ok((await u.request.get(`${BASE}/api/tasks`)).status() === 403, "API refuses the list under 'only dashboard'");
-  await p.click('.opt[data-v="all"]'); await p.waitForTimeout(400);
+  await p.click('.opt[data-v="own"]'); await p.waitForTimeout(400);
 
   // dark + percent + phone
   await p.goto(BASE + "/#/dashboard"); await p.waitForSelector(".kpi"); await p.waitForTimeout(1400);

@@ -189,7 +189,7 @@ CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit BEGIN SELECT
 """
 
 DEFAULT_SETTINGS = {
-    "users_tasks": "all",         # what role "user" may see: all tasks (read-only) | own | none
+    "users_tasks": "own",         # what role "user" may see: only own tasks (default) | all tasks (read-only, own ones editable) | none
     "rem_enabled": "1",           # Telegram reminders on/off for everyone
     "rem_time": "09:00",          # Tashkent time of the daily digest
     "rem_weekdays": "1,2,3,4,5",  # ISO weekdays the digest is sent on
@@ -260,6 +260,8 @@ def init_db() -> None:
         c.executescript(INDEXES)
         c.executescript(TRIGGERS)
         seed_units(c)
+        if not c.execute("SELECT 1 FROM settings WHERE key='own_default_applied'").fetchone():   # once: employees see only their own tasks
+            put_settings(c, {"users_tasks": "own", "own_default_applied": "1"})
         auth.ensure_admin(c)
 
 

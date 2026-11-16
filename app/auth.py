@@ -1,7 +1,7 @@
 """Accounts: login + password, two roles.
 
 admin — sees the dashboard and all tasks, edits tasks (assignee, status, closing date), manages users and imports
-user  — sees the dashboard; the task list is read-only and the administrator decides how much of it (setting users_tasks)
+user  — sees the dashboard and their own tasks (the administrator may widen it to all tasks, read-only: setting users_tasks) and changes the status of their own tasks
 """
 import hashlib
 import hmac
