@@ -9,8 +9,8 @@ routes.users = async function (page) {
   page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Пользователи</h1><p>Сотрудники из выгрузки появляются здесь сами. Чтобы человек мог войти — выдайте ему пароль.</p></div>
     <button class="btn pri" id="add">${icon("plus")}Добавить пользователя</button></div>
     <div class="ufilter rise" style="--i:1"><div id="usum" class="hint"></div><div id="uflt"></div></div><div class="ulist" id="ul"></div>`;
-  let flt = "all";
-  const FILTERS = { all: () => true, notg: u => !u.tg_linked, nounit: u => !u.unit_id && u.role !== "admin",   // administrators do not need a department nopw: u => !u.pw_set };
+  let flt = "all";   // administrators do not need a department, so they never count as "without a department"
+  const FILTERS = { all: () => true, notg: u => !u.tg_linked, nounit: u => !u.unit_id && u.role !== "admin", nopw: u => !u.pw_set };
   function paintFilter() {
     const act = items.filter(u => u.active), n = f => act.filter(FILTERS[f]).length;
     $("#usum", page).innerHTML = `Telegram привязан: <b>${act.length - n("notg")}</b> из ${act.length} · отдел указан: <b>${act.filter(u => u.role !== "admin").length - n("nounit")}</b> из ${act.filter(u => u.role !== "admin").length} · пароль выдан: <b>${act.length - n("nopw")}</b> из ${act.length}`;
