@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS units (
     sort INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1
 );
+-- the names of departments in the export of the site (Latin or Cyrillic, in one comparable form) and the unit of ours they stand for; unit_id NULL = not ours
+CREATE TABLE IF NOT EXISTS unit_aliases (
+    alias_key TEXT PRIMARY KEY,
+    unit_id INTEGER REFERENCES units(id)
+);
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     login TEXT NOT NULL UNIQUE,
@@ -200,10 +205,16 @@ DEFAULT_SETTINGS = {
     "login_list": "1",            # show the list of employees on the sign-in page
     "rem_max": "15",              # tasks listed in one message
     "public_url": "",             # site address for links in messages
+    "ai_enabled": "0",            # the language model chooses the closing-date template (the key and the model are in the settings)
+    "ai_key": "",
+    "ai_model": "gpt-4o-mini",
+    "ai_base_url": "",
     "ijro_auto_apply": "1",       # apply clear changes from the site automatically after each synchronisation
     "ijro_card_tpl": "",          # address of a task card on edo.ijro.uz: {section_path} and {id} are substituted
 }
 MIGRATIONS = [
+    "ALTER TABLE tasks ADD COLUMN close_src TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE tasks ADD COLUMN close_note TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN tg_chat_id TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN tg_username TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN tg_code TEXT NOT NULL DEFAULT ''",

@@ -30,7 +30,7 @@ routes.tasks = async function (page, params) {
   if (Z.me.tasks === "none") throw new Error("Список задач для вашей роли отключён администратором");
   const meta = await loadMeta();
   const S = { unit: params.unit === undefined ? "" : params.unit, assignee: params.assignee || "", status: params.status || "", bucket: params.bucket || "", kind: params.kind || "",
-              doc: params.doc || "", stage: params.stage || "", q: params.q || "", date_from: params.date_from || "", date_to: params.date_to || "",
+              doc: params.doc || "", stage: params.stage || "", closing: params.closing || "", q: params.q || "", date_from: params.date_from || "", date_to: params.date_to || "",
               sort: params.sort || "eff", dir: params.dir || "asc", page: +params.page || 1 };
   const own = Z.me.tasks === "own" && !isAdmin();
   const sel = new Set();
@@ -100,6 +100,7 @@ routes.tasks = async function (page, params) {
     if (S.kind) out.push(["kind", "Тип: " + S.kind]);
     if (S.doc) out.push(["doc", "Документ: " + S.doc]);
     if (S.stage) out.push(["stage", "Этап: " + (STAGE_NAME[S.stage] || S.stage)]);
+    if (S.closing) out.push(["closing", "Даты закрытия: предложены, не подтверждены"]);
     $("#chips", page).innerHTML = out.map(c => `<span class="fchip" data-k="${c[0]}">${esc(c[1])}<button type="button" aria-label="Убрать фильтр">${icon("x")}</button></span>`).join("");
   }
   $("#chips", page).onclick = e => {
@@ -123,7 +124,7 @@ routes.tasks = async function (page, params) {
       <td class="doc"><b>${esc(t.doc_no)}</b><small>${esc(t.kind)}${t.doc_date ? " · " + fdate(t.doc_date) : ""}</small></td>
       <td>${t.point ? `<span class="pt">${esc(t.point)}</span>` : ""}<div class="tx">${esc(t.text)}</div></td>
       <td>${who}</td><td>${deadlineCell(t)}</td>
-      ${admin ? `<td>${t.close_date ? fdate(t.close_date) : '<span style="color:var(--text-3)">—</span>'}</td>` : ""}
+      ${admin ? `<td>${t.close_date ? fdate(t.close_date) : '<span style="color:var(--text-3)">—</span>'}${t.close_src ? ` <span class="prop ${t.close_src}" data-tip="${esc((t.close_src === "ai" ? "Предложено ИИ. " : "Предложено по прежним решениям. ") + (t.close_note || "") + " Нажмите на задачу, чтобы подтвердить или изменить.")}">${t.close_src === "ai" ? "ИИ" : "авто"}</span>` : ""}</td>` : ""}
       <td>${statusChip(t)}${stageChip(t)}${t.tag ? `<div class="hint" style="margin-top:3px">${esc(t.tag)}</div>` : ""}${t.site && t.site.diff ? `<div style="margin-top:4px"><span class="chip done" data-tip="По данным ijro (проверено ${esc(t.site.checked_at.slice(0, 16))}).${admin ? " Применить можно в разделе «Синхронизация» или в карточке." : ""}">на сайте: ${esc(t.site.label)}</span></div>` : ""}${t.site && t.site.site_open_we_done ? '<div style="margin-top:4px"><span class="chip overdue" data-tip="У нас отмечена выполненной, а на сайте ещё нет">на сайте не закрыта</span></div>' : ""}</td>
       <td class="c-q">${t.can_edit && (t.status === "todo" || t.status === "progress") ? `<button class="quick" data-quick aria-label="Отметить выполненной" data-tip="Отметить выполненной">${icon("check")}</button>` : ""}</td></tr>`;
   }
@@ -131,7 +132,7 @@ routes.tasks = async function (page, params) {
   async function load() {
     const my = ++reqId;
     const rowsEl = $("#rows", page); rowsEl.style.opacity = ".45"; rowsEl.style.transition = "opacity .2s";
-    const q = { unit: own ? "" : S.unit, assignee: own ? "" : S.assignee, status: S.status, bucket: S.bucket, kind: S.kind, doc: S.doc, stage: S.stage, q: S.q, date_from: S.date_from, date_to: S.date_to, sort: S.sort, dir: S.dir, by: Z.by };
+    const q = { unit: own ? "" : S.unit, assignee: own ? "" : S.assignee, status: S.status, bucket: S.bucket, kind: S.kind, doc: S.doc, stage: S.stage, closing: S.closing, q: S.q, date_from: S.date_from, date_to: S.date_to, sort: S.sort, dir: S.dir, by: Z.by };
     history.replaceState(null, "", "#/tasks" + (qs(Object.assign({}, q, { page: S.page > 1 ? S.page : "" })) ? "?" + qs(Object.assign({}, q, { page: S.page > 1 ? S.page : "" })) : ""));
     exp.href = "/api/tasks.xlsx?" + qs(q);
     try { data = await api("/api/tasks?" + qs(Object.assign({}, q, { page: S.page, size: 50 }))); } catch (e) { toast(e.message, "error"); return; }
@@ -202,6 +203,7 @@ async function openTask(id, onChange) {
       <div class="dtext">${esc(t.text)}</div>
       <div class="kv">
         ${admin ? `<div><div class="k">Официальный срок</div><div class="v">${fdate(t.due)}</div></div>` : ""}
+        ${admin && t.close_src ? `<div class="full"><div class="warn">${icon("info")}<span><b>${t.close_src === "ai" ? "Дата предложена ИИ" : "Дата предложена по прежним решениям"}.</b> ${esc(t.close_note || "")}</span><button class="btn sm pri" id="close-ok" style="margin-left:auto">Подтвердить</button></div></div>` : ""}
         <div${admin ? "" : ' class="full"'}><div class="k">${admin ? "Дата закрытия" : "Срок (дата закрытия)"}</div>${admin ? `<div style="display:flex;gap:6px"><input type="date" id="e-close" value="${esc(t.close_date || "")}"><button class="btn sm" id="e-clear" title="Очистить" ${t.close_date ? "" : "disabled"}>${icon("x")}</button></div>` : `<div class="v">${fdate(t.close_date)}</div>`}</div>
         <div class="full"><div class="k">Ответственный</div>${admin ? `<select id="e-as"><option value="">— не назначен —</option>${people.map(p => `<option value="${p.id}"${p.id === t.assignee_id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select>` : `<div class="v" style="display:flex;gap:8px;align-items:center">${t.assignee_id ? avatar(t.assignee_id, t.assignee_name, "sm") + esc(t.assignee_name) : "Не назначен"}</div>`}
           ${t.unit ? `<span class="hint">Отдел: ${esc(t.unit)}</span>` : ""}
@@ -222,6 +224,7 @@ async function openTask(id, onChange) {
     const sb = $("#site-apply", b);
     if (sb) sb.onclick = async () => { try { await api("/api/sync/apply", { method: "POST", json: { task_ids: [id] } }); changed = true; const r = await api(`/api/tasks/${id}?by=${Z.by}`); t = r; paint(false); toast("Статус обновлён по данным ijro"); } catch (e) { toast(e.message, "error"); } };
     $("#e-as", b).onchange = e => save({ assignee_id: e.target.value ? +e.target.value : null }, "Ответственный изменён");
+    const co = $("#close-ok", b); if (co) co.onclick = async () => { try { await api("/api/closing/confirm", { method: "POST", json: { ids: [id] } }); changed = true; t = await api(`/api/tasks/${id}?by=${Z.by}`); paint(false); toast("Дата подтверждена"); } catch (e) { toast(e.message, "error"); } };
     $("#e-close", b).onchange = e => save({ close_date: e.target.value || null }, "Дата закрытия сохранена");
     $("#e-clear", b).onclick = () => save({ close_date: null }, "Дата закрытия очищена");
   }

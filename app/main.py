@@ -12,7 +12,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, backup, importer, ijro, reminders, stats, tasks, telegram
+from . import auth, backup, closing, importer, ijro, reminders, site_import, stats, tasks, telegram
 from .db import STATUSES, audit, connect, init_db, now, setting, tx
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -34,7 +34,7 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 OPEN_PATHS = ("/healthz", "/login", "/api/login-users", "/ijro-sync.user.js")
 BEARER_PATHS = ("/api/sync/job", "/api/sync/ingest")   # opened with a key of the platform (collector in a browser), not with a cookie
-ADMIN_ONLY = re.compile(r"^/api/(users|units|import|settings|backup|audit|sync/(keys|review|apply|settings)|reminders/(settings|preview|run|log))(/|$)")
+ADMIN_ONLY = re.compile(r"^/api/(users|units|import|settings|backup|audit|ai|closing|sync/(keys|review|apply|settings)|reminders/(settings|preview|run|log))(/|$)")
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -267,7 +267,7 @@ def api_meta(request: Request):
 
 # ---------------------------------------------------------------- tasks
 
-FILTER_KEYS = ("unit", "assignee", "status", "bucket", "kind", "doc", "q", "by", "sort", "dir", "date_from", "date_to", "stage")
+FILTER_KEYS = ("unit", "assignee", "status", "bucket", "kind", "doc", "q", "by", "sort", "dir", "date_from", "date_to", "stage", "closing")
 
 
 def filters(request: Request) -> dict:
@@ -552,17 +552,96 @@ async def api_my_password(request: Request):
 # ---------------------------------------------------------------- import, settings, backup, audit
 
 @app.post("/api/import")
-async def api_import(request: Request, file: UploadFile = File(...), dry: int = 1):
+async def api_import(request: Request, file: UploadFile = File(...), dry: int = 1, due_from: str = "", due_to: str = "", ai: int = 1):
+    """The old processed list, or the raw export of the site (then: only our departments, a window of terms, and the closing dates are proposed)."""
     data = await file.read(MAX_UPLOAD + 1)
     if len(data) > MAX_UPLOAD:
         bad("Файл больше 15 МБ")
+    site = site_import.is_site_export(data)
+    report = None
     try:
-        rows, warnings = importer.read(data)
+        if site:
+            with tx() as c:
+                rows, warnings, report = site_import.read(c, data, due_from or None, due_to or None)
+                report["absent"] = site_import.absent(c, {r["code"] for r in site_import._read_rows(data)}, due_from or None, due_to or None)[:200]
+        else:
+            rows, warnings = importer.read(data)
     except importer.ImportError_ as e:
         bad(str(e))
     with tx() as c:
         summary = importer.apply(c, rows, warnings, file.filename or "export.xlsx", me(request)["id"], bool(dry))
+    if report is not None:
+        summary["site"] = report
+    if site and not dry and ai:
+        summary["closing"] = closing.suggest()
     return summary
+
+
+@app.put("/api/import/aliases")
+async def api_import_aliases(request: Request):
+    """Which unit of ours a department name of the site stands for ({key: unit id}; null = not ours). Remembered for the next files."""
+    b = await _json(request)
+    m = b.get("map")
+    if not isinstance(m, dict) or not m:
+        bad("Нечего сохранять")
+    with tx() as c:
+        ids = {r["id"] for r in c.execute("SELECT id FROM units")}
+        clean = {}
+        for k, v in m.items():
+            if not isinstance(k, str) or len(k) > 300:
+                bad("Неверное название отдела")
+            if v is not None and v not in ids:
+                bad("Такого отдела у нас нет")
+            clean[k] = v
+        n = site_import.save_aliases(c, clean)
+        audit(c, "import.aliases", "units", None, {"count": n})
+    return {"saved": n}
+
+
+@app.get("/api/ai")
+def api_ai():
+    c = connect()
+    try:
+        ev = closing.evaluate(c)
+    finally:
+        c.close()
+    return closing.settings_view() | {"history": ev}
+
+
+@app.put("/api/ai")
+async def api_ai_put(request: Request):
+    b = await _json(request)
+    try:
+        closing.save_settings(b)
+    except ValueError as e:
+        bad(str(e))
+    return closing.settings_view()
+
+
+@app.post("/api/ai/test")
+def api_ai_test():
+    try:
+        return {"ok": True, "message": closing.ai_test()}
+    except closing.AiError as e:
+        return {"ok": False, "message": str(e)}
+
+
+@app.post("/api/closing/suggest")
+async def api_closing_suggest(request: Request):
+    b = await _json(request)
+    ids = b.get("ids")
+    if ids is not None and (not isinstance(ids, list) or not all(isinstance(i, int) for i in ids)):
+        bad("ids: список чисел")
+    return closing.suggest(ids or None, redo=bool(b.get("redo")), use_ai=b.get("ai") is not False)
+
+
+@app.post("/api/closing/confirm")
+async def api_closing_confirm(request: Request):
+    b = await _json(request)
+    ids = b.get("ids")
+    if ids is not None and (not isinstance(ids, list) or not all(isinstance(i, int) for i in ids)):
+        bad("ids: список чисел")
+    return {"confirmed": closing.confirm(ids or None)}
 
 
 @app.get("/api/import/history")

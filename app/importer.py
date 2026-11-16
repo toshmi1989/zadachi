@@ -125,6 +125,11 @@ def read(data: bytes) -> tuple[list[dict], list[str]]:
     return out, warnings
 
 
+def _same_words(a, b) -> bool:
+    flat = lambda s: re.sub(r"\s+", " ", re.sub(r"(-банд)+", "-банд", s or "")).strip()
+    return flat(a) == flat(b)
+
+
 def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int | None, dry: bool) -> dict:
     users = {}
     for u in c.execute("SELECT id, name, excel_name FROM users"):
@@ -142,10 +147,12 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
                 new_people.append({"name": r["who"], "login": None})
             if not dry:
                 login = auth.make_login(c, r["who"])
-                cur = c.execute("INSERT INTO users(login, name, password_hash, role, excel_name, created_at) VALUES (?,?,?,?,?,?)",
-                                (login, r["who"], auth.unusable_hash(), "user", r["who"], t))
+                cur = c.execute("INSERT INTO users(login, name, password_hash, role, excel_name, created_at, unit_id) VALUES (?,?,?,?,?,?,?)",
+                                (login, r["who"], auth.unusable_hash(), "user", r["who"], t, r.get("unit_id")))
                 users[key] = uid = cur.lastrowid
                 new_people[-1]["login"] = login
+        if uid and r.get("unit_id") and not dry:   # the department of the export tells where a person without a unit of ours belongs
+            c.execute("UPDATE users SET unit_id=? WHERE id=? AND unit_id IS NULL", (r["unit_id"], uid))
         cur_row = existing.get(r["code"])
         if cur_row is None:
             created += 1
@@ -157,8 +164,18 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
             continue
         fields = {"seq": r["seq"], "kind": r["kind"], "doc_no": r["doc_no"], "doc_date": r["doc_date"], "point": r["point"],
                   "text": r["text"], "due": r["due"], "assignee_raw": r["who"], "tag": r["tag"]}
+        if "unit_id" in r:
+            fields.pop("seq"), fields.pop("tag")       # the raw export knows neither the number of the specialist's list nor his notes
+            for k in ("text", "point"):                 # the same words written with other blank lines or "-банд-банд" are not a change
+                if _same_words(cur_row[k], r[k]):
+                    fields.pop(k)
         if cur_row["edited"]:
             kept += 1  # the administrator already worked on this task: the file does not overwrite assignee, status, closing date
+        elif "unit_id" in r:
+            # the raw export of the site: it has no closing date (never erased) and says "in progress" for everything open (never lowers our status)
+            fields.update(assignee_id=uid)
+            if r["status"] != "todo" or cur_row["status"] not in ("todo", "progress"):
+                fields.update(status=r["status"])
         else:
             fields.update(close_date=r["close_date"], assignee_id=uid, status=r["status"])
         diff = {k: v for k, v in fields.items() if cur_row[k] != v}

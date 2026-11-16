@@ -119,6 +119,8 @@ def _where(f: dict, by: str, user: dict | None, own_only: bool) -> tuple[str, di
     if f.get("date_to"):
         clauses.append(f"{e} <= :dto")
         p["dto"] = f["date_to"]
+    if f.get("closing") == "proposed":
+        clauses.append("t.close_src != ''")
     if "_stage_ids" in f:
         ids = [int(i) for i in f["_stage_ids"]]
         clauses.append(f"t.id IN ({','.join(map(str, ids))})" if ids else "1=0")
@@ -135,6 +137,7 @@ def row_out(r, by: str) -> dict:
     return {
         "id": r["id"], "code": r["code"], "num": r["seq"], "kind": r["kind"], "doc_no": r["doc_no"], "doc_date": r["doc_date"],
         "point": r["point"], "text": r["text"], "due": None if by == "strict" else r["due"], "close_date": r["close_date"], "eff": eff,
+        "close_src": r["close_src"], "close_note": r["close_note"],
         "days": (date.fromisoformat(eff) - t).days if eff else None,
         "status": r["status"], "tag": r["tag"], "bucket": bucket_of(r["status"], eff, t),
         "assignee_id": r["assignee_id"], "assignee": auth.short_name(r["a_name"]) if r["a_name"] else "",
@@ -176,7 +179,7 @@ def get_task(c, task_id: int, user: dict, own_only: bool, by: str = "close") -> 
         raise TaskError("Задача не найдена", 404)
     out = row_out(r, by)
     out["events"] = [dict(e) for e in c.execute(
-        """SELECT e.field, e.old, e.new, e.created_at, COALESCE(u.name, 'Автоматически (ijro)') AS who FROM task_events e
+        """SELECT e.field, e.old, e.new, e.created_at, COALESCE(u.name, 'Автоматически') AS who FROM task_events e
            LEFT JOIN users u ON u.id = e.user_id WHERE e.task_id=? AND (? OR e.field != 'due') ORDER BY e.id DESC LIMIT 100""", (task_id, user["role"] == "admin"))]   # the official term is not for employees: neither its changes
     return out
 
@@ -235,6 +238,8 @@ def update_task(c, task_id: int, changes: dict, user_id: int) -> bool:
                   (task_id, user_id, field, _label(c, field, r[field]), _label(c, field, value), now()))
         c.execute(f"UPDATE tasks SET {field}=? WHERE id=?", (value, task_id))
         changed = True
+        if field == "close_date":
+            c.execute("UPDATE tasks SET close_src='', close_note='' WHERE id=?", (task_id,))   # a person decided: no longer a proposal
         if field == "status":
             c.execute("UPDATE tasks SET done_at=? WHERE id=?", (now() if value == "done" else None, task_id))
     if changed:
