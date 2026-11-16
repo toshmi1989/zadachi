@@ -27,15 +27,20 @@ const DATE = ms => ({ __date: ms });
 const item = (id, code, status, extra) => Object.assign({ id, recipient_id: id, _code: code, status, is_done: false, overdue: false, repeatable: 0, due_date: null, task_due_date_ms: String(due), done_at: null, total: "1" }, extra || {});
 const DATA = {
   president: [item("r-xpg", "XPG5469", 2), item("r-sec", "SEC0001", 20, { is_done: true, done_at: DATE(due - DAY) }),
-    item("r-rep", "REP0001", 0, { repeatable: 1, repeat_periods: [{ id: "p1", due_date: DATE(due), order_index: 1, status: 10, recipient_status: 20 }, { id: "p2", due_date: DATE(due + 90 * DAY), order_index: 2, status: 0, recipient_status: 0 }] }),
+    // the list flag repeatable is 0 even for a periodic task (as on the real site); periods have string dates and our deadline is 2026-12-31
+    item("r-rep", "REP0001", 0, { repeat_periods: [{ id: "p1", due_date: "2026-09-30", order_index: 1, status: 10, recipient_status: 20 }, { id: "p2", due_date: "2026-12-31", order_index: 2, status: 0, recipient_status: 0 }, { id: "p3", due_date: "2027-03-31", order_index: 3, status: 0, recipient_status: 0 }] }),
+    item("r-rep2", "REP0002", 0, { repeat_periods: [{ id: "p1", due_date: "2026-09-30", order_index: 1, status: 10, recipient_status: 20 }, { id: "p2", due_date: "2026-12-31", order_index: 2, status: 10, recipient_status: 20 }, { id: "p3", due_date: "2027-03-31", order_index: 3, status: 0, recipient_status: 0 }] }),
     item("r-unk", "UNK0001", 1)],
   government: [item("r-vmk", "VMK3541", 21, { is_done: true, done_at: DATE(due + 3 * DAY) })],
   president_admin: [item("r-ojn", "OJN6944", 20, { is_done: true, done_at: DATE(due - 2 * DAY) })],
 };
-const ANSWERS = { "r-xpg": [{ sender_type: 10, state: 1, active: true, created_at: DATE(due - 10 * DAY), comment: "Ответ исполнителя, текст" }], "r-sec": [{ sender_type: 10, state: 1, comment: "СЕКРЕТНЫЙ ТЕКСТ" }, { sender_type: 45, state: 1, comment: "" }],
-  "r-ojn": [{ sender_type: 10, state: 1, comment: "a" }, { sender_type: 25, state: 1 }, { sender_type: 35, state: 1 }, { sender_type: 45, state: 1 }] };
+// answers as the real site gives them: text in "contents", the date as a string of milliseconds, created_at is null
+const A = (st, text, ms, extra) => Object.assign({ sender_type: st, state: 1, active: 0, contents: text || "", created_at: null, date_row_ms: String(ms), created_at_ms: String(ms) + "0000000", period: { id: "p2", status: 10, due_date: "2026-12-31" } }, extra || {});
+const ANSWERS = { "r-xpg": [A(10, "Ответ исполнителя, текст", due - 10 * DAY, { active: 1 })], "r-sec": [A(10, "СЕКРЕТНЫЙ ТЕКСТ", due - 12 * DAY), A(45, "", due - 11 * DAY)],
+  "r-ojn": [A(10, "a", due - 9 * DAY), A(25, "", due - 8 * DAY), A(35, "", due - 7 * DAY), A(45, "", due - 6 * DAY)], "r-rep2": [A(10, "Ответ за период", due - 20 * DAY)] };
+const CODES = { "r-xpg": "XPG5469", "r-sec": "SEC0001", "r-rep": "REP0001", "r-rep2": "REP0002", "r-unk": "UNK0001", "r-vmk": "VMK3541", "r-ojn": "OJN6944" };
 const typeIdsOf = Object.fromEntries(Object.entries({ president: ["58f0be6d53aa2e226ea922e1"], government: ["63eb32785d0ebf50170ca672"], president_admin: ["67a1c6578b31062d692ce3f6"] }));
-let flaky = 0, wrongSession = false, calls = [], layout = "normal";
+let flaky = 0, wrongSession = false, calls = [], layout = "normal", wrongCard = false;
 const encodeWithDates = obj => { // MessagePack with real ExtType 13 dates
   const walk = v => v && typeof v === "object" ? (v.__date !== undefined ? { __ext: v.__date } : Array.isArray(v) ? v.map(walk) : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]))) : v;
   const marker = "\u0001EXT\u0001"; const exts = [];
@@ -63,7 +68,7 @@ const fake = http.createServer((req, res) => {
       if (layout === "nested") return send(201, { data: hit.map(i => ({ id: i.id, status: i.status, is_done: i.is_done, task: { task_code: i._code, name: "x" } })), total: hit.length });
       return send(201, hit.map(strip));
     }
-    if (req.url.endsWith("/task/get-one")) return send(201, { id: body.recipient_id, name: "x", task: { is_secret: body.recipient_id === "r-sec" } });
+    if (req.url.endsWith("/task/get-one")) return send(201, { id: body.recipient_id, task_code: wrongCard ? "ZZZ0000" : CODES[body.recipient_id], is_secret: body.recipient_id === "r-sec", repeatable: 1 });
     if (req.url.endsWith("/task-requests/list")) return send(201, ANSWERS[body.recipient_id] || []);
     send(404);
   });
@@ -83,24 +88,25 @@ const fake = http.createServer((req, res) => {
   const noSleep = async () => {};
 
   const job = await server("GET", "/api/sync/job");
-  ok(job.items.length === 7 && !job.items.some(i => i.code === "DON0001"), "the job lists the 7 open tasks, not the done one");
+  ok(job.items.length === 8 && !job.items.some(i => i.code === "DON0001"), "the job lists the 8 open tasks, not the done one");
   ok(job.items.find(i => i.code === "VMK3541").section === "government" && job.items.find(i => i.code === "OJN6944").section === "president_admin", "each task is first looked up in the section of its kind");
 
   const r = await core.runSync({ server, client: mk(), sleep: noSleep, delay: 0, chunk: 3 });
-  ok(r.done === 7 && r.found === 6 && r.sent === 7 && !r.stopped, "run: 7 checked, 6 found, 7 sent in several packets: " + JSON.stringify(r));
+  ok(r.done === 8 && r.found === 7 && r.sent === 8 && !r.stopped, "run: 8 checked, 7 found, 8 sent in several packets: " + JSON.stringify(r));
   ok(calls.some(c => c.startsWith("/task/v2/list-by-recipient XPG5469")), "searches by code with year = null and the organisation of the session");
   const rev = await admin("GET", "/api/sync/review");
   const c = rev.counts;
-  ok(c.checked === 7 && c.found === 6 && c.not_found === 1 && c.unknown === 1 && c.to_done === 3 && c.to_progress === 1, "review counts: " + JSON.stringify(c));
+  ok(c.checked === 8 && c.found === 7 && c.not_found === 1 && c.unknown === 1 && c.to_done === 4 && c.to_progress === 1, "review counts: " + JSON.stringify(c));
   const by = Object.fromEntries(rev.items.map(i => [i.code, i]));
   ok(by.NOF0001.change === "not_found" && by.UNK0001.change === "unknown" && by.UNK0001.proposed === null, "not found and unknown status are shown and never applied");
   ok(by.OJN6944.change === "to_done" && by.VMK3541.change === "to_done" && by.SEC0001.change === "to_done" && by.XPG5469.change === "to_progress", "proposals follow the status table");
-  ok(!by.REP0001, "a periodic task with an open period is not marked done");
+  ok(!by.REP0001, "a periodic task whose period (our deadline) is open is not marked done, although earlier periods are done");
+  ok(by.REP0002 && by.REP0002.change === "to_done" && /Период 2 из 3 выполнен \(срок 31\.12\.2026\)/.test(by.REP0002.site_label), "a periodic task whose period of our deadline is done is proposed as done: " + (by.REP0002 || {}).site_label);
   const id = code => rev.items.find(i => i.code === code).task_id;
   const one = await admin("GET", "/api/tasks/" + id("VMK3541"));
   ok(one.site && one.site.late && /с опозданием/.test(one.site.label) && one.site.section === "government", "card: done late, section government");
   const xpg = await admin("GET", "/api/tasks/" + id("XPG5469"));
-  ok(xpg.site.answers.length === 1 && xpg.site.answers[0].type === "Ответ исполнителя" && /Ответ исполнителя, текст/.test(xpg.site.answers[0].text) && xpg.site.answers[0].at.startsWith("2026-"), "answers are stored with type, date (ExtType 13) and text");
+  ok(xpg.site.answers.length === 1 && xpg.site.answers[0].type === "Ответ исполнителя" && /Ответ исполнителя, текст/.test(xpg.site.answers[0].text) && xpg.site.answers[0].at.startsWith("2026-11"), "answers are stored with type, date (ExtType 13) and text");
   const sec = await admin("GET", "/api/tasks/" + id("SEC0001"));
   ok(sec.site.secret && sec.site.answers.every(a => a.text === "") && !JSON.stringify(sec).includes("СЕКРЕТНЫЙ"), "a secret task: no answer text reaches the platform");
   const ojn = await admin("GET", "/api/tasks/" + id("OJN6944"));
@@ -113,12 +119,17 @@ const fake = http.createServer((req, res) => {
 
   if (process.env.STOP_BEFORE_APPLY) { fake.close(); console.log(fails ? fails + " FAILED" : "ALL PASS (stopped before applying)"); process.exit(fails ? 1 : 0); }
   // applying: only what was proposed, with history
-  const ap = await admin("POST", "/api/sync/apply", { task_ids: [id("OJN6944"), id("VMK3541"), id("SEC0001"), id("UNK0001"), id("NOF0001")] });
-  ok(ap.applied === 3 && ap.skipped === 2, "apply: 3 applied, unknown and not-found skipped: " + JSON.stringify(ap));
+  const ap = await admin("POST", "/api/sync/apply", { task_ids: [id("OJN6944"), id("VMK3541"), id("SEC0001"), id("REP0002"), id("UNK0001"), id("NOF0001")] });
+  ok(ap.applied === 4 && ap.skipped === 2, "apply: 4 applied, unknown and not-found skipped: " + JSON.stringify(ap));
   const after = await admin("GET", "/api/tasks/" + id("OJN6944"));
   ok(after.status === "done" && after.events[0].field === "status" && after.events[0].new === "Выполнено" && after.done_at, "status changed through the normal history");
   ok((await admin("GET", "/api/sync/review")).counts.to_done === 0, "after applying nothing is left to apply");
 
+  // the card says it is another task: the match is never trusted
+  wrongCard = true;
+  const rw = await core.runSync({ server, client: mk(), sleep: noSleep, delay: 0 });
+  wrongCard = false;
+  ok(rw.found < 7, "when the card of a found task carries another code, the task is reported as not found (" + rw.found + " of 7 trusted)");
   // failures
   let bad = null; try { await server("GET", "/api/sync/job", null, "zk_wrong"); } catch (e) { bad = e.message; } ok(/ключ/i.test(bad || ""), "a wrong key is refused: " + bad);
   wrongSession = true; flaky = 1;

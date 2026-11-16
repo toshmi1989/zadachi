@@ -11,7 +11,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   await p.click('#tabs a[data-r="sync"]'); await p.waitForSelector("#s-rev .plain"); await p.waitForTimeout(900);
   await p.screenshot({ path: OUT + "/100-sync.png", fullPage: true });
   ok(/Установить скрипт/.test(await p.textContent("#s-how")) && (await p.getAttribute("#s-how a.pri", "href")) === "/ijro-sync.user.js", "install link points to the script");
-  const rows = await p.locator("#s-rev tbody tr").count(); ok(rows === 4, "the default filter 'К применению' lists 4 tasks (3 done + 1 answered): " + rows);
+  const rows = await p.locator("#s-rev tbody tr").count(); ok(rows === 5, "the default filter 'К применению' lists 5 tasks (4 done + 1 answered): " + rows);
   await p.click('#f-seg button[data-v="not_found"]'); await p.waitForTimeout(500); ok(/NOF0001/.test(await p.textContent("#s-rev tbody")) && await p.locator("#s-rev .r-one").count() === 0, "'Не найдены' has no checkboxes: nothing to apply");
   await p.click('#f-seg button[data-v="unknown"]'); await p.waitForTimeout(500); ok(/UNK0001/.test(await p.textContent("#s-rev tbody")) && /Неизвестный статус/.test(await p.textContent("#s-rev tbody")), "unknown status is listed and not applicable");
   await p.click('#f-seg button[data-v="apply"]'); await p.waitForTimeout(500);
@@ -23,7 +23,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   await p.locator("#s-rev tbody tr", { hasText: "OJN6944" }).locator(".r-one").check(); await p.locator("#s-rev tbody tr", { hasText: "VMK3541" }).locator(".r-one").check();
   ok((await p.textContent("#r-n")) === "2", "counter of chosen tasks");
   await p.click("#r-apply"); await p.waitForSelector(".modal button.pri"); await p.screenshot({ path: OUT + "/101-sync-confirm.png" }); await p.click(".modal button.pri"); await p.waitForTimeout(1200);
-  ok((await p.locator("#s-rev tbody tr").count()) === 2, "after applying 2 of 4, 2 remain");
+  ok((await p.locator("#s-rev tbody tr").count()) === 3, "after applying 2 of 5, 3 remain");
   // list: link to ijro and the chip
   await p.goto(BASE + "/#/tasks?q=XPG5469"); await p.waitForSelector("#rows tr[data-id]"); await p.waitForTimeout(800);
   const link = p.locator("#rows a.ext").first();

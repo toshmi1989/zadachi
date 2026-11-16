@@ -12,10 +12,10 @@ import hmac
 import json
 import os
 import secrets
-from datetime import datetime
+from datetime import date, datetime, timezone
 
 from . import tasks
-from .db import STATUSES, TZ, audit, now, setting
+from .db import STATUSES, TZ, audit, now, setting, today
 
 SECTIONS = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ijro_sections.json"), encoding="utf-8"))
 SECTION_BY_ID = {s["id"]: s for s in SECTIONS["sections"]}
@@ -65,19 +65,45 @@ def job(c, key_id: int) -> dict:
 
 # ---------------------------------------------------------------- mapping of the site's status to ours
 
-def classify(snap) -> dict:
-    """What the site says, in our terms. Conservative: an unknown status never changes anything, a periodic task is
-    only 'done' when every period is. Returns {status: our status or None, label, note, known}."""
+def _day(ms):
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).date() if ms else None
+
+
+def current_period(periods: list[dict], due: str | None):
+    """The period that our task row stands for: the one with the same deadline as the official term in the Excel row; otherwise the
+    first unfinished period that is not in the past; otherwise the last one."""
+    if due:
+        want = date.fromisoformat(due)
+        for p in periods:
+            if _day(p.get("due_ms")) == want:
+                return p
+    t = today()
+    for p in periods:
+        d = _day(p.get("due_ms"))
+        if p.get("recipient_status") != 20 and d and d >= t:
+            return p
+    return periods[-1]
+
+
+def classify(snap, due: str | None = None) -> dict:
+    """What the site says, in our terms. Conservative: an unknown status never changes anything. A periodic task has one general
+    status for all its periods (it stays 'in work' until the last one), so it is judged by the period of our deadline.
+    Returns {status: our status or None, label, note, known}."""
     if not snap["found"]:
         return {"status": None, "label": "Не найдена на сайте", "note": "Код не найден ни в одном из трёх разделов", "known": False}
     st = snap["site_status"]
     periods = json.loads(snap["periods"] or "[]")
     if snap["repeatable"] and periods:
+        cur = current_period(periods, due)
+        n, k = len(periods), (cur.get("order") or periods.index(cur) + 1)
+        when = _day(cur.get("due_ms"))
+        tail = f" (срок {when.strftime('%d.%m.%Y')})" if when else ""
+        if all(p.get("recipient_status") == 20 for p in periods):
+            return {"status": "done", "label": "Выполнена (все периоды)", "note": f"Периодов: {n}", "known": True}
+        if cur.get("recipient_status") == 20:
+            return {"status": "done", "label": f"Период {k} из {n} выполнен{tail}", "note": "Периодическая задача: считается по периоду вашего срока", "known": True}
         done = sum(1 for p in periods if p.get("recipient_status") == 20)
-        if done == len(periods):
-            return {"status": "done", "label": "Выполнена (все периоды)", "note": f"Периодов: {len(periods)}", "known": True}
-        return {"status": None, "label": f"Периодическая: выполнено {done} из {len(periods)}",
-                "note": "Общий статус на сайте остаётся «в работе» до последнего периода", "known": True}
+        return {"status": None, "label": f"Период {k} из {n} не выполнен{tail}", "note": f"Периодическая задача, выполнено периодов: {done} из {n}. Общий статус на сайте остаётся «в работе»", "known": True}
     if snap["is_done"] and st in (20, 21):
         late = st == 21
         return {"status": "done", "label": "Выполнена с опозданием" if late else "Выполнена в срок", "note": "", "known": True}
@@ -112,9 +138,9 @@ def answers_out(snap) -> list[dict]:
     return out
 
 
-def site_info(snap, our_status: str) -> dict:
+def site_info(snap, our_status: str, due: str | None = None) -> dict:
     """The block 'С ijro.uz' of a task card (administrators only)."""
-    cl = classify(snap)
+    cl = classify(snap, due)
     diff = bool(cl["status"] and cl["status"] != our_status and our_status != "info")
     return {"found": bool(snap["found"]), "section": snap["section"], "section_name": (SECTION_BY_ID.get(snap["section"]) or {}).get("name", ""),
             "label": cl["label"], "note": cl["note"], "known": cl["known"], "proposed": cl["status"],
@@ -177,11 +203,11 @@ def ingest(c, key_row, body: dict) -> dict:
 # ---------------------------------------------------------------- review and apply
 
 def review(c) -> dict:
-    rows = c.execute("""SELECT s.*, t.code, t.status AS our_status, t.text, t.kind, t.doc_no, t.point, t.assignee_id, a.name AS assignee
+    rows = c.execute("""SELECT s.*, t.code, t.due, t.status AS our_status, t.text, t.kind, t.doc_no, t.point, t.assignee_id, a.name AS assignee
                         FROM ijro_snapshots s JOIN tasks t ON t.id=s.task_id LEFT JOIN users a ON a.id=t.assignee_id ORDER BY t.seq, t.id""").fetchall()
     items, counts = [], {"checked": len(rows), "found": 0, "not_found": 0, "unknown": 0, "to_done": 0, "to_progress": 0, "to_todo": 0, "site_open_we_done": 0, "same": 0}
     for r in rows:
-        cl = classify(r)
+        cl = classify(r, r["due"])
         counts["found"] += bool(r["found"])
         if not r["found"]:
             counts["not_found"] += 1
@@ -210,11 +236,11 @@ def apply(c, task_ids: list[int], user_id: int) -> dict:
     """Applies the proposals for the given tasks. A proposal that is no longer valid (the task changed meanwhile) is skipped."""
     applied, skipped = 0, 0
     for tid in task_ids:
-        r = c.execute("SELECT s.*, t.status AS our_status FROM ijro_snapshots s JOIN tasks t ON t.id=s.task_id WHERE s.task_id=?", (tid,)).fetchone()
+        r = c.execute("SELECT s.*, t.status AS our_status, t.due FROM ijro_snapshots s JOIN tasks t ON t.id=s.task_id WHERE s.task_id=?", (tid,)).fetchone()
         if not r:
             skipped += 1
             continue
-        cl = classify(r)
+        cl = classify(r, r["due"])
         if not cl["status"] or r["our_status"] == "info" or cl["status"] == r["our_status"]:
             skipped += 1
             continue
@@ -235,6 +261,6 @@ def brief(c, items: list[dict]) -> None:
         if not r:
             t["site"] = None
             continue
-        info = site_info(r, t["status"])
+        info = site_info(r, t["status"], t["due"])
         t["site"] = {"found": info["found"], "label": info["label"], "diff": info["diff"], "link": info["link"], "exact": info["exact_link"],
                      "site_open_we_done": info["site_open_we_done"], "checked_at": info["checked_at"]}

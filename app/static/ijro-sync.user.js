@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.0.2
+// @version      1.0.3
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,6 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
+  const VERSION = "1.0.3";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -109,7 +110,10 @@
     document_type_id: null, from_due_date: null, to_due_date: null, document_from_date: null, document_to_date: null, undistributed_tasks: false, seen: null,
     main_recipient: false, is_rayosat: false, not_rayosat: false, tasks: [], due_date_sort: null, active_state_high_org_id: null, repeatable: false, recipient_user_id: null };
   const rid = () => Array.from({ length: 24 }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
-  const toMs = v => { if (v == null) return null; if (typeof v === "string" && /^\d{10,13}$/.test(v)) v = Number(v); if (typeof v === "number") return v < 1e11 ? Math.round(v * 1000) : Math.round(v); if (v instanceof Date) return v.getTime(); const t = Date.parse(v); return isNaN(t) ? null : t; };
+  const toMs = v => {
+    if (v == null) return null;
+    if (typeof v === "string" && /^\d{10,20}(\.\d+)?$/.test(v)) { let n = Number(v); if (n >= 1e17) n /= 1e6; else if (n >= 1e14) n /= 1e3; v = n; }   // ms, seconds, microseconds or nanoseconds
+    if (typeof v === "number") return v < 1e11 ? Math.round(v * 1000) : Math.round(v); if (v instanceof Date) return v.getTime(); const t = Date.parse(v); return isNaN(t) ? null : t; };
   const pick = (o, keys) => { for (const k of keys) if (o && o[k] !== undefined && o[k] !== null) return o[k]; return undefined; };
   const listOf = r => {
     if (Array.isArray(r)) return r;
@@ -174,7 +178,7 @@
     async function card(recipientId) {   // the card of a task: whether it is secret (the list does not say)
       const r = await call("/task/get-one", { recipient_id: recipientId });
       const flag = o => { const w = (x, d) => { if (!x || typeof x !== "object" || d > 3) return false; if (x.is_secret === true) return true; return Object.keys(x).some(k => w(x[k], d + 1)); }; return w(o, 0); };
-      return { is_secret: flag(r), raw: r };
+      return { is_secret: flag(r), code: typeof (r && r.task_code) === "string" ? r.task_code : "", raw: r };
     }
     const answers = async recipientId => listOf(await call("/task-requests/list", { recipient_id: recipientId, period_id: null }));
     const bodyFor = (code, section, over) => { const s = getSession(); return Object.assign({}, DEFAULT_BODY, s.template || {}, { limit: 20, offset: 0, statuses: [], type_ids: section.type_ids, task_code: code, year: null, strict_search: false, recipient_db_id: s.recipientDb, document_number: null, document_type_id: null, from_due_date: null, to_due_date: null, document_from_date: null, document_to_date: null, tasks: [] }, over || {}); };
@@ -187,9 +191,9 @@
     return {
       code, found: true, section: sectionId, recipient_id: String(pick(it, ["id", "recipient_id"]) ?? ""), status: num(it.status), is_done: !!it.is_done,
       overdue: (() => { const v = pick(it, ["overdue", "is_overdue", "expired"]); return v === undefined ? null : !!v; })(),
-      repeatable: !!(it.repeatable), due_ms: toMs(pick(it, ["task_due_date_ms", "due_date"])), done_ms: toMs(it.done_at), periods, is_secret: !!it.is_secret, answers_loaded: !!loaded,
+      repeatable: !!(it.repeatable) || periods.length > 0, due_ms: toMs(pick(it, ["task_due_date_ms", "due_date"])), done_ms: toMs(it.done_at), periods, is_secret: !!it.is_secret, answers_loaded: !!loaded,
       answers: (answerList || []).slice(-30).map(a => ({ sender_type: num(a.sender_type), state: num(a.state), active: !!a.active,
-        at_ms: toMs(pick(a, ["created_at", "date", "sent_at", "updated_at", "created"])), text: String(pick(a, ["comment", "text", "description", "content", "message", "note"]) ?? "").slice(0, 600) })),
+        at_ms: toMs(pick(a, ["date_row_ms", "created_at_ms", "created_at", "date", "sent_at", "updated_at"])), text: String(pick(a, ["contents", "comment", "text", "description", "content", "message", "note"]) ?? "").slice(0, 600) })),
     };
   }
 
@@ -219,8 +223,10 @@
           if (it.status !== 0 || it.is_done || it.repeatable) {
             const id = it.id ?? it.recipient_id;
             // when the card cannot be read the task is treated as secret: no answer text is copied
-            try { secret = secret || (await client.card(id)).is_secret; } catch (e) { if (e instanceof SessionError || e instanceof RateError) throw e; secret = true; }
+            let wrong = false;
+            try { const cd = await client.card(id); secret = secret || cd.is_secret; wrong = !!cd.code && cd.code.toUpperCase() !== t.code.toUpperCase(); } catch (e) { if (e instanceof SessionError || e instanceof RateError) throw e; secret = true; }
             await sleep(delay);
+            if (wrong) { found--; buffer.push({ code: t.code, found: false }); done++; if (onProgress) onProgress({ done, total: job.items.length, found }); continue; }   // the card says it is another task: never trust it
             ans = await client.answers(id).catch(e => { if (e instanceof SessionError || e instanceof RateError) throw e; return []; }); loaded = true; await sleep(delay);
           }
           buffer.push(Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded), { is_secret: secret }));
@@ -247,7 +253,7 @@
   /* what the answers look like, without any value that could be personal: names of fields, their types, small numbers */
   async function diagnose({ server, client, session }) {
     const job = await server("GET", "/api/sync/job");
-    const out = { script: "1.0.1", session: session ? { has_session_id: !!session.id, year: session.year, has_recipient_db_id: !!session.recipientDb, page_template_seen: !!session.template, template_keys: session.template ? Object.keys(session.template) : [] } : null, job_items: job.items.length, probes: [] };
+    const out = { script: VERSION, session: session ? { has_session_id: !!session.id, year: session.year, has_recipient_db_id: !!session.recipientDb, page_template_seen: !!session.template, template_keys: session.template ? Object.keys(session.template) : [] } : null, job_items: job.items.length, probes: [] };
     for (const t of job.items.slice(0, 15)) {
       for (const s of job.sections) {
         const info = {};

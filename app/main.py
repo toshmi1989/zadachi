@@ -324,7 +324,7 @@ def api_task(request: Request, task_id: int, by: str = "close"):
         out = tasks.get_task(c, task_id, me(request), scope == "own", "due" if by == "due" else "close")
         if me(request)["role"] == "admin":   # what the site says is for administrators only
             snap = c.execute("SELECT * FROM ijro_snapshots WHERE task_id=?", (task_id,)).fetchone()
-            out["site"] = ijro.site_info(snap, out["status"]) if snap else None
+            out["site"] = ijro.site_info(snap, out["status"], out["due"]) if snap else None
         return out
     finally:
         c.close()

@@ -122,7 +122,14 @@ def test_classification_table():
     for st in (1, 3, 4, -1):
         r = ijro.classify(snap(site_status=st))
         assert r["status"] is None and not r["known"]
-    per = '[{"recipient_status":20},{"recipient_status":0}]'
-    assert ijro.classify(snap(repeatable=1, periods=per))["status"] is None
-    assert ijro.classify(snap(repeatable=1, periods='[{"recipient_status":20},{"recipient_status":20}]'))["status"] == "done"
+    import json
+    from datetime import datetime, timezone
+    DUES = [(2026, 3, 31), (2026, 6, 30), (2026, 9, 30), (2026, 12, 31)]
+    ps = lambda *rs: json.dumps([{"order": i + 1, "recipient_status": r, "due_ms": int(datetime(*DUES[i], tzinfo=timezone.utc).timestamp() * 1000)} for i, r in enumerate(rs)])
+    # periods due 2026-03-31, 2026-06-30, 2026-09-30, 2026-12-31 ...
+    four = ps(20, 20, 20, 0)
+    assert ijro.classify(snap(repeatable=1, periods=four), "2026-12-31")["status"] is None             # the period of our deadline is open
+    assert ijro.classify(snap(repeatable=1, periods=four), "2026-09-30")["status"] == "done"            # ours is an earlier, finished period
+    assert "Период 4 из 4" in ijro.classify(snap(repeatable=1, periods=four), "2026-12-31")["label"]
+    assert ijro.classify(snap(repeatable=1, periods=ps(20, 20, 20, 20)))["status"] == "done"
     assert ijro.classify(snap(found=0))["status"] is None
