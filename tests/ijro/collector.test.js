@@ -35,7 +35,7 @@ const DATA = {
   president_admin: [item("r-ojn", "OJN6944", 20, { is_done: true, done_at: DATE(due - 2 * DAY) })],
 };
 // answers as the real site gives them: text in "contents", the date as a string of milliseconds, created_at is null
-const A = (st, text, ms, extra) => Object.assign({ sender_type: st, state: 1, active: 0, contents: text || "", created_at: null, date_row_ms: String(ms), created_at_ms: String(ms) + "0000000", period: { id: "p2", status: 10, due_date: "2026-12-31" } }, extra || {});
+const A = (st, text, ms, extra) => Object.assign({ sender_type: st, state: 1, active: 0, contents: text || "", created_at: null, date_row_ms: String(ms), created_at_ms: String(ms) + ".25", period: { id: "p2", status: 10, due_date: "2026-12-31" } }, extra || {});
 const ANSWERS = { "r-xpg": [A(10, "Ответ исполнителя, текст", due - 10 * DAY, { active: 1 })], "r-sec": [A(10, "СЕКРЕТНЫЙ ТЕКСТ", due - 12 * DAY), A(45, "", due - 11 * DAY)],
   "r-ojn": [A(10, "a", due - 9 * DAY), A(25, "", due - 8 * DAY), A(35, "", due - 7 * DAY), A(45, "", due - 6 * DAY)], "r-rep2": [A(10, "Ответ за период", due - 20 * DAY)] };
 const CODES = { "r-xpg": "XPG5469", "r-sec": "SEC0001", "r-rep": "REP0001", "r-rep2": "REP0002", "r-unk": "UNK0001", "r-vmk": "VMK3541", "r-ojn": "OJN6944" };
