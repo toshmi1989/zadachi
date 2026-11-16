@@ -28,6 +28,111 @@ ANSWER_TYPES = {10: "Ответ исполнителя", 25: "Согласова
                 45: "Принято (итог)", 48: "Отрицательное решение", 49: "Запрос дополнительной информации"}
 
 
+# The way of an answer: entered -> Ministry of Justice -> Cabinet of Ministers -> Chamber of Accounts -> removed from control.
+# The Chamber either removes the task from control (done) or only accepts the answer for information (not done, new term).
+STAGE_STEPS = [("sub", "Киритилди", "Ответ введён"), ("moj", "Адлия вазирлигида", "Согласование в Минюсте"), ("cab", "Вазирлар Маҳкамасида", "В Кабинете Министров"),
+               ("chamber", "Ҳисоб палатасида", "В Счётной палате"), ("end", "Назоратдан ечилди", "Снята с контроля: выполнена")]
+T_ANSWER, T_AGREED, T_REWORK, T_REMOVAL, T_FINAL, T_REJECT, T_INFO = 10, 25, 29, 35, 45, 48, 49
+
+
+def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
+    """Where the task is on its way. Read from the answers on the site (the latest one decides) and from the site's own 'done'.
+    A final answer on a task that is NOT done means the Chamber accepted it for information: the task is open, the term is new.
+    {code, n (index in STAGE_STEPS, -1 = no answer yet), label, hint, attention, new_due}. Periodic tasks have no single way: code 'periodic'."""
+    base = {"steps": [{"code": c, "label": l, "hint": h} for c, l, h in STAGE_STEPS], "new_due": None, "attention": False}
+    if not snap["found"]:
+        return base | {"code": "not_found", "n": None, "label": "Не найдена на сайте", "hint": ""}
+    if snap["repeatable"] and json.loads(snap["periods"] or "[]"):
+        return base | {"code": "periodic", "n": None, "label": "Периодическая задача", "hint": "Этапы считаются по каждому периоду отдельно"}
+    done = classify(snap, due, dates=False)["status"] == "done"
+    answers = sorted((a for a in json.loads(snap["answers"] or "[]") if a.get("sender_type") is not None), key=lambda a: a.get("at_ms") or 0)
+    types = [a["sender_type"] for a in answers]
+    last = types[-1] if types else None
+    if done:
+        return base | {"code": "removed", "n": 4, "label": "Назоратдан ечилди", "hint": "Снята с контроля: выполнена"}
+    if last == T_FINAL:
+        nd = _day(snap["due_ms"])
+        return base | {"code": "info", "n": 3, "label": "Маълумот учун қабул қилинди", "hint": "Счётная палата приняла ответ к сведению: задача НЕ выполнена, срок изменён",
+                       "attention": True, "new_due": nd.isoformat() if nd and dates else None}
+    if last in (T_REWORK, T_REJECT, T_INFO):
+        name = {T_REWORK: "Возврат на доработку", T_REJECT: "Отрицательное решение", T_INFO: "Запрос дополнительной информации"}[last]
+        return base | {"code": "returned", "n": 0, "label": name, "hint": "Нужны действия исполнителя", "attention": True}
+    if last == T_REMOVAL:
+        return base | {"code": "chamber", "n": 3, "label": "Ҳисоб палатасида", "hint": "Кабинет подтвердил снятие, решает Счётная палата"}
+    if last == T_AGREED:
+        return base | {"code": "cab", "n": 2, "label": "Вазирлар Маҳкамасида", "hint": "Минюст согласовал, дело в Кабинете Министров"}
+    if last == T_ANSWER:
+        return base | {"code": "moj", "n": 1, "label": "Адлия вазирлигида", "hint": "Ответ введён, идёт согласование в Минюсте"}
+    if T_REMOVAL in types:   # an answer of a type we do not know after the Cabinet: the Chamber has said something, but not "removed"
+        return base | {"code": "chamber_other", "n": 3, "label": f"Ответ Ҳисоб палатаси (тип {last})", "hint": "Тип ответа не распознан: уточните на сайте", "attention": True}
+    if snap["site_status"] == 2:
+        return base | {"code": "answered", "n": 0, "label": "Киритилди", "hint": "Ответ введён; этап уточнится при следующей проверке (нет данных об ответах)"}
+    return base | {"code": "none", "n": -1, "label": "Ответ не введён", "hint": "Исполнитель ещё не ответил"}
+
+
+def auto_apply(c, task_id: int) -> list[str]:
+    """After a check: what is clear is applied without a review. Never lowers a status by itself, except one case the administrator named:
+    the Chamber accepted the answer for information, so a task we had marked done is open again, with the new term.
+    Returns what was done (for the log)."""
+    r = c.execute("SELECT s.*, t.status AS our_status, t.due FROM ijro_snapshots s JOIN tasks t ON t.id=s.task_id WHERE s.task_id=?", (task_id,)).fetchone()
+    if not r or r["our_status"] == "info" or not r["found"]:
+        return []
+    cl, st, done = classify(r, r["due"]), stage_of(r, r["due"]), []
+    changes: dict = {}
+    if cl["status"] == "done" and r["our_status"] != "done":
+        changes["status"] = "done"
+    elif cl["status"] == "progress" and r["our_status"] == "todo":
+        changes["status"] = "progress"
+    if st["code"] == "info":
+        if r["our_status"] == "done":
+            changes["status"] = "progress"
+        if st["new_due"] and st["new_due"] != r["due"]:
+            changes["due"] = st["new_due"]
+    if changes:
+        tasks.update_task(c, task_id, changes, None)
+        done = [f"{k}→{v}" for k, v in changes.items()]
+    return done
+
+
+FUNNEL = [("none", "Ответ не введён", "Исполнитель ещё не ответил"), ("moj", "Адлия вазирлигида", "Ответ введён, согласование в Минюсте"),
+          ("cab", "Вазирлар Маҳкамасида", "В Кабинете Министров"), ("chamber", "Ҳисоб палатасида", "Ждёт решения Счётной палаты"),
+          ("info", "Маълумот учун қабул қилинди", "Принято к сведению: НЕ выполнена, срок изменён"), ("returned", "Возврат / запрос", "Нужны действия исполнителя")]
+_FUNNEL_OF = {"none": "none", "answered": "moj", "moj": "moj", "cab": "cab", "chamber": "chamber", "chamber_other": "chamber", "info": "info", "returned": "returned"}
+
+
+def _open_stage_rows(c):
+    return c.execute("""SELECT s.*, t.due, t.id AS tid FROM tasks t LEFT JOIN ijro_snapshots s ON s.task_id=t.id WHERE t.status IN ('todo','progress')""").fetchall()
+
+
+def funnel(c) -> dict:
+    """How many open tasks are at each stage (for the dashboard). Tasks never checked on the site are counted apart."""
+    counts = {k: 0 for k, _, _ in FUNNEL}
+    unchecked = other = 0
+    for r in _open_stage_rows(c):
+        if r["task_id"] is None:
+            unchecked += 1
+            continue
+        k = _FUNNEL_OF.get(stage_of(r, r["due"], dates=False)["code"])
+        if k:
+            counts[k] += 1
+        else:
+            other += 1
+    return {"steps": [{"code": k, "label": l, "hint": h, "count": counts[k]} for k, l, h in FUNNEL], "unchecked": unchecked, "other": other,
+            "attention": counts["info"] + counts["returned"]}
+
+
+def stage_ids(c, key: str) -> list[int]:
+    """Ids of the open tasks at a stage of the funnel ('unchecked' = never read from the site)."""
+    out = []
+    for r in _open_stage_rows(c):
+        if r["task_id"] is None:
+            if key == "unchecked":
+                out.append(r["tid"])
+        elif _FUNNEL_OF.get(stage_of(r, r["due"], dates=False)["code"]) == key:
+            out.append(r["tid"])
+    return out
+
+
 # ---------------------------------------------------------------- keys of this platform
 
 def new_key(c, name: str, user_id: int) -> str:
@@ -157,7 +262,8 @@ def site_info(snap, our_status: str, due: str | None = None, admin: bool = True)
             "proposed_label": STATUSES.get(cl["status"], "") if cl["status"] else "", "diff": diff,
             "site_open_we_done": bool(snap["found"] and cl["known"] and cl["status"] in ("todo", "progress") and our_status == "done"),
             "checked_at": snap["checked_at"], "link": card_link(snap), "exact_link": bool(setting("ijro_card_tpl").strip() and snap["recipient_id"]),
-            "secret": bool(snap["is_secret"]), "answers": answers_out(snap), "late": snap["site_status"] == 21}
+            "secret": bool(snap["is_secret"]), "answers": answers_out(snap), "late": snap["site_status"] == 21,
+            "stage": {k: v for k, v in stage_of(snap, due, dates=admin).items() if k != "new_due" or admin}}
 
 
 # ---------------------------------------------------------------- receiving
@@ -174,6 +280,7 @@ def ingest(c, key_row, body: dict) -> dict:
     run_id = _int(body.get("run_id"))
     codes = {r["code"]: r["id"] for r in c.execute("SELECT id, code FROM tasks")}
     stored = found = 0
+    touched: list[int] = []
     for it in items:
         if not isinstance(it, dict) or not isinstance(it.get("code"), str) or it["code"] not in codes:
             continue   # a code we do not have is ignored: the collector can never create tasks
@@ -206,10 +313,18 @@ def ingest(c, key_row, body: dict) -> dict:
                    _int(it.get("due_ms")), _int(it.get("done_ms")), json.dumps(periods), int(secret), json.dumps(answers, ensure_ascii=False), now(), run_id,
                    int(bool(it.get("answers_loaded")))))
         stored += 1
+        touched.append(codes[it["code"]])
         found += is_found
+    auto = 0
+    if setting("ijro_auto_apply") == "1":
+        for tid in touched:
+            if auto_apply(c, tid):
+                auto += 1
+        if auto:
+            audit(c, "ijro.auto_apply", "task", None, {"tasks": auto, "run": run_id})
     if run_id:
         c.execute("UPDATE sync_runs SET received=received+?, found=found+?, finished_at=? WHERE id=? AND key_id=?", (stored, found, now(), run_id, key_row["id"]))
-    return {"stored": stored, "found": found}
+    return {"stored": stored, "found": found, "auto_applied": auto}
 
 
 # ---------------------------------------------------------------- review and apply
@@ -275,6 +390,7 @@ def brief(c, items: list[dict], admin: bool = True) -> None:
             continue
         info = site_info(r, t["status"], t["due"], admin)
         t["site"] = {"found": info["found"], "label": info["label"], "diff": info["diff"], "link": info["link"], "exact": info["exact_link"],
+                     "stage": {"code": info["stage"]["code"], "n": info["stage"]["n"], "label": info["stage"]["label"], "attention": info["stage"]["attention"]},
                      "site_open_we_done": info["site_open_we_done"], "checked_at": info["checked_at"]}
 
 

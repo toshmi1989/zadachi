@@ -1,7 +1,15 @@
 "use strict";
 /* Task list (filters, sorting, paging, bulk edit) and the task drawer. */
 
-const FIELD = { assignee_id: "Ответственный", status: "Статус", close_date: "Дата закрытия" };
+const FIELD = { assignee_id: "Ответственный", status: "Статус", close_date: "Дата закрытия", due: "Срок по ijro" };
+const STAGE_NAME = { none: "Ответ не введён", moj: "Адлия вазирлигида", cab: "Вазирлар Маҳкамасида", chamber: "Ҳисоб палатасида", info: "Маълумот учун қабул қилинди", returned: "Возврат / запрос", unchecked: "Не проверялись на сайте" };
+/* where the task is on its way (the answer goes Justice -> Cabinet -> Chamber of Accounts) */
+function stageChip(t) {
+  const g = t.site && t.site.stage;
+  if (!g || !["todo", "progress"].includes(t.status) || ["periodic", "not_found", "removed"].includes(g.code)) return "";
+  const dots = [1, 2, 3].map(i => `<i class="${g.n >= i ? "on" : ""}"></i>`).join("");
+  return `<div style="margin-top:4px"><span class="stg ${g.attention ? "att" : ""} stg-${g.code}" data-tip="${esc(g.attention ? "Требует внимания" : "Этап согласования")}">${g.code === "none" ? "" : `<span class="stgd">${dots}</span>`}${esc(g.label)}</span></div>`;
+}
 const STK = { todo: "k-later", progress: "k-month", done: "k-done", info: "k-info" };
 
 async function loadMeta() { if (!Z.meta) Z.meta = await api("/api/meta"); return Z.meta; }
@@ -22,7 +30,7 @@ routes.tasks = async function (page, params) {
   if (Z.me.tasks === "none") throw new Error("Список задач для вашей роли отключён администратором");
   const meta = await loadMeta();
   const S = { unit: params.unit === undefined ? "" : params.unit, assignee: params.assignee || "", status: params.status || "", bucket: params.bucket || "", kind: params.kind || "",
-              doc: params.doc || "", q: params.q || "", date_from: params.date_from || "", date_to: params.date_to || "",
+              doc: params.doc || "", stage: params.stage || "", q: params.q || "", date_from: params.date_from || "", date_to: params.date_to || "",
               sort: params.sort || "eff", dir: params.dir || "asc", page: +params.page || 1 };
   const own = Z.me.tasks === "own" && !isAdmin();
   const sel = new Set();
@@ -91,6 +99,7 @@ routes.tasks = async function (page, params) {
     if (S.date_from || S.date_to) out.push(["date", "Срок: " + (S.date_from ? fdate(S.date_from, 1) : "…") + " – " + (S.date_to ? fdate(S.date_to, 1) : "…")]);
     if (S.kind) out.push(["kind", "Тип: " + S.kind]);
     if (S.doc) out.push(["doc", "Документ: " + S.doc]);
+    if (S.stage) out.push(["stage", "Этап: " + (STAGE_NAME[S.stage] || S.stage)]);
     $("#chips", page).innerHTML = out.map(c => `<span class="fchip" data-k="${c[0]}">${esc(c[1])}<button type="button" aria-label="Убрать фильтр">${icon("x")}</button></span>`).join("");
   }
   $("#chips", page).onclick = e => {
@@ -115,14 +124,14 @@ routes.tasks = async function (page, params) {
       <td>${t.point ? `<span class="pt">${esc(t.point)}</span>` : ""}<div class="tx">${esc(t.text)}</div></td>
       <td>${who}</td><td>${deadlineCell(t)}</td>
       ${admin ? `<td>${t.close_date ? fdate(t.close_date) : '<span style="color:var(--text-3)">—</span>'}</td>` : ""}
-      <td>${statusChip(t)}${t.tag ? `<div class="hint" style="margin-top:3px">${esc(t.tag)}</div>` : ""}${t.site && t.site.diff ? `<div style="margin-top:4px"><span class="chip done" data-tip="По данным ijro (проверено ${esc(t.site.checked_at.slice(0, 16))}).${admin ? " Применить можно в разделе «Синхронизация» или в карточке." : ""}">на сайте: ${esc(t.site.label)}</span></div>` : ""}${t.site && t.site.site_open_we_done ? '<div style="margin-top:4px"><span class="chip overdue" data-tip="У нас отмечена выполненной, а на сайте ещё нет">на сайте не закрыта</span></div>' : ""}</td>
+      <td>${statusChip(t)}${stageChip(t)}${t.tag ? `<div class="hint" style="margin-top:3px">${esc(t.tag)}</div>` : ""}${t.site && t.site.diff ? `<div style="margin-top:4px"><span class="chip done" data-tip="По данным ijro (проверено ${esc(t.site.checked_at.slice(0, 16))}).${admin ? " Применить можно в разделе «Синхронизация» или в карточке." : ""}">на сайте: ${esc(t.site.label)}</span></div>` : ""}${t.site && t.site.site_open_we_done ? '<div style="margin-top:4px"><span class="chip overdue" data-tip="У нас отмечена выполненной, а на сайте ещё нет">на сайте не закрыта</span></div>' : ""}</td>
       <td class="c-q">${t.can_edit && (t.status === "todo" || t.status === "progress") ? `<button class="quick" data-quick aria-label="Отметить выполненной" data-tip="Отметить выполненной">${icon("check")}</button>` : ""}</td></tr>`;
   }
   const flashId = { v: 0 };
   async function load() {
     const my = ++reqId;
     const rowsEl = $("#rows", page); rowsEl.style.opacity = ".45"; rowsEl.style.transition = "opacity .2s";
-    const q = { unit: own ? "" : S.unit, assignee: own ? "" : S.assignee, status: S.status, bucket: S.bucket, kind: S.kind, doc: S.doc, q: S.q, date_from: S.date_from, date_to: S.date_to, sort: S.sort, dir: S.dir, by: Z.by };
+    const q = { unit: own ? "" : S.unit, assignee: own ? "" : S.assignee, status: S.status, bucket: S.bucket, kind: S.kind, doc: S.doc, stage: S.stage, q: S.q, date_from: S.date_from, date_to: S.date_to, sort: S.sort, dir: S.dir, by: Z.by };
     history.replaceState(null, "", "#/tasks" + (qs(Object.assign({}, q, { page: S.page > 1 ? S.page : "" })) ? "?" + qs(Object.assign({}, q, { page: S.page > 1 ? S.page : "" })) : ""));
     exp.href = "/api/tasks.xlsx?" + qs(q);
     try { data = await api("/api/tasks?" + qs(Object.assign({}, q, { page: S.page, size: 50 }))); } catch (e) { toast(e.message, "error"); return; }
@@ -221,6 +230,17 @@ async function openTask(id, onChange) {
 
 
 /* the block "С ijro.uz" in a task card (administrators): what the site says, the answers, the link */
+/* the steps: entered -> Justice -> Cabinet -> Chamber of Accounts -> removed from control */
+function stageBlock(t, admin) {
+  const g = t.site && t.site.stage;
+  if (!g || ["periodic", "not_found"].includes(g.code)) return "";
+  const steps = g.steps.map((x, i) => `<div class="step ${g.n > i || g.code === "removed" ? "past" : ""} ${g.n === i && g.code !== "removed" ? "now" : ""} ${g.code === "info" && i === 3 ? "warnstep" : ""}"><span class="sd">${g.n > i || g.code === "removed" ? "✓" : i + 1}</span><b>${esc(x.label)}</b><small>${esc(x.hint)}</small></div>`).join("");
+  const nd = g.new_due ? g.new_due.split("-").reverse().join(".") : "";
+  return `<div class="sec-t" style="margin-top:12px">Этап согласования</div><div class="stepper">${steps}</div>
+    <p class="hint" style="margin:6px 0 0"><b>${esc(g.label)}</b> — ${esc(g.hint)}</p>
+    ${g.code === "info" ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>Счётная палата приняла ответ <b>к сведению</b>: задача <b>не выполнена</b>${admin && nd ? `, срок на сайте изменён на <b>${esc(nd)}</b> (мы обновили его у себя)` : ", срок изменён"}.</span></div>` : ""}
+    ${g.code === "returned" || g.code === "chamber_other" ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>${esc(g.hint)}.</span></div>` : ""}`;
+}
 function siteBlock(t, admin) {
   const s = t.site;
   if (!s) return admin ? `<div class="sec-t">С ijro.uz</div><p class="hint">Эту задачу ещё не проверяли. Запустите синхронизацию (<a href="#/sync">раздел «Синхронизация»</a>).</p>` : "";
@@ -228,6 +248,7 @@ function siteBlock(t, admin) {
   return `<div class="sec-t">С ijro.uz</div>
     <div class="site-box"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${head}<span class="hint">проверено ${esc(s.checked_at.slice(0, 16))}</span>
       <a class="btn sm" style="margin-left:auto" href="${esc(s.link)}" target="_blank" rel="noopener noreferrer" ${s.exact_link ? "" : `data-copycode="${esc(t.code)}"`}>${icon("ext")}${s.exact_link ? "Открыть задачу на ijro" : "Открыть раздел и скопировать код"}</a></div>
+      ${stageBlock(t, admin)}
       ${s.note ? `<p class="hint" style="margin:8px 0 0">${esc(s.note)}</p>` : ""}
       ${s.diff ? `<div class="warn" style="margin-top:10px">${icon("info")}<span>На сайте: <b>${esc(s.proposed_label)}</b>, ${admin ? "у нас" : "у вас"}: <b>${esc(ST[t.status])}</b>.</span>${admin ? '<button class="btn sm pri" id="site-apply" style="margin-left:auto">Применить</button>' : ""}</div>` : ""}
       ${s.site_open_we_done ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>${admin ? "У нас" : "У вас"} задача отмечена выполненной, а на сайте ещё нет: возможно, ответ не отправлен или не принят.</span></div>` : ""}

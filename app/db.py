@@ -200,6 +200,7 @@ DEFAULT_SETTINGS = {
     "login_list": "1",            # show the list of employees on the sign-in page
     "rem_max": "15",              # tasks listed in one message
     "public_url": "",             # site address for links in messages
+    "ijro_auto_apply": "1",       # apply clear changes from the site automatically after each synchronisation
     "ijro_card_tpl": "",          # address of a task card on edo.ijro.uz: {section_path} and {id} are substituted
 }
 MIGRATIONS = [

@@ -119,6 +119,9 @@ def _where(f: dict, by: str, user: dict | None, own_only: bool) -> tuple[str, di
     if f.get("date_to"):
         clauses.append(f"{e} <= :dto")
         p["dto"] = f["date_to"]
+    if "_stage_ids" in f:
+        ids = [int(i) for i in f["_stage_ids"]]
+        clauses.append(f"t.id IN ({','.join(map(str, ids))})" if ids else "1=0")
     q = (f.get("q") or "").strip()
     if q:
         clauses.append("(t.code LIKE :q OR t.text LIKE :q OR t.doc_no LIKE :q OR t.point LIKE :q)")
@@ -146,6 +149,9 @@ SELECT = """SELECT t.*, a.name AS a_name, a.unit_id AS a_unit, un.name AS unit_n
 
 def list_tasks(c, f: dict, user: dict, own_only: bool, *, limit: int | None = 50, offset: int = 0) -> dict:
     by = norm_by(f.get("by"), user)
+    if f.get("stage"):
+        from . import ijro
+        f = dict(f, _stage_ids=ijro.stage_ids(c, str(f["stage"])))
     if str(f.get("unit") or "").isdigit() and f["unit"] != "0":
         f = dict(f, _unit_ids=unit_tree_ids(c, int(f["unit"])))
     where, p = _where(f, by, user, own_only)
@@ -170,8 +176,8 @@ def get_task(c, task_id: int, user: dict, own_only: bool, by: str = "close") -> 
         raise TaskError("Задача не найдена", 404)
     out = row_out(r, by)
     out["events"] = [dict(e) for e in c.execute(
-        """SELECT e.field, e.old, e.new, e.created_at, u.name AS who FROM task_events e
-           LEFT JOIN users u ON u.id = e.user_id WHERE e.task_id=? ORDER BY e.id DESC LIMIT 100""", (task_id,))]
+        """SELECT e.field, e.old, e.new, e.created_at, COALESCE(u.name, 'Автоматически (ijro)') AS who FROM task_events e
+           LEFT JOIN users u ON u.id = e.user_id WHERE e.task_id=? AND (? OR e.field != 'due') ORDER BY e.id DESC LIMIT 100""", (task_id, user["role"] == "admin"))]   # the official term is not for employees: neither its changes
     return out
 
 
@@ -219,6 +225,8 @@ def update_task(c, task_id: int, changes: dict, user_id: int) -> bool:
         new["status"] = changes["status"]
     if "close_date" in changes:
         new["close_date"] = _date_or_none(changes["close_date"])
+    if "due" in changes:
+        new["due"] = _date_or_none(changes["due"])
     changed = False
     for field, value in new.items():
         if r[field] == value:

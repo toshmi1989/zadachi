@@ -72,7 +72,7 @@ routes.sync = async function (page) {
       return;
     }
     const ago = rev.runs[0] ? rev.runs[0].started_at.slice(0, 16) : "";
-    $("#s-rev", page).innerHTML = `<div class="card-head"><div><h2>Что изменится</h2><p class="sub">Последняя синхронизация: ${esc(ago)}. Проверено ${k.checked} из ${rev.open_total} открытых задач, найдено на сайте ${k.found}.</p></div><div id="f-seg"></div></div>
+    $("#s-rev", page).innerHTML = `<label class="switchrow"><input type="checkbox" id="auto-apply" ${rev.auto_apply ? "checked" : ""}><span><b>Применять автоматически</b> — после каждой проверки ясные изменения вносятся сами: ответ введён → «В работе», снято с контроля → «Выполнено», «маълумот учун қабул қилинди» → задача снова открыта с новым сроком. Остальное остаётся на ручную проверку.</span></label><div class="card-head"><div><h2>Что изменится</h2><p class="sub">Последняя синхронизация: ${esc(ago)}. Проверено ${k.checked} из ${rev.open_total} открытых задач, найдено на сайте ${k.found}.</p></div><div id="f-seg"></div></div>
       <div class="stats" style="margin:0 0 14px">
         <div class="stat"><b class="num">${k.to_done}</b><span>выполнены на сайте</span></div><div class="stat"><b class="num">${k.to_progress}</b><span>ответ дан, идёт согласование</span></div>
         <div class="stat"><b class="num">${k.site_open_we_done}</b><span>у нас выполнено, на сайте нет</span></div><div class="stat"><b class="num">${k.not_found}</b><span>не найдены на сайте</span></div><div class="stat"><b class="num">${k.unknown}</b><span>статус не определён</span></div></div>
@@ -85,6 +85,7 @@ routes.sync = async function (page) {
         <div class="inl" style="margin-top:14px"><button class="btn pri" id="r-apply">Применить выбранные (<span id="r-n">0</span>)</button><button class="btn" id="r-done">Применить все «Выполнено» (${k.to_done})</button></div>`
         : `<div class="empty" style="padding:24px"><div class="big">✅</div><b>В этой группе ничего нет</b></div>`}`;
     $("#f-seg", page).appendChild(seg(FILTERS.map(f => [f[0], f[1]]), filter, v => { filter = v; chosen = new Set(); paintRev(); }));
+    $("#auto-apply", page).onchange = async e => { try { await api("/api/sync/settings", { method: "PUT", json: { auto_apply: e.target.checked } }); rev.auto_apply = e.target.checked; toast(e.target.checked ? "Автоприменение включено" : "Автоприменение выключено: изменения — только вручную"); } catch (er) { toast(er.message, "error"); e.target.checked = !e.target.checked; } };
     const upd = () => { const n = $("#r-n", page); if (n) n.textContent = chosen.size; };
     $$(".r-one", page).forEach(cb => cb.onchange = () => { const id = +cb.closest("tr").dataset.id; cb.checked ? chosen.add(id) : chosen.delete(id); upd(); });
     const all = $("#r-all", page); if (all) all.onchange = () => { $$(".r-one", page).forEach(cb => { cb.checked = all.checked; const id = +cb.closest("tr").dataset.id; all.checked ? chosen.add(id) : chosen.delete(id); }); upd(); };

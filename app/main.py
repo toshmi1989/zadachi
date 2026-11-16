@@ -267,7 +267,7 @@ def api_meta(request: Request):
 
 # ---------------------------------------------------------------- tasks
 
-FILTER_KEYS = ("unit", "assignee", "status", "bucket", "kind", "doc", "q", "by", "sort", "dir", "date_from", "date_to")
+FILTER_KEYS = ("unit", "assignee", "status", "bucket", "kind", "doc", "q", "by", "sort", "dir", "date_from", "date_to", "stage")
 
 
 def filters(request: Request) -> dict:
@@ -906,6 +906,7 @@ def api_sync_review():
     try:
         out = ijro.review(c)
         out["card_tpl"] = setting("ijro_card_tpl")
+        out["auto_apply"] = setting("ijro_auto_apply") == "1"
         return out
     finally:
         c.close()
@@ -914,6 +915,12 @@ def api_sync_review():
 @app.put("/api/sync/settings")
 async def api_sync_settings(request: Request):
     b = await _json(request)
+    if "auto_apply" in b and "card_tpl" not in b:      # only the switch of the automatic application
+        with tx() as c:
+            from .db import put_settings
+            put_settings(c, {"ijro_auto_apply": "1" if b["auto_apply"] else "0"})
+            audit(c, "sync.settings", "sync", None, {"auto_apply": bool(b["auto_apply"])})
+        return {"ok": True}
     tpl = str(b.get("card_tpl") or "").strip()
     if tpl and not re.fullmatch(r"https://edo\.ijro\.uz/[^\s]*", tpl):
         bad("Адрес должен начинаться с https://edo.ijro.uz/ и без пробелов")

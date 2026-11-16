@@ -101,8 +101,13 @@ def dashboard(c, by: str = "close") -> dict:
     return {
         "units": _units(c, unit_cells, kinds), "months": sorted(months_seen), "today": t.isoformat(), "by": by, "totals": _finish(total), "closed_14d": closed_14d, "people": people,
         "timeline": timeline, "kinds": sorted(({"kind": k, **_finish(v)} for k, v in kinds.items()), key=lambda x: -x["total"]),
-        "docs": doc_list, "upcoming": upcoming, "bucket_labels": BUCKETS,
+        "docs": doc_list, "upcoming": upcoming, "bucket_labels": BUCKETS, "stages": _stages(c),
     }
+
+
+def _stages(c) -> dict:
+    from . import ijro
+    return ijro.funnel(c)
 
 
 def _add(a: dict, b: dict) -> dict:

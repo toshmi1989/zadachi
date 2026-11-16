@@ -74,6 +74,15 @@ routes.dashboard = async function (page) {
   }
   paintKpi(true);
 
+  /* ---- the way of the answers: where open tasks stand (Justice -> Cabinet -> Chamber of Accounts) ---- */
+  const SG = d.stages;
+  if (SG) {
+    const mx = Math.max(1, ...SG.steps.map(x => x.count));
+    page.insertAdjacentHTML("beforeend", `<section class="card rise" style="--i:5;margin-bottom:16px"><div class="card-head"><div><h2>Этапы согласования</h2><p class="sub">Где сейчас открытые задачи после ответа. Нажмите на этап — откроются эти задачи.${SG.unchecked ? ` Ещё не проверялись на сайте: <b>${SG.unchecked}</b>.` : ""}</p></div>${SG.attention ? `<span class="chip overdue">требуют внимания: ${SG.attention}</span>` : ""}</div>
+      <div class="funnel">${SG.steps.map((x, i) => `<button type="button" class="fn fn-${x.code}" data-stage="${x.code}" style="--i:${i}" data-tip="${esc(x.hint)}"><span class="fn-n">${x.count}</span><span class="fn-l">${esc(x.label)}</span><span class="fn-b"><i style="--w:${(x.count / mx * 100).toFixed(1)}%"></i></span></button>`).join("")}</div></section>`);
+    $$(".fn", page).forEach(b => b.onclick = () => { location.hash = `#/tasks?status=open&stage=${b.dataset.stage}`; });
+  }
+
   /* ---- people: bars + legend ---- */
   const legend = KEYS.map(k => `<button type="button" class="lgd k-${k}" data-key="${k}"><i></i>${LABEL[k]}</button>`).join("");
   page.insertAdjacentHTML("beforeend", `
