@@ -120,7 +120,10 @@ def test_classification_table():
     assert ijro.classify(snap(site_status=21, is_done=1))["label"] == "Выполнена с опозданием"
     assert ijro.classify(snap(site_status=20, is_done=0))["status"] is None                                    # a status without is_done is not trusted
     assert ijro.classify(snap(site_status=2))["status"] == "progress" and ijro.classify(snap(site_status=0))["status"] == "todo"
-    for st in (1, 3, 4, -1):
+    for st in (1, 3, 4, -1):                                                                                    # on the "in work" tab of the site: open, nothing changes by itself
+        r = ijro.classify(snap(site_status=st))
+        assert r["status"] is None and r["known"] and r["open"]
+    for st in (31, 7):                                                                                          # 31 is on the "done" tab, its meaning is unknown: not touched
         r = ijro.classify(snap(site_status=st))
         assert r["status"] is None and not r["known"]
     import json

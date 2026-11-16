@@ -52,9 +52,14 @@ STAGE_STEPS = [("sub", "Киритилди", "Ответ введён"), ("moj",
 ACCEPTED_WORDS = ("қабул қилинди", "қабул килинди", "qabul qilindi", "принят")
 
 
+NEUTRAL = {124}   # Koʻrib chiqilmoqda: "being reviewed" by the executor; it says nothing about where the task is
+
+
 def current_answer(answers: list[dict]):
-    """The answer that says where the task is now: the one the site marks active, else the newest."""
-    ordered = sorted((a for a in answers if a.get("sender_type") is not None), key=lambda a: a.get("at_ms") or 0)
+    """The answer that says where the task is now: the one the site marks active, else the newest. Answers of one day are ordered by their
+    type (10, 25, 35, 45, 49 follow the way of the chain), so a day without a precise time does not mix them up."""
+    real = [a for a in answers if a.get("sender_type") is not None and a["sender_type"] not in NEUTRAL]
+    ordered = sorted(real, key=lambda a: (a.get("at_ms") or 0, a["sender_type"]))
     if not ordered:
         return None
     active = [a for a in ordered if a.get("active")]
@@ -72,6 +77,8 @@ def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
     answers = json.loads(snap["answers"] or "[]")
     cur = current_answer(answers)
     t = cur["sender_type"] if cur else None
+    reviewing = bool(cur) and any(a.get("sender_type") in NEUTRAL and (a.get("at_ms") or 0) >= (cur.get("at_ms") or 0) for a in answers)
+    extra = " Сейчас исполнитель рассматривает (Koʻrib chiqilmoqda)." if reviewing else ""
     done = classify(snap, due, dates=False)["status"] == "done"
     if done:
         return base | {"code": "removed", "n": 4, "label": "Назоратдан ечилди", "hint": "Снята с контроля: выполнена"}
@@ -81,11 +88,11 @@ def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
         nd = _day(snap["due_ms"])
         accepted = any(w in (cur.get("text") or "").lower() for w in ACCEPTED_WORDS)
         return base | {"code": "info", "n": 3, "label": "Маълумот учун қабул қилинди" if accepted else "Қўшимча маълумот сўрови",
-                       "hint": "Счётная палата вернула задачу" + (": ответ принят к сведению" if accepted else " с запросом информации") + ". Задача НЕ выполнена, срок изменён",
+                       "hint": "Счётная палата вернула задачу" + (": ответ принят к сведению" if accepted else " с запросом информации") + ". Задача НЕ выполнена, срок изменён." + extra,
                        "attention": True, "new_due": nd.isoformat() if nd and dates else None}
     if t in T_REWORK or t in T_RETAKEN:
         name = "Возврат на доработку" if t in T_REWORK else "Снова взята на контроль"
-        return base | {"code": "returned", "n": 0, "label": name, "hint": "Нужны действия исполнителя", "attention": True}
+        return base | {"code": "returned", "n": 0, "label": name, "hint": "Нужны действия исполнителя." + extra, "attention": True}
     if t == T_REMOVAL:
         return base | {"code": "chamber", "n": 3, "label": "Ҳисоб палатасида", "hint": "Кабинет подтвердил снятие, решает Счётная палата"}
     if t == T_AGREED:
@@ -111,6 +118,8 @@ def auto_apply(c, task_id: int) -> list[str]:
     if cl["status"] == "done" and r["our_status"] != "done":
         changes["status"] = "done"
     elif cl["status"] == "progress" and r["our_status"] == "todo":
+        changes["status"] = "progress"
+    elif r["our_status"] == "todo" and cl.get("open") and st["code"] in ("moj", "cab", "chamber", "info", "returned", "chamber_other"):
         changes["status"] = "progress"
     if st["code"] == "info":
         if r["our_status"] == "done":
@@ -229,6 +238,9 @@ def current_period(periods: list[dict], due: str | None):
     return periods[-1]
 
 
+OPEN_SITE = {-1, 1, 3, 4}   # statuses of the tab "Bajarilmoqda" besides 0 (no answer) and 2 (answered)
+
+
 def classify(snap, due: str | None = None, dates: bool = True) -> dict:
     """What the site says, in our terms. Conservative: an unknown status never changes anything. A periodic task has one general
     status for all its periods (it stays 'in work' until the last one), so it is judged by the period of our deadline.
@@ -252,10 +264,12 @@ def classify(snap, due: str | None = None, dates: bool = True) -> dict:
         late = st == 21
         return {"status": "done", "label": "Выполнена с опозданием" if late else "Выполнена в срок", "note": "", "known": True}
     if st == 2:
-        return {"status": "progress", "label": "Ответ дан, идёт согласование", "note": "", "known": True}
+        return {"status": "progress", "label": "Ответ дан, идёт согласование", "note": "", "known": True, "open": True}
     if st == 0:
-        return {"status": "todo", "label": "В работе, ответа нет", "note": "", "known": True}
+        return {"status": "todo", "label": "В работе, ответа нет", "note": "", "known": True, "open": True}
     note = "Задача лежит на вкладке «Выполнено» сайта, но смысл статуса 31 не определён: статус у нас не меняется" if st == 31 else "Смысл этого значения ещё не определён: статус не меняется"
+    if st in OPEN_SITE:   # on the "Bajarilmoqda" tab of the site, only the meaning of the number is unknown: the task is open
+        return {"status": None, "label": f"В работе на сайте (статус {st})", "note": f"Статус {st} лежит на вкладке «В работе» сайта; его смысл не определён, поэтому статус у нас не меняется. Этап — по ответам ниже", "known": True, "open": True}
     return {"status": None, "label": f"Неизвестный статус на сайте ({st})", "note": note, "known": False}
 
 
@@ -290,7 +304,7 @@ def site_info(snap, our_status: str, due: str | None = None, admin: bool = True)
     return {"found": bool(snap["found"]), "section": snap["section"], "section_name": (SECTION_BY_ID.get(snap["section"]) or {}).get("name", ""),
             "label": cl["label"], "note": cl["note"], "known": cl["known"], "proposed": cl["status"],
             "proposed_label": STATUSES.get(cl["status"], "") if cl["status"] else "", "diff": diff,
-            "site_open_we_done": bool(snap["found"] and cl["known"] and cl["status"] in ("todo", "progress") and our_status == "done"),
+            "site_open_we_done": bool(snap["found"] and cl["known"] and (cl["status"] in ("todo", "progress") or cl.get("open")) and our_status == "done"),
             "checked_at": snap["checked_at"], "link": card_link(snap), "exact_link": bool(setting("ijro_card_tpl").strip() and snap["recipient_id"]),
             "secret": bool(snap["is_secret"]), "answers": answers_out(snap), "late": snap["site_status"] == 21,
             "stage": {k: v for k, v in stage_of(snap, due, dates=admin).items() if k != "new_due" or admin}}
@@ -374,7 +388,7 @@ def review(c) -> dict:
         if cl["status"] and r["our_status"] != "info" and cl["status"] != r["our_status"]:
             kind = "to_" + cl["status"]
             counts[kind] += 1
-        elif r["found"] and cl["known"] and cl["status"] in ("todo", "progress") and r["our_status"] == "done":
+        elif r["found"] and cl["known"] and (cl["status"] in ("todo", "progress") or cl.get("open")) and r["our_status"] == "done":
             kind = "site_open_we_done"
             counts[kind] += 1
         elif r["found"] and cl["known"]:

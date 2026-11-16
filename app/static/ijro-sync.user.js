@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.0.5
+// @version      1.0.6
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.0.5";
+  const VERSION = "1.0.6";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -203,8 +203,8 @@
       code, found: true, section: sectionId, recipient_id: String(pick(it, ["id", "recipient_id"]) ?? ""), task_ref: String(it.task_id ?? ""), status: num(it.status), is_done: !!it.is_done,
       overdue: (() => { const v = pick(it, ["overdue", "is_overdue", "expired"]); return v === undefined ? null : !!v; })(),
       repeatable: !!(it.repeatable) || periods.length > 0, due_ms: toMs(pick(it, ["task_due_date_ms", "due_date"])), done_ms: toMs(it.done_at), periods, is_secret: !!it.is_secret, answers_loaded: !!loaded,
-      answers: (answerList || []).slice(-30).map(a => ({ sender_type: num(a.sender_type), state: num(a.state), active: !!a.active,
-        at_ms: toMs(pick(a, ["date_row_ms", "created_at_ms", "created_at", "date", "sent_at", "updated_at"])), text: String(pick(a, ["contents", "comment", "text", "description", "content", "message", "note"]) ?? "").slice(0, 600) })),
+      answers: (answerList || []).map(a => ({ a, t: toMs(pick(a, ["created_at_ms", "created_at", "date_row_ms", "date", "sent_at", "updated_at"])) })).sort((x, y) => (x.t || 0) - (y.t || 0)).slice(-30).map(({ a, t }) => ({ sender_type: num(a.sender_type), state: num(a.state), active: !!a.active,
+        at_ms: t, text: String(pick(a, ["contents", "comment", "text", "description", "content", "message", "note"]) ?? "").slice(0, 600) })),
     };
   }
 

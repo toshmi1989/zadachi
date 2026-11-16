@@ -30,7 +30,7 @@ const DATA = {
     // the list flag repeatable is 0 even for a periodic task (as on the real site); periods have string dates and our deadline is 2026-12-31
     item("r-rep", "REP0001", 0, { repeat_periods: [{ id: "p1", due_date: "2026-09-30", order_index: 1, status: 10, recipient_status: 20 }, { id: "p2", due_date: "2026-12-31", order_index: 2, status: 0, recipient_status: 0 }, { id: "p3", due_date: "2027-03-31", order_index: 3, status: 0, recipient_status: 0 }] }),
     item("r-rep2", "REP0002", 0, { repeat_periods: [{ id: "p1", due_date: "2026-09-30", order_index: 1, status: 10, recipient_status: 20 }, { id: "p2", due_date: "2026-12-31", order_index: 2, status: 10, recipient_status: 20 }, { id: "p3", due_date: "2027-03-31", order_index: 3, status: 0, recipient_status: 0 }] }),
-    item("r-unk", "UNK0001", 1)],
+    item("r-unk", "UNK0001", 7)],
   government: [item("r-vmk", "VMK3541", 21, { is_done: true, done_at: DATE(due + 3 * DAY) })],
   president_admin: [item("r-ojn", "OJN6944", 20, { is_done: true, done_at: DATE(due - 2 * DAY) })],
 };
@@ -84,6 +84,7 @@ const fake = http.createServer((req, res) => {
   const cookie = (login.headers.get("set-cookie") || "").split(";")[0];
   const admin = async (m, p, b) => { const r = await fetch(BASE + p, { method: m, headers: { cookie, "content-type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); return r.json(); };
   const { key } = await admin("POST", "/api/sync/keys", { name: "тест" });
+  await admin("PUT", "/api/sync/settings", { auto_apply: false });   // this test walks through the manual review; the automatic mode has its own tests
   const server = async (m, p, b, k = key) => { const r = await fetch(BASE + p, { method: m, headers: { authorization: "Bearer " + k, "content-type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j; };
   const session = { id: "live-session", year: 2026, recipientDb: "ORG1", template: null };
   const mk = () => core.makeClient({ pageFetch: fetch, getSession: () => session, apiBase, sleep: async () => {} });

@@ -160,3 +160,29 @@ def test_employee_sees_the_stage_but_never_the_official_term(admin, key):
     assert all(e["field"] != "due" for e in t["events"]) and "2027-03-01" not in json.dumps(t)
     row = emp.get("/api/tasks?q=ST0002").json()["items"][0]
     assert row["site"]["stage"]["label"] == "Қўшимча маълумот сўрови"
+
+
+def test_answers_of_one_day_are_not_mixed_up():
+    s = snap([35, 25, 10])                                                                  # newest first, all with the same moment (the site gave only a date)
+    a = json.loads(s["answers"])
+    for x in a:
+        x["at_ms"] = 5000
+    s["answers"] = json.dumps(a)
+    assert ijro.stage_of(s)["code"] == "chamber"                                            # the later step of the chain wins, not the order of arrival
+
+
+def test_under_review_mark_does_not_hide_the_chamber():
+    s = snap([10, 25, 35, 49, 124], 1, due=ms(2027, 3, 1))                                  # status 1, the Chamber returned it and the executor is already reviewing
+    g = ijro.stage_of(s)
+    assert g["code"] == "info" and "рассматривает" in g["hint"]
+
+
+def test_status_one_with_answers_means_in_work(admin, key):
+    uid = task(admin, "ST0003")["id"]
+    assert push(key, "ST0003", [10, 25], 1)["auto_applied"] == 1                              # status 1 is not understood, but the answers are: in work
+    t = admin.get(f"/api/tasks/{uid}").json()
+    assert t["status"] == "progress" and t["site"]["stage"]["code"] == "cab" and "статус 1" in t["site"]["label"]
+    assert admin.patch(f"/api/tasks/{uid}", json={"status": "done"}).status_code == 200
+    push(key, "ST0003", [10, 25], 1)
+    t = admin.get(f"/api/tasks/{uid}").json()
+    assert t["status"] == "done" and t["site"]["site_open_we_done"] is True                  # not reverted by itself: only flagged
