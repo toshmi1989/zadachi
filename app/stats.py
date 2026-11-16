@@ -6,6 +6,8 @@ from .db import OPEN, today
 from .tasks import BUCKETS, bucket_of, eff_value
 
 COLS = ("overdue", "week", "month", "later", "nodate")
+KIND_ORDER = ["Фармон", "Қарор", "Баён", "ВМ", "ПА"]   # columns of the department matrix: the kinds of documents, in this order
+NUM_KEYS = (*COLS, "done", "info", "total", "open")
 MONTHS = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
 
 
@@ -26,8 +28,10 @@ def _finish(d: dict) -> dict:
 def dashboard(c, by: str = "close") -> dict:
     by = "due" if by == "due" else "close"
     t = today()
-    rows = c.execute("SELECT id, assignee_id, status, due, close_date, kind, doc_no, code, point, text, done_at FROM tasks").fetchall()
+    rows = c.execute("""SELECT t.id, t.assignee_id, t.status, t.due, t.close_date, t.kind, t.doc_no, t.code, t.point, t.text, t.done_at, u.unit_id
+                        FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id""").fetchall()
     users = {u["id"]: u for u in c.execute("SELECT id, name, active, role FROM users")}
+    unit_cells: dict[tuple[int, str], dict] = {}
     total, per = _blank(), {}
     kinds, docs, open_rows, windows = {}, {}, [], [0] * 8
     closed_14d = 0
@@ -41,6 +45,11 @@ def dashboard(c, by: str = "close") -> dict:
             acc[b] += 1
             if r["status"] in OPEN:
                 acc["open"] += 1
+        uacc = unit_cells.setdefault((r["unit_id"] or 0, r["kind"]), _blank())
+        uacc["total"] += 1
+        uacc[b] += 1
+        if r["status"] in OPEN:
+            uacc["open"] += 1
         if r["status"] in OPEN:
             open_rows.append((eff or "9999-12-31", r["code"], r, eff))
             if eff and b != "overdue":
@@ -81,7 +90,54 @@ def dashboard(c, by: str = "close") -> dict:
                          "text": (r["text"] or "").split("\n")[0][:140], "assignee": auth.short_name(a["name"]) if a else "Не назначен"})
     doc_list = sorted(({"doc": k, **_finish(v)} for k, v in docs.items()), key=lambda x: (-x["open"], x["doc"]))[:10]
     return {
-        "today": t.isoformat(), "by": by, "totals": _finish(total), "closed_14d": closed_14d, "people": people,
+        "units": _units(c, unit_cells, kinds), "today": t.isoformat(), "by": by, "totals": _finish(total), "closed_14d": closed_14d, "people": people,
         "timeline": timeline, "kinds": sorted(({"kind": k, **_finish(v)} for k, v in kinds.items()), key=lambda x: -x["total"]),
         "docs": doc_list, "upcoming": upcoming, "bucket_labels": BUCKETS,
     }
+
+
+def _add(a: dict, b: dict) -> dict:
+    for k in NUM_KEYS:
+        a[k] = a.get(k, 0) + b.get(k, 0)
+    return a
+
+
+def _units(c, cells: dict, kinds_seen: dict) -> dict:
+    """The matrix "department structure x kind of document". A management's numbers include its divisions;
+    people without a department (and unassigned tasks) are shown as a separate row so that the total still adds up."""
+    cols = KIND_ORDER + [k for k in kinds_seen if k and k not in KIND_ORDER]
+    units = c.execute("SELECT * FROM units WHERE active=1 ORDER BY sort, id").fetchall()
+    by_id = {u["id"]: u for u in units}
+
+    def row(uid: int, **meta) -> dict:
+        per = {k: dict(cells.get((uid, k), _blank())) for k in cols}
+        return {**meta, "id": uid, "cells": per, "sum": {}}
+
+    out = []
+    for u in units:
+        r = row(u["id"], num=u["num"], name=u["name"], parent_id=u["parent_id"] if u["parent_id"] in by_id else None, level=0 if not u["parent_id"] else 1)
+        out.append(r)
+    index = {r["id"]: r for r in out}
+    for r in out:                      # a division adds itself to its management
+        if r["parent_id"]:
+            for k in cols:
+                _add(index[r["parent_id"]]["cells"][k], r["cells"][k])
+    none = row(0, num="", name="Без отдела", parent_id=None, level=0)
+    total_cells = {k: _blank() for k in cols}
+    for r in out:
+        if not r["parent_id"]:
+            for k in cols:
+                _add(total_cells[k], r["cells"][k])
+    for k in cols:
+        _add(total_cells[k], none["cells"][k])
+    for r in out + [none]:
+        s = _blank()
+        for k in cols:
+            _add(s, r["cells"][k])
+        r["sum"] = _finish(s)
+    tot = _blank()
+    for k in cols:
+        _add(tot, total_cells[k])
+    result = {"columns": cols, "rows": out, "none": none if none["sum"]["total"] else None,
+              "total": {"cells": total_cells, "sum": _finish(tot)}}
+    return result

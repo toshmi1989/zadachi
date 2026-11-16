@@ -32,7 +32,7 @@ app = FastAPI(title="Zadachi", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 OPEN_PATHS = ("/healthz", "/login", "/api/login-users")
-ADMIN_ONLY = re.compile(r"^/api/(users|import|settings|backup|audit|reminders/(settings|preview|run|log))(/|$)")
+ADMIN_ONLY = re.compile(r"^/api/(users|units|import|settings|backup|audit|reminders/(settings|preview|run|log))(/|$)")
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -221,6 +221,12 @@ def api_dashboard(by: str = "close"):
         c.close()
 
 
+def unit_list(c) -> list[dict]:
+    """Active units in display order: a management, then its divisions."""
+    rows = c.execute("SELECT id, num, name, parent_id FROM units WHERE active=1 ORDER BY sort, id").fetchall()
+    return [{"id": r["id"], "num": r["num"], "name": r["name"], "parent_id": r["parent_id"], "level": 1 if r["parent_id"] else 0} for r in rows]
+
+
 @app.get("/api/meta")
 def api_meta(request: Request):
     """Lists for filters: people, document kinds and documents."""
@@ -232,14 +238,14 @@ def api_meta(request: Request):
         kinds = [r[0] for r in c.execute("SELECT DISTINCT kind FROM tasks ORDER BY kind")]
         docs = [{"doc": r["doc_no"], "kind": r["kind"], "n": r["n"]} for r in
                 c.execute("SELECT doc_no, kind, COUNT(*) n FROM tasks GROUP BY doc_no, kind ORDER BY n DESC, doc_no")]
-        return {"people": people, "kinds": kinds, "docs": docs}
+        return {"people": people, "kinds": kinds, "docs": docs, "units": unit_list(c)}
     finally:
         c.close()
 
 
 # ---------------------------------------------------------------- tasks
 
-FILTER_KEYS = ("assignee", "status", "bucket", "kind", "doc", "q", "by", "sort", "dir", "date_from", "date_to")
+FILTER_KEYS = ("unit", "assignee", "status", "bucket", "kind", "doc", "q", "by", "sort", "dir", "date_from", "date_to")
 
 
 def filters(request: Request) -> dict:
@@ -353,10 +359,11 @@ async def api_task_bulk(request: Request):
 
 def user_row(r) -> dict:
     return {"id": r["id"], "login": r["login"], "name": r["name"], "short": auth.short_name(r["name"]), "role": r["role"],
-            "active": bool(r["active"]), "excel_name": r["excel_name"], "tasks": r["n"], "open": r["o"]}
+            "active": bool(r["active"]), "excel_name": r["excel_name"], "tasks": r["n"], "open": r["o"],
+            "unit_id": r["unit_id"], "unit": r["unit_name"] or "", "pw_set": bool(r["pw_set"])}
 
 
-USERS_SQL = """SELECT u.*, (SELECT COUNT(*) FROM tasks WHERE assignee_id=u.id) n,
+USERS_SQL = """SELECT u.*, (SELECT name FROM units WHERE id=u.unit_id) unit_name, (SELECT COUNT(*) FROM tasks WHERE assignee_id=u.id) n,
                (SELECT COUNT(*) FROM tasks WHERE assignee_id=u.id AND status IN ('todo','progress')) o FROM users u"""
 
 
@@ -371,11 +378,20 @@ def relink(c, uid: int, *names: str) -> int:
     return n
 
 
+def check_unit(c, v):
+    """None for "no department", else the id of an active unit."""
+    if v in (None, "", 0, "0"):
+        return None
+    if not str(v).isdigit() or not c.execute("SELECT 1 FROM units WHERE id=? AND active=1", (int(v),)).fetchone():
+        bad("Такого отдела нет")
+    return int(v)
+
+
 @app.get("/api/users")
 def api_users():
     c = connect()
     try:
-        return {"items": [user_row(r) for r in c.execute(USERS_SQL + " ORDER BY u.role, u.name")]}
+        return {"items": [user_row(r) for r in c.execute(USERS_SQL + " ORDER BY u.role, u.name")], "units": unit_list(c)}
     finally:
         c.close()
 
@@ -400,8 +416,9 @@ async def api_user_create(request: Request):
         bad("Пароль не короче 8 символов")
     try:
         with tx() as c:
-            cur = c.execute("INSERT INTO users(login, name, password_hash, role, excel_name, created_at, pw_set) VALUES (?,?,?,?,?,?,1)",
-                            (login, name, auth.hash_password(password), role, str(b.get("excel_name") or "").strip(), now()))
+            unit = check_unit(c, b.get("unit_id"))
+            cur = c.execute("INSERT INTO users(login, name, password_hash, role, excel_name, created_at, pw_set, unit_id) VALUES (?,?,?,?,?,?,1,?)",
+                            (login, name, auth.hash_password(password), role, str(b.get("excel_name") or "").strip(), now(), unit))
             linked = relink(c, cur.lastrowid, name, b.get("excel_name") or "")
             audit(c, "user.create", "user", cur.lastrowid, {"login": login, "role": role, "linked_tasks": linked})
     except sqlite3.IntegrityError:
@@ -427,11 +444,12 @@ async def api_user_update(request: Request, uid: int):
         if u["role"] == "admin" and (role != "admin" or not active) and c.execute(
                 "SELECT COUNT(*) FROM users WHERE role='admin' AND active=1 AND id != ?", (uid,)).fetchone()[0] == 0:
             bad("Должен остаться хотя бы один активный администратор")
-        c.execute("UPDATE users SET name=?, role=?, active=?, excel_name=? WHERE id=?", (name, role, active, excel, uid))
+        unit = check_unit(c, b["unit_id"]) if "unit_id" in b else u["unit_id"]
+        c.execute("UPDATE users SET name=?, role=?, active=?, excel_name=?, unit_id=? WHERE id=?", (name, role, active, excel, unit, uid))
         if not active:
             c.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
         linked = relink(c, uid, name, excel)
-        audit(c, "user.update", "user", uid, {"role": role, "active": bool(active)})
+        audit(c, "user.update", "user", uid, {"role": role, "active": bool(active), "unit_id": unit})
     return {"ok": True, "linked_tasks": linked}
 
 
@@ -668,3 +686,87 @@ def api_reminders_log():
                                                        JOIN users u ON u.id=l.user_id WHERE l.detail != 'nothing to send' ORDER BY l.id DESC LIMIT 30""")]}
     finally:
         c.close()
+
+
+# ---------------------------------------------------------------- structure of the department
+
+ROMAN = [(10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+
+
+def roman(n: int) -> str:
+    out = ""
+    for v, r in ROMAN:
+        while n >= v:
+            out, n = out + r, n - v
+    return out
+
+
+def unit_out(c) -> list[dict]:
+    rows = c.execute("""SELECT un.*, (SELECT COUNT(*) FROM users WHERE unit_id=un.id AND active=1) people FROM units un ORDER BY sort, id""").fetchall()
+    return [{"id": r["id"], "num": r["num"], "name": r["name"], "parent_id": r["parent_id"], "active": bool(r["active"]), "people": r["people"],
+             "level": 1 if r["parent_id"] else 0} for r in rows]
+
+
+@app.get("/api/units")
+def api_units():
+    c = connect()
+    try:
+        return {"items": unit_out(c)}
+    finally:
+        c.close()
+
+
+@app.post("/api/units")
+async def api_unit_create(request: Request):
+    b = await _json(request)
+    name = re.sub(r"\s+", " ", str(b.get("name") or "")).strip()
+    if not name or len(name) > 300:
+        bad("Укажите название (до 300 знаков)")
+    with tx() as c:
+        parent = b.get("parent_id")
+        if parent:
+            p = c.execute("SELECT parent_id FROM units WHERE id=?", (parent,)).fetchone()
+            if not p or p["parent_id"]:
+                bad("Отдел можно создать только внутри управления")
+        sibs = c.execute("SELECT COUNT(*) FROM units WHERE parent_id IS ?", (parent or None,)).fetchone()[0]
+        num = str(b.get("num") or "").strip() or (str(sibs + 1) if parent else roman(sibs + 1))
+        # a new management goes to the end of the top level, a new division to the end of its management
+        if parent:
+            last = c.execute("SELECT MAX(sort) FROM units WHERE id=? OR parent_id=?", (parent, parent)).fetchone()[0]
+        else:
+            last = c.execute("SELECT MAX(sort) FROM units").fetchone()[0]
+        sort = (last or 0) + 1
+        c.execute("UPDATE units SET sort = sort + 1 WHERE sort >= ?", (sort,))
+        cur = c.execute("INSERT INTO units(num, name, parent_id, sort) VALUES (?,?,?,?)", (num[:12], name, parent or None, sort))
+        audit(c, "unit.create", "unit", cur.lastrowid, {"name": name})
+    return {"id": cur.lastrowid}
+
+
+@app.patch("/api/units/{unit_id}")
+async def api_unit_update(request: Request, unit_id: int):
+    b = await _json(request)
+    with tx() as c:
+        u = c.execute("SELECT * FROM units WHERE id=?", (unit_id,)).fetchone()
+        if not u:
+            bad("Отдел не найден", 404)
+        name = re.sub(r"\s+", " ", str(b.get("name", u["name"]))).strip() or u["name"]
+        num = str(b.get("num", u["num"])).strip()[:12]
+        active = int(bool(b.get("active", u["active"])))
+        if not active and c.execute("SELECT 1 FROM users WHERE active=1 AND unit_id IN (SELECT id FROM units WHERE id=? OR parent_id=?)", (unit_id, unit_id)).fetchone():
+            bad("В отделе есть сотрудники: сначала переведите их в другой отдел")
+        c.execute("UPDATE units SET name=?, num=?, active=? WHERE id=?", (name, num, active, unit_id))
+        if not active:  # hiding a management hides its divisions with it
+            c.execute("UPDATE units SET active=0 WHERE parent_id=?", (unit_id,))
+        audit(c, "unit.update", "unit", unit_id, {"name": name, "active": bool(active)})
+    return {"ok": True}
+
+
+@app.delete("/api/units/{unit_id}")
+def api_unit_delete(unit_id: int):
+    with tx() as c:
+        if c.execute("SELECT 1 FROM users WHERE unit_id=?", (unit_id,)).fetchone() or c.execute("SELECT 1 FROM units WHERE parent_id=?", (unit_id,)).fetchone():
+            bad("Нельзя удалить: в отделе есть сотрудники или вложенные отделы. Можно скрыть.")
+        if not c.execute("DELETE FROM units WHERE id=?", (unit_id,)).rowcount:
+            bad("Отдел не найден", 404)
+        audit(c, "unit.delete", "unit", unit_id, {})
+    return {"ok": True}

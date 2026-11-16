@@ -3,7 +3,7 @@ import re
 from datetime import date, timedelta
 
 from . import auth
-from .db import OPEN, STATUSES, now, today
+from .db import OPEN, STATUSES, now, today, unit_tree_ids
 
 BUCKETS = {
     "overdue": "Просрочено",
@@ -12,7 +12,7 @@ BUCKETS = {
     "later": "Позже 30 дней",
     "nodate": "Без срока",
 }
-SORTS = {"eff": "eff", "due": "t.due", "close": "t.close_date", "code": "t.code", "doc": "t.doc_no", "kind": "t.kind",
+SORTS = {"unit": "un.name", "eff": "eff", "due": "t.due", "close": "t.close_date", "code": "t.code", "doc": "t.doc_no", "kind": "t.kind",
          "status": "t.status", "assignee": "a.name", "num": "t.seq"}
 
 
@@ -91,6 +91,12 @@ def _where(f: dict, by: str, user: dict | None, own_only: bool) -> tuple[str, di
     if f.get("kind"):
         clauses.append("t.kind = :kind")
         p["kind"] = f["kind"]
+    u = str(f.get("unit") or "")
+    if u == "0":
+        clauses.append("a.unit_id IS NULL")
+    elif u.isdigit():
+        ids = f.get("_unit_ids") or [int(u)]
+        clauses.append(f"a.unit_id IN ({','.join(str(int(i)) for i in ids)})")
     if f.get("doc"):
         clauses.append("t.doc_no = :doc")
         p["doc"] = f["doc"]
@@ -116,16 +122,19 @@ def row_out(r, by: str) -> dict:
         "days": (date.fromisoformat(eff) - t).days if eff else None,
         "status": r["status"], "tag": r["tag"], "bucket": bucket_of(r["status"], eff, t),
         "assignee_id": r["assignee_id"], "assignee": auth.short_name(r["a_name"]) if r["a_name"] else "",
-        "assignee_name": r["a_name"] or "", "assignee_raw": r["assignee_raw"], "done_at": r["done_at"], "edited": bool(r["edited"]),
+        "assignee_name": r["a_name"] or "", "unit_id": r["a_unit"], "unit": r["unit_name"] or "", "assignee_raw": r["assignee_raw"], "done_at": r["done_at"], "edited": bool(r["edited"]),
         "updated_at": r["updated_at"],
     }
 
 
-SELECT = """SELECT t.*, a.name AS a_name, {e} AS eff FROM tasks t LEFT JOIN users a ON a.id = t.assignee_id"""
+SELECT = """SELECT t.*, a.name AS a_name, a.unit_id AS a_unit, un.name AS unit_name, {e} AS eff FROM tasks t
+    LEFT JOIN users a ON a.id = t.assignee_id LEFT JOIN units un ON un.id = a.unit_id"""
 
 
 def list_tasks(c, f: dict, user: dict, own_only: bool, *, limit: int | None = 50, offset: int = 0) -> dict:
     by = "due" if f.get("by") == "due" else "close"
+    if str(f.get("unit") or "").isdigit() and f["unit"] != "0":
+        f = dict(f, _unit_ids=unit_tree_ids(c, int(f["unit"])))
     where, p = _where(f, by, user, own_only)
     key = f.get("sort") if f.get("sort") in SORTS else "eff"
     direction = "DESC" if f.get("dir") == "desc" else "ASC"

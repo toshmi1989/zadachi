@@ -103,7 +103,7 @@ routes.dashboard = async function (page) {
       b.onclick = () => bucketDrill(k, { assignee: p.id });
     });
   });
-  function applyMode() { paintKpi(false); applyBars(); paintMatrix(); }
+  function applyMode() { paintKpi(false); applyBars(); paintMatrix(); paintUnits(); }
   function applyBars() {
     people.forEach(p => {
       const r = rowOf(p.id);
@@ -117,6 +117,7 @@ routes.dashboard = async function (page) {
       $(".ptot b", r).textContent = Z.mode === "pct" ? p.pct_done + "%" : p.total;
       $(".ptot small", r).textContent = Z.mode === "pct" ? "выполнено" : (p.total ? p.pct_done + "% вып." : "нет задач");
     });
+    applyUnitBars();
   }
   const pct100 = (a, b) => b ? 100 * a / b : 0;
 
@@ -176,6 +177,91 @@ routes.dashboard = async function (page) {
     el.onfocus = () => hot(el.dataset.key); el.onblur = () => hot("");
     el.onclick = () => bucketDrill(el.dataset.key);
   });
+
+  /* ---- departments: matrix "unit x kind of document" and workload bars per unit ---- */
+  const UN = d.units, UROWS = UN.rows.concat(UN.none ? [UN.none] : []);
+  const KIND_SUB = { "ВМ": "Вазирлар Маҳкамаси", "ПА": "Президент администрацияси" };
+  const METRICS = [["total", "Всего"], ["open", "В работе"], ["overdue", "Просрочено"], ["week", "≤ 7 дн."], ["done", "Выполнено"]];
+  const MET_K = { total: "", open: "k-month", overdue: "k-overdue", week: "k-week", done: "k-done" };
+  const MET_DRILL = { total: {}, open: { status: "open" }, overdue: { bucket: "overdue" }, week: { bucket: "week" }, done: { status: "done" } };
+  let metric = "total"; try { metric = localStorage.getItem("umMetric") || "total"; if (!MET_DRILL[metric]) metric = "total"; } catch (e) {}
+  const collapsed = new Set();
+  const hasKids = id => UN.rows.some(r => r.parent_id === id);
+  page.insertAdjacentHTML("beforeend", `
+    <section class="card rise" style="--i:7;margin-bottom:16px"><div class="card-head"><div><h2>Отделы × типы документов</h2>
+      <p class="sub">Сколько задач у каждого управления и отдела по каждому типу документа. Нажмите на число — откроется список. Стрелка слева сворачивает отделы управления.</p></div><div id="um-ctl"></div></div>
+      <div class="tablewrap"><table class="mx um" id="um"></table></div></section>
+    <section class="card rise" style="--i:8;margin-bottom:16px"><div class="card-head"><div><h2>Нагрузка по отделам</h2>
+      <p class="sub">Сроки по задачам каждого отдела. У управления — сумма с его отделами. Нажмите на цвет — увидите эти задачи.</p></div></div>
+      <div class="people" id="ubars"></div></section>`);
+  $("#um-ctl", page).appendChild(seg(METRICS, metric, v => { metric = v; try { localStorage.setItem("umMetric", v); } catch (e) {} paintUnits(); }));
+  const unitLabel = r => (r.num ? (r.level ? r.num + ". " : r.num + " · ") : "") + r.name;
+  function paintUnits() {
+    const pc = Z.mode === "pct", cols = UN.columns;
+    const val = (c, k) => c[k] || 0;
+    let mx = 1; UN.rows.forEach(r => cols.forEach(k => { mx = Math.max(mx, val(r.cells[k], metric)); }));
+    const cell = (c, rowSum, attrs, bold, absolute) => {
+      const n = val(c, metric), a = n ? (0.12 + 0.5 * n / mx).toFixed(2) : 0;
+      const txt = !n ? "·" : (pc && !absolute) ? pct(n, val(rowSum, metric)) + "%" : n;
+      return `<td><button class="cell ${MET_K[metric]}${n ? "" : " z"}${bold ? " b" : ""}" style="--a:${absolute ? 0 : a}" ${attrs}><span>${txt}</span></button></td>`;
+    };
+    const head = `<thead><tr><th>Отдел</th>${cols.map(k => `<th><button class="lgd" data-kind="${esc(k)}" ${KIND_SUB[k] ? `data-tip="<b>${esc(k)}</b>${KIND_SUB[k]}"` : ""} style="font-weight:600"><span>${esc(k)}</span></button></th>`).join("")}<th>Итого</th><th>% вып.</th></tr></thead>`;
+    const rowHtml = (r, cls) => {
+      const kids = !r.level && r.id && hasKids(r.id), open = !collapsed.has(r.id);
+      const lbl = r.id ? unitLabel(r) : r.name;
+      return `<tr class="r um-r ${cls}${r.parent_id ? " kid" : ""}" data-id="${r.id}" ${r.parent_id ? `data-parent="${r.parent_id}"` : ""} ${r.parent_id && collapsed.has(r.parent_id) ? "hidden" : ""}>
+        <td><div class="um-n"><button class="chev${kids ? "" : " off"}${open ? " open" : ""}" data-chev="${r.id}" aria-label="Свернуть или развернуть">${icon("chev")}</button>
+        <button class="pname" data-unit="${r.id}" data-tip="<b>${esc(lbl)}</b>Открыть все задачи"><span>${esc(lbl)}</span></button></div></td>
+        ${cols.map(k => cell(r.cells[k], r.sum, `data-unit="${r.id}" data-kind="${esc(k)}"`, !r.level)).join("")}
+        ${cell(r.sum, r.sum, `data-unit="${r.id}" data-all="1"`, true, true)}
+        <td><div class="mini"><span class="num" style="min-width:34px">${r.sum.pct_done}%</span><span class="m"><i style="width:${r.sum.pct_done}%"></i></span></div></td></tr>`;
+    };
+    const T = UN.total;
+    const totalRow = `<tr class="r um-r mgmt total"><td><div class="um-n"><span class="chev off"></span><button class="pname" data-unit="" style="font-weight:700"><span>Департамент жами</span></button></div></td>
+      ${cols.map(k => cell(T.cells[k], T.sum, `data-kind="${esc(k)}"`, true)).join("")}${cell(T.sum, T.sum, `data-all="1"`, true, true)}
+      <td><div class="mini"><span class="num" style="min-width:34px">${T.sum.pct_done}%</span><span class="m"><i style="width:${T.sum.pct_done}%"></i></span></div></td></tr>`;
+    $("#um", page).innerHTML = head + "<tbody>" + totalRow + UN.rows.map(r => rowHtml(r, r.level ? "" : "mgmt")).join("") + (UN.none ? rowHtml(UN.none, "mgmt none") : "") + "</tbody>";
+  }
+  $("#um", page).addEventListener("click", e => {
+    const chev = e.target.closest("[data-chev]");
+    if (chev) {
+      if (chev.classList.contains("off")) return;
+      const id = +chev.dataset.chev, wasClosed = collapsed.has(id);
+      wasClosed ? collapsed.delete(id) : collapsed.add(id);
+      chev.classList.toggle("open", wasClosed);
+      $$(`tr[data-parent="${id}"]`, page).forEach(tr => { tr.hidden = !wasClosed; if (wasClosed) { tr.style.animation = "none"; void tr.offsetWidth; tr.style.animation = ""; } });
+      return;
+    }
+    const t = e.target.closest("[data-unit],[data-kind],[data-all]"); if (!t) return;
+    const p = Object.assign({}, MET_DRILL[metric]);
+    const unit = t.dataset.unit !== undefined ? t.dataset.unit : "";
+    if (unit !== "") p.unit = unit;
+    if (t.dataset.kind) p.kind = t.dataset.kind;
+    drill(p);
+  });
+  /* bars per unit: the same look as the bars per person */
+  const ubars = $("#ubars", page), uMax = Math.max(1, ...UROWS.map(r => r.sum.total));
+  ubars.innerHTML = UROWS.map(r => `<div class="prow u${r.level ? " lvl1" : " mgmt"}" data-uid="${r.id}">
+      <button class="pname" data-tip="<b>${esc(r.name)}</b>Открыть все задачи">${r.id ? `<span class="unum">${esc(r.num)}</span>` : ""}<span>${esc(r.name)}</span></button>
+      <div class="bar">${KEYS.map(k => `<button type="button" class="seg-b k-${k}" data-key="${k}" data-tip="<b>${esc(r.name)}</b>${LABEL[k]}: ${r.sum[k]} · ${pct(r.sum[k], r.sum.total)}% задач отдела" aria-label="${esc(r.name)}: ${LABEL[k]} ${r.sum[k]}"><span></span></button>`).join("")}</div>
+      <div class="ptot num"><b></b><small></small></div></div>`).join("");
+  $$(".prow", ubars).forEach(row => {
+    const r = UROWS.find(x => String(x.id) === row.dataset.uid);
+    $(".pname", row).onclick = () => drill({ unit: r.id });
+    $$(".seg-b", row).forEach(b => b.onclick = () => bucketDrill(b.dataset.key, { unit: r.id }));
+  });
+  function applyUnitBars() {
+    $$(".prow", ubars).forEach(row => {
+      const r = UROWS.find(x => String(x.id) === row.dataset.uid);
+      $$(".seg-b", row).forEach(b => {
+        const n = r.sum[b.dataset.key], w = Z.mode === "pct" ? pct100(n, r.sum.total) : (n / uMax) * 100;
+        b.style.width = w + "%"; b.style.display = n ? "" : "none"; b.classList.toggle("wide", w >= 6);
+        $("span", b).textContent = Z.mode === "pct" ? Math.round(w) + "%" : n;
+      });
+      $(".ptot b", row).textContent = Z.mode === "pct" ? r.sum.pct_done + "%" : r.sum.total;
+      $(".ptot small", row).textContent = Z.mode === "pct" ? "выполнено" : (r.sum.total ? r.sum.pct_done + "% вып." : "нет задач");
+    });
+  }
 
   /* ---- timeline ---- */
   const maxT = Math.max(1, ...d.timeline.map(x => x.count));
@@ -248,7 +334,7 @@ routes.dashboard = async function (page) {
   $("#docs", page).onclick = e => { const b = e.target.closest(".hb"); if (b) drill({ doc: b.dataset.v }); };
 
   /* ---- start animations after first paint ---- */
-  paintMatrix();
+  paintMatrix(); paintUnits();
   [...people].sort(sorters.open).forEach(p => peopleBox.appendChild(rowOf(p.id)));
   requestAnimationFrame(() => requestAnimationFrame(() => {
     applyBars();

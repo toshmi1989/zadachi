@@ -21,7 +21,7 @@ function statusChip(t) {
 routes.tasks = async function (page, params) {
   if (Z.me.tasks === "none") throw new Error("Список задач для вашей роли отключён администратором");
   const meta = await loadMeta();
-  const S = { assignee: params.assignee || "", status: params.status || "", bucket: params.bucket || "", kind: params.kind || "",
+  const S = { unit: params.unit === undefined ? "" : params.unit, assignee: params.assignee || "", status: params.status || "", bucket: params.bucket || "", kind: params.kind || "",
               doc: params.doc || "", q: params.q || "", date_from: params.date_from || "", date_to: params.date_to || "",
               sort: params.sort || "eff", dir: params.dir || "asc", page: +params.page || 1 };
   const own = Z.me.tasks === "own" && !isAdmin();
@@ -33,7 +33,8 @@ routes.tasks = async function (page, params) {
     <div class="pagehead rise" style="--i:0"><div><h1>Задачи</h1><p id="sub">&nbsp;</p></div><div class="controls" id="ctl"></div></div>
     <div class="filters rise" style="--i:1">
       <div class="grow">${icon("search")}<input id="q" type="search" placeholder="Поиск по тексту, коду, номеру документа  ( / )" value="${esc(S.q)}"></div>
-      ${own ? "" : `<select class="f" id="f-assignee"><option value="">Все сотрудники</option><option value="0">Не назначен</option>${meta.people.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>`}
+      ${own ? "" : `<select class="f" id="f-unit" style="min-width:210px"><option value="">Все отделы</option><option value="0">Без отдела</option>${(meta.units || []).map(u => `<option value="${u.id}">${u.level ? "\u00a0\u00a0\u00a0" + esc(u.num) + ". " : esc(u.num) + " · "}${esc(u.name.length > 60 ? u.name.slice(0, 58) + "…" : u.name)}</option>`).join("")}</select>
+      <select class="f" id="f-assignee"><option value="">Все сотрудники</option><option value="0">Не назначен</option>${meta.people.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>`}
       <select class="f" id="f-status"><option value="">Любой статус</option><option value="open">В работе (все открытые)</option><option value="todo">Не выполнено</option><option value="progress">Выполняется</option><option value="done">Выполнено</option><option value="info">К сведению</option></select>
       <select class="f" id="f-bucket"><option value="">Любой срок</option>${["overdue", "week", "month", "later", "nodate"].map(k => `<option value="${k}">${LABEL[k]}</option>`).join("")}</select>
       <select class="f" id="f-kind"><option value="">Все типы</option>${meta.kinds.map(k => `<option>${esc(k)}</option>`).join("")}</select>
@@ -52,7 +53,7 @@ routes.tasks = async function (page, params) {
   const exp = document.createElement("a"); exp.className = "btn"; exp.innerHTML = icon("download") + "Excel"; exp.title = "Скачать текущий список в Excel";
   ctl.appendChild(exp);
   const set = (id, v) => { const el = $(id, page); if (el) el.value = v; };
-  set("#f-assignee", S.assignee); set("#f-status", S.status); set("#f-bucket", S.bucket); set("#f-kind", S.kind); set("#f-doc", S.doc);
+  set("#f-unit", S.unit); set("#f-assignee", S.assignee); set("#f-status", S.status); set("#f-bucket", S.bucket); set("#f-kind", S.kind); set("#f-doc", S.doc);
 
   /* bulk bar (administrator) */
   let bulk = null;
@@ -83,6 +84,7 @@ routes.tasks = async function (page, params) {
   function chips() {
     const out = [];
     const nm = id => (meta.people.find(p => String(p.id) === String(id)) || {}).name || "?";
+    if (S.unit !== "") { const un = (meta.units || []).find(x => String(x.id) === String(S.unit)); out.push(["unit", "Отдел: " + (S.unit === "0" ? "без отдела" : un ? (un.level ? un.num + ". " : "") + (un.name.length > 40 ? un.name.slice(0, 38) + "…" : un.name) : "?")]); }
     if (S.assignee !== "") out.push(["assignee", "Сотрудник: " + (S.assignee === "0" ? "не назначен" : nm(S.assignee))]);
     if (S.status) out.push(["status", "Статус: " + (LABEL[S.status] || ST[S.status])]);
     if (S.bucket) out.push(["bucket", "Срок: " + LABEL[S.bucket]]);
@@ -95,10 +97,10 @@ routes.tasks = async function (page, params) {
     const b = e.target.closest("button"); if (!b) return;
     const k = b.parentNode.dataset.k;
     if (k === "date") { S.date_from = S.date_to = ""; } else S[k] = "";
-    ["assignee", "status", "bucket", "kind", "doc"].forEach(f => set("#f-" + f, S[f]));
+    ["unit", "assignee", "status", "bucket", "kind", "doc"].forEach(f => set("#f-" + f, S[f]));
     S.page = 1; load();
   };
-  ["assignee", "status", "bucket", "kind", "doc"].forEach(f => { const el = $("#f-" + f, page); if (el) el.onchange = () => { S[f] = el.value; if (f === "bucket") { S.date_from = S.date_to = ""; } S.page = 1; load(); }; });
+  ["unit", "assignee", "status", "bucket", "kind", "doc"].forEach(f => { const el = $("#f-" + f, page); if (el) el.onchange = () => { S[f] = el.value; if (f === "bucket") { S.date_from = S.date_to = ""; } S.page = 1; load(); }; });
   let qt; $("#q", page).oninput = e => { clearTimeout(qt); qt = setTimeout(() => { S.q = e.target.value.trim(); S.page = 1; load(); }, 280); };
   $$("th.s", page).forEach(th => th.onclick = () => { const k = th.dataset.s; if (S.sort === k) S.dir = S.dir === "asc" ? "desc" : "asc"; else { S.sort = k; S.dir = "asc"; } S.page = 1; load(); });
   const onKey = e => { if (e.key === "/" && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); $("#q", page).focus(); } };
@@ -120,7 +122,7 @@ routes.tasks = async function (page, params) {
   async function load() {
     const my = ++reqId;
     const rowsEl = $("#rows", page); rowsEl.style.opacity = ".45"; rowsEl.style.transition = "opacity .2s";
-    const q = { assignee: own ? "" : S.assignee, status: S.status, bucket: S.bucket, kind: S.kind, doc: S.doc, q: S.q, date_from: S.date_from, date_to: S.date_to, sort: S.sort, dir: S.dir, by: Z.by };
+    const q = { unit: own ? "" : S.unit, assignee: own ? "" : S.assignee, status: S.status, bucket: S.bucket, kind: S.kind, doc: S.doc, q: S.q, date_from: S.date_from, date_to: S.date_to, sort: S.sort, dir: S.dir, by: Z.by };
     history.replaceState(null, "", "#/tasks" + (qs(Object.assign({}, q, { page: S.page > 1 ? S.page : "" })) ? "?" + qs(Object.assign({}, q, { page: S.page > 1 ? S.page : "" })) : ""));
     exp.href = "/api/tasks.xlsx?" + qs(q);
     try { data = await api("/api/tasks?" + qs(Object.assign({}, q, { page: S.page, size: 50 }))); } catch (e) { toast(e.message, "error"); return; }
@@ -191,6 +193,7 @@ async function openTask(id, onChange) {
         <div><div class="k">Официальный срок</div><div class="v">${fdate(t.due)}</div></div>
         <div><div class="k">Дата закрытия</div>${admin ? `<div style="display:flex;gap:6px"><input type="date" id="e-close" value="${esc(t.close_date || "")}"><button class="btn sm" id="e-clear" title="Очистить" ${t.close_date ? "" : "disabled"}>${icon("x")}</button></div>` : `<div class="v">${fdate(t.close_date)}</div>`}</div>
         <div class="full"><div class="k">Ответственный</div>${admin ? `<select id="e-as"><option value="">— не назначен —</option>${people.map(p => `<option value="${p.id}"${p.id === t.assignee_id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select>` : `<div class="v" style="display:flex;gap:8px;align-items:center">${t.assignee_id ? avatar(t.assignee_id, t.assignee_name, "sm") + esc(t.assignee_name) : "Не назначен"}</div>`}
+          ${t.unit ? `<span class="hint">Отдел: ${esc(t.unit)}</span>` : ""}
           ${t.assignee_raw && t.assignee_raw !== t.assignee_name ? `<span class="hint">В выгрузке: ${esc(t.assignee_raw)}</span>` : ""}</div>
         <div class="full"><div class="k">Статус</div><div class="stbtns${admin ? "" : " ro"}" id="e-st">${stOpts.map(s => `<button type="button" class="${STK[s[0]]}${t.status === s[0] ? " on" : ""}" data-v="${s[0]}">${s[1]}</button>`).join("")}</div>${t.tag ? `<span class="hint">Пометка в выгрузке: ${esc(t.tag)}</span>` : ""}</div>
       </div>

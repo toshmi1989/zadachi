@@ -9,6 +9,21 @@ DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.dirna
 DB_PATH = os.path.join(DATA_DIR, "zadachi.db")
 TZ = timezone(timedelta(hours=5))  # Uzbekistan has no daylight saving time
 
+# The department's structure as given by the customer: (number, name, parent number). Seeded once; editable on the Settings page.
+UNITS_SEED = [
+    ("I", "Тиббий хизматлар бошқармаси", None),
+    ("1", "Туман (шаҳар) стационар тиббий хизматлари бўлими", "I"),
+    ("2", "Ихтисослашган тиббий хизматлар бўлими", "I"),
+    ("3", "Тез тиббий ёрдам бўлими", "I"),
+    ("4", "Экологик дипломатия ва тиббий туризмни ривожлантириш бўлими", "I"),
+    ("II", "Бирламчи тиббий-санитария ёрдамини ташкиллаштириш бошқармаси", None),
+    ("III", "Оналик ва болаликни муҳофаза қилиш бошқармаси", None),
+    ("1", "Оналик ва репродуктив саломатликни муҳофаза қилиш бўлими", "III"),
+    ("2", "Болалар саломатлиги бўлими", "III"),
+    ("IV", "Фармацевтика маҳсулотлари сиёсати бошқармаси", None),
+    ("V", "Тиббий реабилитация, паллиатив ёрдам ва ижтимоий ҳимояга муҳтож аҳолига тиббий хизматлар кўрсатишни мувофиқлаштириш бошқармаси", None),
+    ("VI", "Ташхислаш хизмати бўлими", None),
+]
 STATUSES = {"todo": "Не выполнено", "progress": "В работе", "done": "Выполнено", "info": "К сведению"}
 OPEN = ("todo", "progress")
 
@@ -24,6 +39,15 @@ def today() -> date:
 
 
 TABLES = """
+-- Structure of the department: managements (top level, roman numerals) and divisions inside them.
+CREATE TABLE IF NOT EXISTS units (
+    id INTEGER PRIMARY KEY,
+    num TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL,
+    parent_id INTEGER REFERENCES units(id),
+    sort INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1
+);
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     login TEXT NOT NULL UNIQUE,
@@ -41,7 +65,8 @@ CREATE TABLE IF NOT EXISTS users (
     remind_days TEXT NOT NULL DEFAULT '',
     remind_overdue INTEGER,
     notify_assign INTEGER NOT NULL DEFAULT 1,
-    pw_set INTEGER NOT NULL DEFAULT 0
+    pw_set INTEGER NOT NULL DEFAULT 0,
+    unit_id INTEGER REFERENCES units(id)
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
@@ -114,6 +139,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_events_task ON task_events(task_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_reminder_daily ON reminder_log(user_id, day, kind) WHERE kind IN ('digest','admin');
 CREATE INDEX IF NOT EXISTS idx_users_tg ON users(tg_chat_id);
+CREATE INDEX IF NOT EXISTS idx_users_unit ON users(unit_id);
+CREATE INDEX IF NOT EXISTS idx_units_parent ON units(parent_id);
 """
 # The change history and the audit log are append-only, enforced by the database itself.
 TRIGGERS = """
@@ -145,6 +172,7 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN remind_overdue INTEGER",
     "ALTER TABLE users ADD COLUMN notify_assign INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE users ADD COLUMN pw_set INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN unit_id INTEGER REFERENCES units(id)",
 ]
 # pw_set = somebody has issued this person a password (people created by the Excel import have none yet)
 BACKFILL_PW_SET = """UPDATE users SET pw_set=1 WHERE role='admin'
@@ -190,7 +218,28 @@ def init_db() -> None:
                     raise
         c.executescript(INDEXES)
         c.executescript(TRIGGERS)
+        seed_units(c)
         auth.ensure_admin(c)
+
+
+def seed_units(c) -> None:
+    """First start only (a flag, so a department that deleted everything is not refilled on the next restart)."""
+    if c.execute("SELECT 1 FROM settings WHERE key='units_seeded'").fetchone() or c.execute("SELECT 1 FROM units LIMIT 1").fetchone():
+        return
+    top = {}
+    for i, (num, name, parent) in enumerate(UNITS_SEED):
+        cur = c.execute("INSERT INTO units(num, name, parent_id, sort) VALUES (?,?,?,?)", (num, name, top.get(parent) if parent else None, i))
+        if parent is None:
+            top[num] = cur.lastrowid
+    c.execute("INSERT INTO settings(key, value) VALUES ('units_seeded', '1')")
+
+
+def unit_tree_ids(c, unit_id: int) -> list[int]:
+    """The unit and everything inside it (a management includes its divisions)."""
+    ids = [unit_id]
+    for r in c.execute("SELECT id FROM units WHERE parent_id=?", (unit_id,)):
+        ids.append(r["id"])
+    return ids
 
 
 def setting(key: str) -> str:

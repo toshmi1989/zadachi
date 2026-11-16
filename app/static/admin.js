@@ -3,26 +3,30 @@
 
 routes.users = async function (page) {
   if (!isAdmin()) throw new Error("Раздел доступен только администратору");
-  let items = (await api("/api/users")).items;
+  const first = await api("/api/users");
+  let items = first.items, units = first.units;
+  const unitOpts = () => [["", "— не указан —"]].concat(units.map(u => [String(u.id), (u.level ? "\u00a0\u00a0\u00a0" + u.num + ". " : u.num + " · ") + (u.name.length > 70 ? u.name.slice(0, 68) + "…" : u.name)]));
   page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Пользователи</h1><p>Сотрудники из выгрузки появляются здесь сами. Чтобы человек мог войти — выдайте ему пароль.</p></div>
     <button class="btn pri" id="add">${icon("plus")}Добавить пользователя</button></div><div class="ulist" id="ul"></div>`;
   const paint = () => {
     $("#ul", page).innerHTML = items.map((u, i) => `<div class="card ucard rise${u.active ? "" : " off"}" style="--i:${Math.min(i, 12) + 1}" data-id="${u.id}">
       <div class="hd">${avatar(u.id, u.name, "lg")}<div style="min-width:0"><b>${esc(u.name)}</b><small>${esc(u.login)} · <span class="chip ${u.role === "admin" ? "progress" : ""}" style="padding:1px 8px">${u.role === "admin" ? "Администратор" : "Пользователь"}</span>${u.active ? "" : " · отключён"}</small></div></div>
+      <div class="hint" style="min-height:20px;line-height:1.35" ${u.unit ? `data-tip="${esc(u.unit)}"` : ""}>${u.unit ? esc(u.unit.length > 64 ? u.unit.slice(0, 62) + "…" : u.unit) : '<span style="opacity:.6">Отдел не указан</span>'}</div>
       <div class="st"><span><b class="num">${u.open}</b>в работе</span><span><b class="num">${u.tasks}</b>всего задач</span></div>
       <div class="acts"><button class="btn sm" data-a="edit">Изменить</button><button class="btn sm" data-a="pw">${icon("key")}Выдать пароль</button>${u.tasks ? `<button class="btn sm" data-a="tasks">Задачи</button>` : ""}</div></div>`).join("");
   };
   paint();
-  const reload = async () => { items = (await api("/api/users")).items; Z.meta = null; paint(); };
+  const reload = async () => { const r = await api("/api/users"); items = r.items; units = r.units; Z.meta = null; paint(); };
   const showPw = (name, login, pw) => infoDialog("Пароль выдан", `<p class="mt">Покажите его сотруднику <b>${esc(name)}</b> (логин <b>${esc(login)}</b>). Пароль виден только сейчас — потом его можно только выдать заново.</p>
     <div class="pw"><span id="pwv">${esc(pw)}</span><button class="btn sm" id="cp">${icon("copy")}Копировать</button></div>`).then(() => {});
   $("#add", page).onclick = async () => {
     const r = await formDialog({ title: "Новый пользователь", ok: "Создать", fields: [
       { name: "name", label: "Имя (как в выгрузке Excel)", required: true, hint: "Например: Bilalov Baxodir Erkinovich. Задачи с таким именем привяжутся автоматически." },
       { name: "login", label: "Логин", required: true, hint: "Латиница, цифры, точка, дефис" },
+      { name: "unit", label: "Отдел", type: "select", value: "", options: unitOpts() },
       { name: "role", label: "Роль", type: "select", value: "user", options: [["user", "Пользователь — видит дашборд"], ["admin", "Администратор — управляет всем"]] },
       { name: "password", label: "Пароль", type: "text", hint: "Оставьте пустым — система придумает сама" }],
-      submit: d => api("/api/users", { method: "POST", json: d }).then(res => Object.assign(res, { _d: d })) });
+      submit: d => api("/api/users", { method: "POST", json: Object.assign({}, d, { unit_id: d.unit ? +d.unit : null }) }).then(res => Object.assign(res, { _d: d })) });
     if (!r) return;
     await reload();
     if (r.linked_tasks) toast(`Привязано задач из выгрузки: ${r.linked_tasks}`);
@@ -43,9 +47,10 @@ routes.users = async function (page) {
     const r = await formDialog({ title: "Изменить: " + u.login, fields: [
       { name: "name", label: "Имя", value: u.name, required: true },
       { name: "excel_name", label: "Имя в выгрузке Excel", value: u.excel_name, hint: "Если в файле оно записано иначе, чем выше" },
+      { name: "unit", label: "Отдел", type: "select", value: u.unit_id ? String(u.unit_id) : "", options: unitOpts() },
       { name: "role", label: "Роль", type: "select", value: u.role, options: [["user", "Пользователь"], ["admin", "Администратор"]] },
       { name: "active", label: "Доступ", type: "select", value: u.active ? "1" : "0", options: [["1", "Активен"], ["0", "Отключён (войти нельзя, задачи остаются)"]] }],
-      submit: d => api("/api/users/" + u.id, { method: "PATCH", json: Object.assign({}, d, { active: d.active === "1" }) }) });
+      submit: d => api("/api/users/" + u.id, { method: "PATCH", json: Object.assign({}, d, { active: d.active === "1", unit_id: d.unit ? +d.unit : null }) }) });
     if (r) { toast("Сохранено"); reload(); }
   };
 };
@@ -107,13 +112,35 @@ routes.settings = async function (page) {
     <div class="card rise" style="--i:1;max-width:760px"><div class="card-head"><div><h2>Что видит пользователь</h2><p class="sub">Администратор всегда видит и редактирует всё.</p></div></div><div class="opts" id="opts">${opts.map(o => `<button class="opt${s.users_tasks === o[0] ? " on" : ""}" data-v="${o[0]}"><span class="rd" style="margin-top:2px"></span><div><b>${o[1]}</b><span>${o[2]}</span></div></button>`).join("")}</div></div>
     <div class="card rise" style="--i:2;max-width:760px;margin-top:16px"><div class="card-head"><div><h2>${icon("users")}Страница входа</h2><p class="sub">Можно выбрать себя из списка и ввести только пароль.</p></div></div>
       <div class="row" style="padding-top:0"><div class="lb"><b>Показывать список сотрудников</b><span>Имена видны любому, кто откроет страницу входа. Администраторы в список не попадают, они вводят логин. Выключите, если имена сотрудников не должны быть видны посторонним.</span></div><label class="sw"><input type="checkbox" id="ll"${s.login_list ? " checked" : ""}><span class="trk"><i></i></span></label></div></div>
-    <div class="card rise" style="--i:3;max-width:760px;margin-top:16px"><div class="card-head"><div><h2>${icon("db")}Резервные копии</h2><p class="sub">Автоматически каждые 6 часов, хранятся 14 последних — на этом же сервере.</p></div><button class="btn" id="bk">Сделать копию сейчас</button></div>
+    <div class="card rise" style="--i:3;max-width:760px;margin-top:16px" id="units-card"></div>
+    <div class="card rise" style="--i:4;max-width:760px;margin-top:16px"><div class="card-head"><div><h2>${icon("db")}Резервные копии</h2><p class="sub">Автоматически каждые 6 часов, хранятся 14 последних — на этом же сервере.</p></div><button class="btn" id="bk">Сделать копию сейчас</button></div>
       <p id="bkinfo">${b.ok ? `Последняя копия проверена: <b>${esc(b.file)}</b> · задач внутри: ${b.tasks}` : `<span style="color:var(--c-overdue)">${esc(b.error || "копия не проверена")}</span>`}</p>
       <p class="hint">Копии лежат в папке данных (<code>/data/backups</code>). Периодически копируйте её на другой компьютер — иначе потеря сервера уносит и копии.</p></div>`;
   $("#opts", page).onclick = async e => {
     const o = e.target.closest(".opt"); if (!o || o.classList.contains("on")) return;
     try { await api("/api/settings", { method: "PUT", json: { users_tasks: o.dataset.v } }); $$(".opt", page).forEach(x => x.classList.toggle("on", x === o)); toast("Сохранено"); } catch (er) { toast(er.message, "error"); }
   };
+  /* structure of the department */
+  const uc = $("#units-card", page);
+  async function paintStructure() {
+    const items = (await api("/api/units")).items;
+    uc.innerHTML = `<div class="card-head"><div><h2>${icon("stack")}Структура департамента</h2><p class="sub">Управления и отделы. К ним привязываются сотрудники (страница «Пользователи»), по ним строится дашборд.</p></div><button class="btn sm" id="u-add">${icon("plus")}Управление</button></div>` +
+      items.map(u => `<div class="unit-row ${u.level ? "kid" : "mgmt"}${u.active ? "" : " off"}" data-id="${u.id}"><span class="unum">${esc(u.num)}</span><span class="nm">${esc(u.name)}</span><span class="ppl">${u.people ? u.people + " " + plural(u.people, "сотрудник", "сотрудника", "сотрудников") : ""}</span>
+        <span class="acts"><button class="btn sm" data-a="ren">Изменить</button>${u.level ? "" : `<button class="btn sm" data-a="add">+ Отдел</button>`}<button class="btn sm" data-a="vis">${u.active ? "Скрыть" : "Показать"}</button>${u.people || items.some(x => x.parent_id === u.id) ? "" : `<button class="btn sm danger" data-a="del">Удалить</button>`}</span></div>`).join("");
+    const ask = (title, fields, submit) => formDialog({ title, fields, submit });
+    $("#u-add", uc).onclick = async () => { if (await ask("Новое управление", [{ name: "name", label: "Название", required: true }, { name: "num", label: "Номер", hint: "Пусто — следующий римский номер" }], d => api("/api/units", { method: "POST", json: d }))) { Z.meta = null; toast("Управление добавлено"); paintStructure(); } };
+    uc.onclick = async e => {
+      const b = e.target.closest("[data-a]"); if (!b) return;
+      const u = items.find(x => x.id === +b.closest(".unit-row").dataset.id);
+      let ok = false;
+      if (b.dataset.a === "ren") ok = await ask("Изменить", [{ name: "num", label: "Номер", value: u.num }, { name: "name", label: "Название", value: u.name, required: true }], d => api("/api/units/" + u.id, { method: "PATCH", json: d }));
+      else if (b.dataset.a === "add") ok = await ask("Новый отдел в «" + (u.name.length > 40 ? u.name.slice(0, 38) + "…" : u.name) + "»", [{ name: "name", label: "Название", required: true }, { name: "num", label: "Номер", hint: "Пусто — следующий по порядку" }], d => api("/api/units", { method: "POST", json: Object.assign({}, d, { parent_id: u.id }) }));
+      else if (b.dataset.a === "vis") { try { await api("/api/units/" + u.id, { method: "PATCH", json: { active: !u.active } }); ok = true; } catch (er) { toast(er.message, "error"); } }
+      else if (b.dataset.a === "del") { if (await formDialog({ title: "Удалить «" + u.name.slice(0, 50) + "»?", text: "Это нельзя отменить. Удалить можно только пустой отдел; иначе скройте его.", ok: "Удалить", fields: [] })) { try { await api("/api/units/" + u.id, { method: "DELETE" }); ok = true; } catch (er) { toast(er.message, "error"); } } }
+      if (ok) { Z.meta = null; toast("Сохранено"); paintStructure(); }
+    };
+  }
+  await paintStructure();
   $("#ll", page).onchange = async e => { try { await api("/api/settings", { method: "PUT", json: { login_list: e.target.checked } }); toast(e.target.checked ? "Список на странице входа включён" : "Список на странице входа выключен"); } catch (er) { toast(er.message, "error"); e.target.checked = !e.target.checked; } };
   $("#bk", page).onclick = async ev => {
     ev.target.disabled = true;
