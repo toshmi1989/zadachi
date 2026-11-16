@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.0.1
+// @version      1.0.2
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -109,7 +109,7 @@
     document_type_id: null, from_due_date: null, to_due_date: null, document_from_date: null, document_to_date: null, undistributed_tasks: false, seen: null,
     main_recipient: false, is_rayosat: false, not_rayosat: false, tasks: [], due_date_sort: null, active_state_high_org_id: null, repeatable: false, recipient_user_id: null };
   const rid = () => Array.from({ length: 24 }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
-  const toMs = v => { if (v == null) return null; if (typeof v === "number") return v < 1e11 ? Math.round(v * 1000) : Math.round(v); if (v instanceof Date) return v.getTime(); const t = Date.parse(v); return isNaN(t) ? null : t; };
+  const toMs = v => { if (v == null) return null; if (typeof v === "string" && /^\d{10,13}$/.test(v)) v = Number(v); if (typeof v === "number") return v < 1e11 ? Math.round(v * 1000) : Math.round(v); if (v instanceof Date) return v.getTime(); const t = Date.parse(v); return isNaN(t) ? null : t; };
   const pick = (o, keys) => { for (const k of keys) if (o && o[k] !== undefined && o[k] !== null) return o[k]; return undefined; };
   const listOf = r => {
     if (Array.isArray(r)) return r;
@@ -155,17 +155,30 @@
       if (!res.ok) throw new Error("ijro ответил " + res.status);
       return decode(new Uint8Array(await res.arrayBuffer()));
     }
-    async function find(code, section) {
+    /* The site's list does not repeat the code of the task in its elements, but it filters by it (task_code) on the server. So a
+       single hit for a full code IS that task. Several hits mean the filter was loose: ask again with the strict flag. An element
+       that does carry a different code than the one asked for is rejected. */
+    const ownCode = it => { for (const k of ["task_code", "code", "taskCode"]) if (typeof it[k] === "string") return it[k]; return ""; };
+    async function find(code, section, info) {
       const s = getSession();
-      const body = Object.assign({}, DEFAULT_BODY, s.template || {}, { limit: 20, offset: 0, statuses: [], type_ids: section.type_ids, task_code: code, year: null, strict_search: false,
-        recipient_db_id: s.recipientDb, document_number: null, document_type_id: null, from_due_date: null, to_due_date: null, document_from_date: null, document_to_date: null, tasks: [] });
-      if (!body.recipient_db_id) throw new SessionError("Не удалось узнать вашу организацию: откройте на сайте раздел «Топшириқлар», дождитесь списка и повторите.");
-      const items = listOf(await call("/task/v2/list-by-recipient", body));
-      return items.find(it => hasCode(it, code)) || null;
+      const ask = async strict => {
+        const body = bodyFor(code, section, { strict_search: strict });
+        if (!body.recipient_db_id) throw new SessionError("Не удалось узнать вашу организацию: откройте на сайте раздел «Топшириқлар», дождитесь списка и повторите.");
+        return listOf(await call("/task/v2/list-by-recipient", body)).filter(it => !ownCode(it) || ownCode(it).toUpperCase() === code.toUpperCase());
+      };
+      let items = await ask(false);
+      if (items.length > 1) { if (info) info.ambiguous = items.length; items = await ask(true); }
+      if (items.length > 1) { const exact = items.filter(it => hasCode(it, code)); items = exact.length === 1 ? exact : []; }
+      return items[0] || null;
+    }
+    async function card(recipientId) {   // the card of a task: whether it is secret (the list does not say)
+      const r = await call("/task/get-one", { recipient_id: recipientId });
+      const flag = o => { const w = (x, d) => { if (!x || typeof x !== "object" || d > 3) return false; if (x.is_secret === true) return true; return Object.keys(x).some(k => w(x[k], d + 1)); }; return w(o, 0); };
+      return { is_secret: flag(r), raw: r };
     }
     const answers = async recipientId => listOf(await call("/task-requests/list", { recipient_id: recipientId, period_id: null }));
     const bodyFor = (code, section, over) => { const s = getSession(); return Object.assign({}, DEFAULT_BODY, s.template || {}, { limit: 20, offset: 0, statuses: [], type_ids: section.type_ids, task_code: code, year: null, strict_search: false, recipient_db_id: s.recipientDb, document_number: null, document_type_id: null, from_due_date: null, to_due_date: null, document_from_date: null, document_to_date: null, tasks: [] }, over || {}); };
-    return { call, raw, find, answers, bodyFor };
+    return { call, raw, find, answers, bodyFor, card };
   }
 
   function snapshotOf(code, sectionId, it, answerList, loaded) {
@@ -174,7 +187,7 @@
     return {
       code, found: true, section: sectionId, recipient_id: String(pick(it, ["id", "recipient_id"]) ?? ""), status: num(it.status), is_done: !!it.is_done,
       overdue: (() => { const v = pick(it, ["overdue", "is_overdue", "expired"]); return v === undefined ? null : !!v; })(),
-      repeatable: !!(it.repeatable), due_ms: toMs(it.due_date), done_ms: toMs(it.done_at), periods, is_secret: !!it.is_secret, answers_loaded: !!loaded,
+      repeatable: !!(it.repeatable), due_ms: toMs(pick(it, ["task_due_date_ms", "due_date"])), done_ms: toMs(it.done_at), periods, is_secret: !!it.is_secret, answers_loaded: !!loaded,
       answers: (answerList || []).slice(-30).map(a => ({ sender_type: num(a.sender_type), state: num(a.state), active: !!a.active,
         at_ms: toMs(pick(a, ["created_at", "date", "sent_at", "updated_at", "created"])), text: String(pick(a, ["comment", "text", "description", "content", "message", "note"]) ?? "").slice(0, 600) })),
     };
@@ -202,9 +215,15 @@
         if (!it) buffer.push({ code: t.code, found: false });
         else {
           found++;
-          let ans = [], loaded = false;
-          if (it.status !== 0 || it.is_done || it.repeatable) { ans = await client.answers(it.id ?? it.recipient_id).catch(e => { if (e instanceof SessionError || e instanceof RateError) throw e; return []; }); loaded = true; await sleep(delay); }
-          buffer.push(snapshotOf(t.code, sec.id, it, ans, loaded));
+          let ans = [], loaded = false, secret = !!it.is_secret;
+          if (it.status !== 0 || it.is_done || it.repeatable) {
+            const id = it.id ?? it.recipient_id;
+            // when the card cannot be read the task is treated as secret: no answer text is copied
+            try { secret = secret || (await client.card(id)).is_secret; } catch (e) { if (e instanceof SessionError || e instanceof RateError) throw e; secret = true; }
+            await sleep(delay);
+            ans = await client.answers(id).catch(e => { if (e instanceof SessionError || e instanceof RateError) throw e; return []; }); loaded = true; await sleep(delay);
+          }
+          buffer.push(Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded), { is_secret: secret }));
         }
         done++;
         if (onProgress) onProgress({ done, total: job.items.length, found });
@@ -216,6 +235,7 @@
   }
 
   /* what the answers look like, without any values that could be personal: names of fields and their types */
+  const ownCodeOf = it => { for (const k of ["task_code", "code", "taskCode"]) if (typeof it[k] === "string") return it[k]; return ""; };
   const shapeDeep = (v, depth) => {
     if (v === null) return "null"; if (v instanceof Uint8Array) return "bytes";
     if (Array.isArray(v)) return depth > 0 && v.length ? { "array": v.length, "first": shapeDeep(v[0], depth - 1) } : "array(" + v.length + ")";
@@ -230,11 +250,14 @@
     const out = { script: "1.0.1", session: session ? { has_session_id: !!session.id, year: session.year, has_recipient_db_id: !!session.recipientDb, page_template_seen: !!session.template, template_keys: session.template ? Object.keys(session.template) : [] } : null, job_items: job.items.length, probes: [] };
     for (const t of job.items.slice(0, 15)) {
       for (const s of job.sections) {
-        const it = await client.find(t.code, s);
+        const info = {};
+        const it = await client.find(t.code, s, info);
         if (it) {
-          const ans = await client.answers(it.id ?? it.recipient_id).catch(() => []);
+          const id = it.id ?? it.recipient_id;
+          const ans = await client.answers(id).catch(e => [{ error: String(e.message || e) }]);
+          const cardRes = await client.card(id).then(c => ({ ok: true, is_secret: c.is_secret, shape: shapeDeep(c.raw, 2) }), e => ({ ok: false, error: String(e.message || e) }));
           const per = Array.isArray(it.repeat_periods) && it.repeat_periods[0] ? shapeDeep(it.repeat_periods[0], 1) : null;
-          return Object.assign(out, { found: true, section: s.id, code_path: codePath(it, t.code), item: shapeDeep(it, 2), repeat_period: per, answers_count: ans.length, answer: shapeDeep(ans[0], 2) });
+          return Object.assign(out, { found: true, section: s.id, matched_by: ownCodeOf(it) ? "code_in_item" : "server_filter", ambiguous: info.ambiguous || 0, item: shapeDeep(it, 2), repeat_period: per, card: cardRes, answers_count: ans.length, answer: shapeDeep(ans[0], 3) });
         }
       }
     }

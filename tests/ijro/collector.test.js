@@ -24,9 +24,9 @@ ok(core.decode(core.decode(Buffer.concat([Buffer.from([0x91]), date]))[0] === 17
 const DAY = 86400000, due = Date.UTC(2026, 11, 1), ext = ms => { const b = Buffer.alloc(10); b[0] = 0xd7; b[1] = 13; b.writeDoubleBE(ms, 2); return b; };
 // the date goes through the encoder as a number; the fake swaps it for ExtType 13 after encoding by using this marker
 const DATE = ms => ({ __date: ms });
-const item = (id, code, status, extra) => Object.assign({ id, task_code: code, status, is_done: false, overdue: false, repeatable: 0, due_date: DATE(due), done_at: null, total: "7" }, extra || {});
+const item = (id, code, status, extra) => Object.assign({ id, recipient_id: id, _code: code, status, is_done: false, overdue: false, repeatable: 0, due_date: null, task_due_date_ms: String(due), done_at: null, total: "1" }, extra || {});
 const DATA = {
-  president: [item("r-xpg", "XPG5469", 2), item("r-sec", "SEC0001", 20, { is_done: true, is_secret: true, done_at: DATE(due - DAY) }),
+  president: [item("r-xpg", "XPG5469", 2), item("r-sec", "SEC0001", 20, { is_done: true, done_at: DATE(due - DAY) }),
     item("r-rep", "REP0001", 0, { repeatable: 1, repeat_periods: [{ id: "p1", due_date: DATE(due), order_index: 1, status: 10, recipient_status: 20 }, { id: "p2", due_date: DATE(due + 90 * DAY), order_index: 2, status: 0, recipient_status: 0 }] }),
     item("r-unk", "UNK0001", 1)],
   government: [item("r-vmk", "VMK3541", 21, { is_done: true, done_at: DATE(due + 3 * DAY) })],
@@ -55,11 +55,15 @@ const fake = http.createServer((req, res) => {
       if (body.recipient_db_id !== "ORG1") return send(200, []);
       if (body.task_code === "REP0001" && flaky++ === 0) return send(429);
       const sec = Object.keys(typeIdsOf).find(s => body.type_ids.includes(typeIdsOf[s][0]));
-      const hit = (DATA[sec] || []).filter(i => i.task_code === body.task_code);
+      const strip = i => { const { _code, ...rest } = i; return layout === "coded" ? Object.assign(rest, { task_code: _code }) : rest; };
+      const hit = (DATA[sec] || []).filter(i => i._code === body.task_code);
+      if (layout === "multi" && hit.length) return send(201, body.strict_search ? hit.map(strip) : [hit[0], Object.assign({}, hit[0], { id: "r-other" })].map(strip));
+      if (layout === "wrongcode") return send(201, hit.map(i => Object.assign(strip(i), { task_code: "AAA0000" })));
       if (layout === "empty") return send(201, { data: [], total: 0 });
-      if (layout === "nested") return send(201, { data: hit.map(i => ({ id: i.id, status: i.status, is_done: i.is_done, task: { task_code: i.task_code, name: "x" } })), total: hit.length });
-      return send(201, hit);
+      if (layout === "nested") return send(201, { data: hit.map(i => ({ id: i.id, status: i.status, is_done: i.is_done, task: { task_code: i._code, name: "x" } })), total: hit.length });
+      return send(201, hit.map(strip));
     }
+    if (req.url.endsWith("/task/get-one")) return send(201, { id: body.recipient_id, name: "x", task: { is_secret: body.recipient_id === "r-sec" } });
     if (req.url.endsWith("/task-requests/list")) return send(201, ANSWERS[body.recipient_id] || []);
     send(404);
   });
@@ -127,8 +131,16 @@ const fake = http.createServer((req, res) => {
   const x2 = await admin("GET", "/api/tasks/" + id("XPG5469"));
   ok(evil.stored === 1 && !x2.site.found, "a malformed record is stored harmlessly (not found), nothing is executed");
   const diag = await core.diagnose({ server, client: mk() });
-  ok(diag.found && diag.code_path === "task_code" && diag.item.status !== undefined && !JSON.stringify(diag).includes("Ответ исполнителя"), "diagnostics describes fields without leaking text");
+  ok(diag.found && diag.matched_by === "server_filter" && diag.item.status !== undefined && diag.card.ok && !JSON.stringify(diag).includes("Ответ исполнителя"), "diagnostics: found by the server filter, card read, no text leaked");
 
+  // the site's list does not carry the code: a single hit for the code is the task; loose filters and wrong codes are handled
+  layout = "multi";
+  const info = {}; const strictOne = await mk().find("XPG5469", { id: "president", type_ids: typeIdsOf.president }, info);
+  ok(strictOne && info.ambiguous === 2 && strictOne.id === "r-xpg", "two hits for a loose filter: asks again with the strict flag and takes the single one");
+  layout = "wrongcode";
+  ok((await mk().find("XPG5469", { id: "president", type_ids: typeIdsOf.president })) === null, "an element that carries a different code than the one asked for is rejected");
+  layout = "normal";
+  ok(core.toMs("1764547200000") === 1764547200000 && core.toMs(1764547200) === 1764547200000 && core.toMs(null) === null, "dates as 13-digit strings (task_due_date_ms) and seconds are understood");
   // another layout of the answer: the list wrapped in {data, total}, the code one level deeper
   layout = "nested";
   const nested = await mk().find("XPG5469", { id: "president", type_ids: typeIdsOf.president });
