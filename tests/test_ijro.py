@@ -62,7 +62,7 @@ def test_ordinary_user_cannot_touch_sync(admin):
     for method, path in (("get", "/api/sync/review"), ("get", "/api/sync/keys"), ("post", "/api/sync/keys"), ("post", "/api/sync/apply"), ("put", "/api/sync/settings")):
         assert getattr(u, method)(path).status_code == 403, path
     tid = admin.get("/api/tasks?q=SY0000").json()["items"][0]["id"]
-    assert "site" not in u.get(f"/api/tasks/{tid}").json()                                                   # what the site says is for administrators
+    assert u.get(f"/api/tasks/{tid}").status_code == 200                                                     # their own task (what the site says about it: tested below)
 
 
 def test_ingest_validates_and_never_creates_tasks(admin, key):
@@ -179,3 +179,50 @@ def test_resume_skips_what_was_just_checked(admin, key):
     rest = {i["code"] for i in anon.get("/api/sync/job?resume=1", headers=bearer(key)).json()["items"]}
     assert "SY0001" not in rest and "SY0002" not in rest and rest                                           # checked a moment ago: skipped; never checked tasks stay
     assert "SY0001" in {i["code"] for i in anon.get("/api/sync/job", headers=bearer(key)).json()["items"]}  # a normal run reads everything again
+
+
+# ---------------------------------------------------------------- what an employee sees of the site
+
+def _employee(admin):
+    uid = [u for u in admin.get("/api/users").json()["items"] if u["login"] == "sync.p"][0]["id"]
+    pw = admin.post(f"/api/users/{uid}/password", json={}).json()["password"]
+    c = TestClient(app)
+    c.post("/login", data={"login": "sync.p", "password": pw})
+    return c, uid
+
+
+def test_employee_sees_the_site_status_of_own_tasks_without_the_official_term(admin, key):
+    import json
+    from datetime import datetime, timezone
+    emp, _ = _employee(admin)
+    ms = lambda y, m, d: int(datetime(y, m, d, tzinfo=timezone.utc).timestamp() * 1000)
+    # SY0002 has the official term 31.12.2026 (see ROWS); the site says: periodic, the period of that term is open
+    periods = [{"order": 1, "status": 10, "recipient_status": 20, "due_ms": ms(2026, 9, 30)}, {"order": 2, "status": 0, "recipient_status": 0, "due_ms": ms(2026, 12, 31)}]
+    TestClient(app).post("/api/sync/ingest", json={"items": [item("SY0002", status=0, is_done=False, repeatable=True, periods=periods, answers_loaded=True,
+                         answers=[{"sender_type": 10, "state": 1, "at_ms": ms(2026, 11, 10), "text": "Ответ исполнителя"}])]}, headers=bearer(key))
+    tid = admin.get("/api/tasks?q=SY0002").json()["items"][0]["id"]
+    a = admin.get(f"/api/tasks/{tid}").json()["site"]
+    e = emp.get(f"/api/tasks/{tid}").json()["site"]
+    assert "31.12.2026" in a["label"]                                                                         # the administrator sees the period's date
+    assert "31.12.2026" not in json.dumps(e) and "2026-12-31" not in json.dumps(e) and e["label"].startswith("Период 2 из 2 не выполнен")
+    assert e["answers"][0]["text"] == "Ответ исполнителя" and e["link"].startswith("https://edo.ijro.uz/") and e["checked_at"]
+    assert "31.12.2026" not in emp.get(f"/api/tasks/{tid}").text.replace("Срок", "")                           # nowhere else in the card either
+    row = [t for t in emp.get("/api/tasks?q=SY0002").json()["items"]][0]
+    assert row["site"] and row["site"]["link"] and "31.12.2026" not in json.dumps(row["site"])
+    # the answer to a status change carries it too
+    r = emp.patch(f"/api/tasks/{tid}", json={"status": "progress"}).json()
+    assert r["site"] and "31.12.2026" not in json.dumps(r["site"])
+
+
+def test_employee_gets_nothing_about_other_peoples_tasks(admin, key):
+    emp, _ = _employee(admin)
+    other = admin.get("/api/tasks?q=AAA0003").json()["items"][0]["id"]                                         # not theirs
+    assert emp.get(f"/api/tasks/{other}").status_code == 404
+    admin.put("/api/settings", json={"users_tasks": "all"})                                                    # even when they may read every task
+    try:
+        got = emp.get(f"/api/tasks/{other}").json()
+        assert "site" not in got or got["site"] is None
+        assert all(t["site"] is None or t["can_edit"] for t in emp.get("/api/tasks?size=200").json()["items"] if "site" in t)
+        assert all("site" not in t for t in emp.get("/api/tasks?size=200").json()["items"] if not t["can_edit"])
+    finally:
+        admin.put("/api/settings", json={"users_tasks": "own"})

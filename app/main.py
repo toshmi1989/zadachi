@@ -281,10 +281,9 @@ def api_tasks(request: Request, page: int = 1, size: int = 50):
     c = connect()
     try:
         out = tasks.list_tasks(c, filters(request), me(request), scope == "own", limit=size, offset=(max(page, 1) - 1) * size) | {"page": max(page, 1), "size": size}
-        if me(request)["role"] == "admin":
-            ijro.brief(c, out["items"])
         for t in out["items"]:
             t["can_edit"] = me(request)["role"] == "admin" or t["assignee_id"] == me(request)["id"]
+        ijro.brief(c, [t for t in out["items"] if t["can_edit"]], me(request)["role"] == "admin")
         return out
     finally:
         c.close()
@@ -325,9 +324,9 @@ def api_task(request: Request, task_id: int, by: str = "close"):
     try:
         out = tasks.get_task(c, task_id, me(request), scope == "own", "due" if by == "due" else "close")
         out["can_edit"] = me(request)["role"] == "admin" or out["assignee_id"] == me(request)["id"]
-        if me(request)["role"] == "admin":   # what the site says is for administrators only
+        if out["can_edit"]:   # what the site says: for administrators and for the employee a task belongs to (not the official term)
             snap = c.execute("SELECT * FROM ijro_snapshots WHERE task_id=?", (task_id,)).fetchone()
-            out["site"] = ijro.site_info(snap, out["status"], out["due"]) if snap else None
+            out["site"] = ijro.site_info(snap, out["status"], out["due"], me(request)["role"] == "admin") if snap else None
         return out
     finally:
         c.close()
@@ -381,9 +380,8 @@ async def api_task_update(request: Request, task_id: int):
             audit(c, "task.update", "task", task_id, changes | {"by_role": user["role"]})
         out = tasks.get_task(c, task_id, user, False)
         out["can_edit"] = True
-        if user["role"] == "admin":
-            snap = c.execute("SELECT * FROM ijro_snapshots WHERE task_id=?", (task_id,)).fetchone()
-            out["site"] = ijro.site_info(snap, out["status"], out["due"]) if snap else None
+        snap = c.execute("SELECT * FROM ijro_snapshots WHERE task_id=?", (task_id,)).fetchone()
+        out["site"] = ijro.site_info(snap, out["status"], out["due"], user["role"] == "admin") if snap else None
     if user["role"] == "admin" and changed and before and out["assignee_id"] and out["assignee_id"] != before["assignee_id"] and out["assignee_id"] != user["id"]:
         reminders.notify_assigned([(task_id, out["assignee_id"])])
     return out | {"changed": changed}

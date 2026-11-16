@@ -95,7 +95,7 @@ def current_period(periods: list[dict], due: str | None):
     return periods[-1]
 
 
-def classify(snap, due: str | None = None) -> dict:
+def classify(snap, due: str | None = None, dates: bool = True) -> dict:
     """What the site says, in our terms. Conservative: an unknown status never changes anything. A periodic task has one general
     status for all its periods (it stays 'in work' until the last one), so it is judged by the period of our deadline.
     Returns {status: our status or None, label, note, known}."""
@@ -107,7 +107,7 @@ def classify(snap, due: str | None = None) -> dict:
         cur = current_period(periods, due)
         n, k = len(periods), (cur.get("order") or periods.index(cur) + 1)
         when = _day(cur.get("due_ms"))
-        tail = f" (срок {when.strftime('%d.%m.%Y')})" if when else ""
+        tail = f" (срок {when.strftime('%d.%m.%Y')})" if when and dates else ""   # the date of a period is the official term: only administrators see it
         if all(p.get("recipient_status") == 20 for p in periods):
             return {"status": "done", "label": "Выполнена (все периоды)", "note": f"Периодов: {n}", "known": True}
         if cur.get("recipient_status") == 20:
@@ -148,9 +148,9 @@ def answers_out(snap) -> list[dict]:
     return out
 
 
-def site_info(snap, our_status: str, due: str | None = None) -> dict:
-    """The block 'С ijro.uz' of a task card (administrators only)."""
-    cl = classify(snap, due)
+def site_info(snap, our_status: str, due: str | None = None, admin: bool = True) -> dict:
+    """The block 'С ijro.uz' of a task card: for administrators, and for the employee a task is assigned to (without the official term)."""
+    cl = classify(snap, due, dates=admin)
     diff = bool(cl["status"] and cl["status"] != our_status and our_status != "info")
     return {"found": bool(snap["found"]), "section": snap["section"], "section_name": (SECTION_BY_ID.get(snap["section"]) or {}).get("name", ""),
             "label": cl["label"], "note": cl["note"], "known": cl["known"], "proposed": cl["status"],
@@ -262,8 +262,8 @@ def apply(c, task_ids: list[int], user_id: int) -> dict:
     return {"applied": applied, "skipped": skipped}
 
 
-def brief(c, items: list[dict]) -> None:
-    """Adds a short 'site' note to the rows of the task list (administrators): the link and whether the site disagrees."""
+def brief(c, items: list[dict], admin: bool = True) -> None:
+    """Adds a short 'site' note to the rows of the task list: the link and whether the site disagrees. An employee gets it for their own tasks only."""
     if not items:
         return
     ids = [t["id"] for t in items]
@@ -273,7 +273,7 @@ def brief(c, items: list[dict]) -> None:
         if not r:
             t["site"] = None
             continue
-        info = site_info(r, t["status"], t["due"])
+        info = site_info(r, t["status"], t["due"], admin)
         t["site"] = {"found": info["found"], "label": info["label"], "diff": info["diff"], "link": info["link"], "exact": info["exact_link"],
                      "site_open_we_done": info["site_open_we_done"], "checked_at": info["checked_at"]}
 

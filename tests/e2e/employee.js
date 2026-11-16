@@ -13,6 +13,11 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   const give = list.filter(t => !/DON/.test(t.code)).slice(0, 2).map(t => t.id);
   await api("POST", "/api/tasks/bulk", { ids: give, assignee_id: other.id });
   const pw = (await api("POST", `/api/users/${me.id}/password`, {})).password;
+  // the site says something about one of their tasks (as the collector would send it)
+  const key = (await api("POST", "/api/sync/keys", { name: "e2e" })).key;
+  const mineCode = list.filter(t => !give.includes(t.id) && !/DON/.test(t.code))[0].code;
+  await fetch(BASE + "/api/sync/ingest", { method: "POST", headers: { authorization: "Bearer " + key, "content-type": "application/json" }, body: JSON.stringify({ items: [{ code: mineCode, found: true, section: "government", recipient_id: "a1b2c3d4e5f6a1b2c3d4e5f6", status: 2, is_done: false, answers_loaded: true,
+    answers: [{ sender_type: 10, state: 1, at_ms: 1763251200000, text: "Ответ исполнителя по задаче" }, { sender_type: 29, state: -1, at_ms: 1763337600000, text: "Возврат на доработку" }] }] }) });
 
   const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } }); const p = await ctx.newPage();
   p.on("pageerror", e => errs.push(e.message)); p.on("console", m => { if (m.type() === "error" && !/403|404/.test(m.text())) errs.push(m.text()); });
@@ -27,6 +32,17 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   ok(await p.locator("#f-assignee").count() === 0 && await p.locator("#f-unit").count() === 0 && await p.locator(".cb").count() === 0, "no filters by people, no checkboxes, no bulk");
   const quick = await p.locator("[data-quick]").count(); ok(quick === 6, "a quick 'done' button on each of their 6 open tasks (the done one has none): " + quick);
   await p.screenshot({ path: OUT + "/110-employee-list.png" });
+  // what the official site says about their own task
+  const mine = p.locator("#rows tr", { hasText: mineCode });
+  ok(/на сайте: Ответ дан/.test(await mine.textContent()), "the list shows what the site says about their own task");
+  ok(await mine.locator("a.ext").count() === 1, "the code is a link to ijro for their own task");
+  await mine.locator("td:nth-child(3)").click(); await p.waitForSelector(".drawer.on .site-box"); await p.waitForTimeout(700);
+  const box = await p.textContent(".site-box");
+  ok(/Ответ дан, идёт согласование/.test(box) && /Ответы на сайте \(2\)/.test(box) && /Возврат на доработку/.test(box), "the card shows the site's status and the answers");
+  ok(await p.locator("#site-apply").count() === 0 && !/Синхронизация/.test(await p.textContent(".drawer")), "no administrator controls in that block");
+  ok(/у вас/.test(box), "the wording is addressed to the employee ('у вас')");
+  await p.screenshot({ path: OUT + "/113-employee-site.png" });
+  await p.keyboard.press("Escape"); await p.waitForTimeout(500);
   // quick done and undo
   const row = p.locator("#rows tr[data-id]").first(); const rid = await row.getAttribute("data-id");
   await row.locator("[data-quick]").click(); await p.waitForSelector(".toast button"); await p.waitForTimeout(700);
@@ -40,7 +56,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   ok((await p.locator("#e-st button").allTextContents()).join("|") === "Не выполнено|В работе|Выполнено", "three statuses, no 'К сведению'");
   ok(!(await p.getAttribute("#e-st", "class")).includes("ro"), "the status buttons are active");
   await p.click('#e-st button[data-v="progress"]'); await p.waitForTimeout(900);
-  ok((await p.textContent("#e-st button.on")) === "В работе" && /Test Person/.test(await p.textContent(".tl")), "status saved, the history names the employee");
+  ok((await p.textContent("#e-st button.on")) === "В работе" && /Test Person/.test(await p.locator(".tl").last().textContent()), "status saved, the history names the employee");
   ok(!/Официальный срок/.test(await p.textContent(".drawer")), "the official term is still hidden");
   await p.screenshot({ path: OUT + "/111-employee-card.png" });
   await p.keyboard.press("Escape"); await p.waitForTimeout(500);

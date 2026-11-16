@@ -110,12 +110,12 @@ routes.tasks = async function (page, params) {
     const who = t.assignee_id ? `<span class="who">${avatar(t.assignee_id, t.assignee_name, "sm")}${esc(t.assignee)}</span>` : '<span class="who none">Не назначен</span>';
     return `<tr data-id="${t.id}" style="--i:${Math.min(i, 24)}" tabindex="0">
       ${admin ? `<td class="c-cb"><input type="checkbox" class="cb" aria-label="Выбрать"></td>` : ""}
-      <td class="code num">${t.num || ""}<br>${admin && t.site && t.site.link ? `<a class="ext" href="${esc(t.site.link)}" target="_blank" rel="noopener noreferrer" data-ext ${t.site.exact ? "" : `data-copycode="${esc(t.code)}"`} data-tip="${t.site.exact ? "Открыть задачу на ijro.uz" : "Откроется раздел на ijro, а код задачи скопируется: вставьте его в поиск"}">${esc(t.code)}${icon("ext")}</a>` : esc(t.code)}</td>
+      <td class="code num">${t.num || ""}<br>${t.site && t.site.link ? `<a class="ext" href="${esc(t.site.link)}" target="_blank" rel="noopener noreferrer" data-ext ${t.site.exact ? "" : `data-copycode="${esc(t.code)}"`} data-tip="${t.site.exact ? "Открыть задачу на ijro.uz" : "Откроется раздел на ijro, а код задачи скопируется: вставьте его в поиск"}">${esc(t.code)}${icon("ext")}</a>` : esc(t.code)}</td>
       <td class="doc"><b>${esc(t.doc_no)}</b><small>${esc(t.kind)}${t.doc_date ? " · " + fdate(t.doc_date) : ""}</small></td>
       <td>${t.point ? `<span class="pt">${esc(t.point)}</span>` : ""}<div class="tx">${esc(t.text)}</div></td>
       <td>${who}</td><td>${deadlineCell(t)}</td>
       ${admin ? `<td>${t.close_date ? fdate(t.close_date) : '<span style="color:var(--text-3)">—</span>'}</td>` : ""}
-      <td>${statusChip(t)}${t.tag ? `<div class="hint" style="margin-top:3px">${esc(t.tag)}</div>` : ""}${admin && t.site && t.site.diff ? `<div style="margin-top:4px"><span class="chip done" data-tip="По данным ijro (проверено ${esc(t.site.checked_at.slice(0, 16))}). Применить можно в разделе «Синхронизация» или в карточке.">на сайте: ${esc(t.site.label)}</span></div>` : ""}${admin && t.site && t.site.site_open_we_done ? '<div style="margin-top:4px"><span class="chip overdue" data-tip="У нас выполнена, а на сайте ещё нет">на сайте не закрыта</span></div>' : ""}</td>
+      <td>${statusChip(t)}${t.tag ? `<div class="hint" style="margin-top:3px">${esc(t.tag)}</div>` : ""}${t.site && t.site.diff ? `<div style="margin-top:4px"><span class="chip done" data-tip="По данным ijro (проверено ${esc(t.site.checked_at.slice(0, 16))}).${admin ? " Применить можно в разделе «Синхронизация» или в карточке." : ""}">на сайте: ${esc(t.site.label)}</span></div>` : ""}${t.site && t.site.site_open_we_done ? '<div style="margin-top:4px"><span class="chip overdue" data-tip="У нас отмечена выполненной, а на сайте ещё нет">на сайте не закрыта</span></div>' : ""}</td>
       <td class="c-q">${t.can_edit && (t.status === "todo" || t.status === "progress") ? `<button class="quick" data-quick aria-label="Отметить выполненной" data-tip="Отметить выполненной">${icon("check")}</button>` : ""}</td></tr>`;
   }
   const flashId = { v: 0 };
@@ -199,7 +199,7 @@ async function openTask(id, onChange) {
           ${t.assignee_raw && t.assignee_raw !== t.assignee_name ? `<span class="hint">В выгрузке: ${esc(t.assignee_raw)}</span>` : ""}</div>
         <div class="full"><div class="k">Статус${!admin && t.can_edit ? ' <span class="hint" style="font-weight:400">· вы можете менять статус своей задачи</span>' : ""}</div><div class="stbtns${canStatus ? "" : " ro"}" id="e-st">${stOpts.filter(s => admin || s[0] !== "info" || t.status === "info").map(s => `<button type="button" class="${STK[s[0]]}${t.status === s[0] ? " on" : ""}" data-v="${s[0]}">${s[1]}</button>`).join("")}</div>${t.tag ? `<span class="hint">Пометка в выгрузке: ${esc(t.tag)}</span>` : ""}</div>
       </div>
-      ${admin ? siteBlock(t) : ""}
+      ${siteBlock(t, admin)}
       <div class="sec-t">История изменений</div>
       ${t.events.length ? `<div class="tl">${t.events.map(e => `<div class="ev"><b>${FIELD[e.field] || esc(e.field)}:</b> ${e.old ? esc(e.old) : "—"} → <b>${e.new ? esc(e.new) : "—"}</b><br><small>${esc(e.who || "система")} · ${esc(e.created_at.slice(0, 16))}</small></div>`).join("")}</div>` : '<p class="hint">Изменений пока не было.</p>'}`;
     const save = async (patch, ok) => {
@@ -221,16 +221,16 @@ async function openTask(id, onChange) {
 
 
 /* the block "С ijro.uz" in a task card (administrators): what the site says, the answers, the link */
-function siteBlock(t) {
+function siteBlock(t, admin) {
   const s = t.site;
-  if (!s) return `<div class="sec-t">С ijro.uz</div><p class="hint">Эту задачу ещё не проверяли. Запустите синхронизацию (<a href="#/sync">раздел «Синхронизация»</a>).</p>`;
+  if (!s) return admin ? `<div class="sec-t">С ijro.uz</div><p class="hint">Эту задачу ещё не проверяли. Запустите синхронизацию (<a href="#/sync">раздел «Синхронизация»</a>).</p>` : "";
   const head = !s.found ? `<span class="chip week">Не найдена на сайте</span>` : `<span class="chip ${s.proposed === "done" ? "done" : s.proposed === "progress" ? "progress" : "todo"}">${esc(s.label)}</span>`;
   return `<div class="sec-t">С ijro.uz</div>
     <div class="site-box"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${head}<span class="hint">проверено ${esc(s.checked_at.slice(0, 16))}</span>
       <a class="btn sm" style="margin-left:auto" href="${esc(s.link)}" target="_blank" rel="noopener noreferrer" ${s.exact_link ? "" : `data-copycode="${esc(t.code)}"`}>${icon("ext")}${s.exact_link ? "Открыть задачу на ijro" : "Открыть раздел и скопировать код"}</a></div>
       ${s.note ? `<p class="hint" style="margin:8px 0 0">${esc(s.note)}</p>` : ""}
-      ${s.diff ? `<div class="warn" style="margin-top:10px">${icon("info")}<span>На сайте: <b>${esc(s.proposed_label)}</b>, у нас: <b>${esc(ST[t.status])}</b>.</span><button class="btn sm pri" id="site-apply" style="margin-left:auto">Применить</button></div>` : ""}
-      ${s.site_open_we_done ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>У нас задача выполнена, а на сайте ещё нет: возможно, ответ не отправлен или не принят.</span></div>` : ""}
+      ${s.diff ? `<div class="warn" style="margin-top:10px">${icon("info")}<span>На сайте: <b>${esc(s.proposed_label)}</b>, ${admin ? "у нас" : "у вас"}: <b>${esc(ST[t.status])}</b>.</span>${admin ? '<button class="btn sm pri" id="site-apply" style="margin-left:auto">Применить</button>' : ""}</div>` : ""}
+      ${s.site_open_we_done ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>${admin ? "У нас" : "У вас"} задача отмечена выполненной, а на сайте ещё нет: возможно, ответ не отправлен или не принят.</span></div>` : ""}
       ${s.secret ? '<p class="hint" style="margin:8px 0 0">Задача помечена секретной: тексты ответов не копируются в платформу.</p>' : ""}
       ${s.answers.length ? `<div class="sec-t" style="margin-top:14px">Ответы на сайте (${s.answers.length})</div><div class="tl">${s.answers.map(a => `<div class="ev"><b>${esc(a.type)}</b>${a.state === -1 ? ' <span class="chip overdue" style="padding:0 7px">отклонён</span>' : ""}<br>${a.text ? `<span>${esc(a.text.length > 280 ? a.text.slice(0, 278) + "…" : a.text)}</span><br>` : ""}<small>${esc(a.at)}</small></div>`).join("")}</div>` : ""}</div>`;
 }
