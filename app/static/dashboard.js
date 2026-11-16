@@ -298,6 +298,10 @@ routes.dashboard = async function (page) {
   page.insertAdjacentHTML("beforeend", `
     <section class="card rise" style="--i:10;margin-bottom:16px"><div class="card-head"><div><h2>Сотрудники × сроки</h2><p class="sub">Точные цифры. Чем насыщеннее цвет, тем больше задач в столбце. Нажмите на ячейку — откроется список.</p></div></div>
       <div class="tablewrap"><table class="mx" id="mx"></table></div></section>`);
+  /* "Сотрудники × сроки" stands right under "Отделы × типы документов" */
+  const mxSection = $("#mx", page).closest("section");
+  mxSection.style.setProperty("--i", 7);
+  umSection.after(mxSection);
   const colMax = {}; MCOL.forEach(([k]) => colMax[k] = Math.max(1, ...people.map(p => p[k])));
   function paintMatrix() {
     const pc = Z.mode === "pct";
