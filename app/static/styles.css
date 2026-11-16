@@ -475,3 +475,10 @@ table.um{min-width:760px}
 .um tr.mgmt .pname span{font-weight:700}
 .um tr.kid .pname span{font-weight:500}
 .um tr.mgmt.none .pname span{font-weight:500}
+
+/* ───────── users: status badges and filter ───────── */
+.ufilter{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+.ufilter .hint b{color:var(--text)}
+.badges{display:flex;flex-wrap:wrap;gap:6px}
+.badges .chip{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:760px){#uflt{width:100%}#uflt .seg{width:100%}#uflt .seg button{flex:1;padding:6px 6px;font-size:12px}}

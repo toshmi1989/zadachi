@@ -254,3 +254,13 @@ def test_buttons_stranger_and_digest_markup(admin, sidorov):
 def test_unlink_removes_keyboard():
     FAKE.push(CHAT + 1, "/unlink"); telegram.poll_once()
     assert FAKE.last_markup(CHAT + 1) == {"remove_keyboard": True}
+
+
+def test_users_list_shows_telegram_state_without_leaking_chat_ids(admin, sidorov):
+    link = sidorov.post("/api/telegram/link").json()
+    FAKE.push(CHAT + 7, f"/start {link['code']}", "sidor_tg"); telegram.poll_once()
+    u = [x for x in admin.get("/api/users").json()["items"] if x["id"] == sidorov.uid][0]
+    assert u["tg_linked"] and u["tg_username"] == "sidor_tg" and u["remind"] and u["pw_set"]
+    assert str(CHAT + 7) not in str(admin.get("/api/users").json())                   # only "linked or not" leaves the server
+    sidorov.post("/api/telegram/unlink")
+    assert not [x for x in admin.get("/api/users").json()["items"] if x["id"] == sidorov.uid][0]["tg_linked"]

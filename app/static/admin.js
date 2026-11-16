@@ -7,11 +7,29 @@ routes.users = async function (page) {
   let items = first.items, units = first.units;
   const unitOpts = () => [["", "— не указан —"]].concat(units.map(u => [String(u.id), (u.level ? "\u00a0\u00a0\u00a0" + u.num + ". " : u.num + " · ") + (u.name.length > 70 ? u.name.slice(0, 68) + "…" : u.name)]));
   page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Пользователи</h1><p>Сотрудники из выгрузки появляются здесь сами. Чтобы человек мог войти — выдайте ему пароль.</p></div>
-    <button class="btn pri" id="add">${icon("plus")}Добавить пользователя</button></div><div class="ulist" id="ul"></div>`;
+    <button class="btn pri" id="add">${icon("plus")}Добавить пользователя</button></div>
+    <div class="ufilter rise" style="--i:1"><div id="usum" class="hint"></div><div id="uflt"></div></div><div class="ulist" id="ul"></div>`;
+  let flt = "all";
+  const FILTERS = { all: () => true, notg: u => !u.tg_linked, nounit: u => !u.unit_id && u.role !== "admin",   // administrators do not need a department nopw: u => !u.pw_set };
+  function paintFilter() {
+    const act = items.filter(u => u.active), n = f => act.filter(FILTERS[f]).length;
+    $("#usum", page).innerHTML = `Telegram привязан: <b>${act.length - n("notg")}</b> из ${act.length} · отдел указан: <b>${act.filter(u => u.role !== "admin").length - n("nounit")}</b> из ${act.filter(u => u.role !== "admin").length} · пароль выдан: <b>${act.length - n("nopw")}</b> из ${act.length}`;
+    const box = $("#uflt", page); box.innerHTML = "";
+    box.appendChild(seg([["all", "Все · " + items.length], ["notg", "Без Telegram · " + n("notg")], ["nounit", "Без отдела · " + n("nounit")], ["nopw", "Без пароля · " + n("nopw")]], flt, v => { flt = v; paint(); }));
+  }
+  const badges = u => [
+    u.tg_linked ? `<span class="chip ${u.remind ? "done" : "info"}" data-tip="${u.remind ? "Telegram привязан, напоминания включены" : "Telegram привязан, но напоминания выключены самим человеком"}"><i class="d"></i>Telegram${u.tg_username ? " @" + esc(u.tg_username) : ""}${u.remind ? "" : " · напоминания выкл"}</span>`
+      : '<span class="chip todo" data-tip="Не привязал Telegram: напоминаний в боте не получает"><i class="d"></i>Нет Telegram</span>',
+    u.unit ? `<span class="chip progress" data-tip="${esc(u.unit)}"><i class="d"></i>${esc(u.unit.length > 34 ? u.unit.slice(0, 32) + "…" : u.unit)}</span>`
+      : u.role === "admin" ? "" : '<span class="chip week" data-tip="Не внесён ни в один отдел: его задачи попадают в строку «Без отдела»"><i class="d"></i>Отдел не указан</span>',
+    u.pw_set ? "" : '<span class="chip overdue" data-tip="Пароль ещё не выдан: войти он не может"><i class="d"></i>Пароль не выдан</span>',
+  ].join("");
   const paint = () => {
-    $("#ul", page).innerHTML = items.map((u, i) => `<div class="card ucard rise${u.active ? "" : " off"}" style="--i:${Math.min(i, 12) + 1}" data-id="${u.id}">
+    paintFilter();
+    const list = items.filter(FILTERS[flt]);
+    $("#ul", page).innerHTML = !list.length ? '<div class="card empty" style="grid-column:1/-1"><div class="big">🎉</div><b>Здесь никого нет</b><p>По этому условию все в порядке.</p></div>' : list.map((u, i) => `<div class="card ucard rise${u.active ? "" : " off"}" style="--i:${Math.min(i, 12) + 1}" data-id="${u.id}">
       <div class="hd">${avatar(u.id, u.name, "lg")}<div style="min-width:0"><b>${esc(u.name)}</b><small>${esc(u.login)} · <span class="chip ${u.role === "admin" ? "progress" : ""}" style="padding:1px 8px">${u.role === "admin" ? "Администратор" : "Пользователь"}</span>${u.active ? "" : " · отключён"}</small></div></div>
-      <div class="hint" style="min-height:20px;line-height:1.35" ${u.unit ? `data-tip="${esc(u.unit)}"` : ""}>${u.unit ? esc(u.unit.length > 64 ? u.unit.slice(0, 62) + "…" : u.unit) : '<span style="opacity:.6">Отдел не указан</span>'}</div>
+      <div class="badges">${badges(u)}</div>
       <div class="st"><span><b class="num">${u.open}</b>в работе</span><span><b class="num">${u.tasks}</b>всего задач</span></div>
       <div class="acts"><button class="btn sm" data-a="edit">Изменить</button><button class="btn sm" data-a="pw">${icon("key")}Выдать пароль</button>${u.tasks ? `<button class="btn sm" data-a="tasks">Задачи</button>` : ""}</div></div>`).join("");
   };

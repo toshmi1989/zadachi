@@ -363,7 +363,8 @@ async def api_task_bulk(request: Request):
 def user_row(r) -> dict:
     return {"id": r["id"], "login": r["login"], "name": r["name"], "short": auth.short_name(r["name"]), "role": r["role"],
             "active": bool(r["active"]), "excel_name": r["excel_name"], "tasks": r["n"], "open": r["o"],
-            "unit_id": r["unit_id"], "unit": r["unit_name"] or "", "pw_set": bool(r["pw_set"])}
+            "unit_id": r["unit_id"], "unit": r["unit_name"] or "", "pw_set": bool(r["pw_set"]),
+            "tg_linked": bool(r["tg_chat_id"]), "tg_username": r["tg_username"], "remind": bool(r["remind"])}
 
 
 USERS_SQL = """SELECT u.*, (SELECT name FROM units WHERE id=u.unit_id) unit_name, (SELECT COUNT(*) FROM tasks WHERE assignee_id=u.id) n,
