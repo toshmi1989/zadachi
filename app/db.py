@@ -32,7 +32,15 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL DEFAULT 'user',
     active INTEGER NOT NULL DEFAULT 1,
     excel_name TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT ''
+    created_at TEXT NOT NULL DEFAULT '',
+    tg_chat_id TEXT NOT NULL DEFAULT '',
+    tg_username TEXT NOT NULL DEFAULT '',
+    tg_code TEXT NOT NULL DEFAULT '',
+    tg_code_exp TEXT NOT NULL DEFAULT '',
+    remind INTEGER NOT NULL DEFAULT 1,
+    remind_days TEXT NOT NULL DEFAULT '',
+    remind_overdue INTEGER,
+    notify_assign INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
@@ -76,6 +84,18 @@ CREATE TABLE IF NOT EXISTS imports (
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- What the bot sent and when. One digest per person per day is guaranteed by the unique index below.
+CREATE TABLE IF NOT EXISTS reminder_log (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    ok INTEGER NOT NULL DEFAULT 1,
+    count INTEGER NOT NULL DEFAULT 0,
+    overdue INTEGER NOT NULL DEFAULT 0,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY,
     user_id INTEGER,
@@ -91,6 +111,8 @@ INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_events_task ON task_events(task_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_reminder_daily ON reminder_log(user_id, day, kind) WHERE kind IN ('digest','admin');
+CREATE INDEX IF NOT EXISTS idx_users_tg ON users(tg_chat_id);
 """
 # The change history and the audit log are append-only, enforced by the database itself.
 TRIGGERS = """
@@ -99,7 +121,28 @@ CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit BEGIN SELECT
 CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT, 'Журнал неизменяем'); END;
 """
 
-DEFAULT_SETTINGS = {"users_tasks": "all"}  # what role "user" may see: all tasks (read-only) | own | none
+DEFAULT_SETTINGS = {
+    "users_tasks": "all",         # what role "user" may see: all tasks (read-only) | own | none
+    "rem_enabled": "1",           # Telegram reminders on/off for everyone
+    "rem_time": "09:00",          # Tashkent time of the daily digest
+    "rem_weekdays": "1,2,3,4,5",  # ISO weekdays the digest is sent on
+    "rem_days": "7,3,1,0",        # warn this many days before the term (0 = on the day)
+    "rem_overdue": "1",           # repeat overdue tasks every N days (0 = never)
+    "rem_by": "close",            # which term the reminders use: close | due
+    "rem_admin": "1",             # summary for administrators
+    "rem_max": "15",              # tasks listed in one message
+    "public_url": "",             # site address for links in messages
+}
+MIGRATIONS = [
+    "ALTER TABLE users ADD COLUMN tg_chat_id TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN tg_username TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN tg_code TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN tg_code_exp TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN remind INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE users ADD COLUMN remind_days TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN remind_overdue INTEGER",
+    "ALTER TABLE users ADD COLUMN notify_assign INTEGER NOT NULL DEFAULT 1",
+]
 
 
 def connect() -> sqlite3.Connection:
@@ -130,6 +173,12 @@ def init_db() -> None:
 
     with tx() as c:
         c.executescript(TABLES)
+        for stmt in MIGRATIONS:
+            try:
+                c.execute(stmt)
+            except sqlite3.OperationalError as e:  # "duplicate column name": already there
+                if "duplicate column" not in str(e):
+                    raise
         c.executescript(INDEXES)
         c.executescript(TRIGGERS)
         auth.ensure_admin(c)
@@ -142,6 +191,17 @@ def setting(key: str) -> str:
     finally:
         c.close()
     return r["value"] if r else DEFAULT_SETTINGS.get(key, "")
+
+
+def all_settings(c) -> dict:
+    out = dict(DEFAULT_SETTINGS)
+    out.update({r["key"]: r["value"] for r in c.execute("SELECT key, value FROM settings") if r["key"] in DEFAULT_SETTINGS})
+    return out
+
+
+def put_settings(c, values: dict) -> None:
+    for k, v in values.items():
+        c.execute("INSERT INTO settings(key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, str(v)))
 
 
 def audit(c: sqlite3.Connection, action: str, entity: str = "", entity_id: int | None = None, details: dict | None = None) -> None:

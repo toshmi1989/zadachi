@@ -77,7 +77,7 @@ const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++
 
   // role user
   const u = await mk(); await login(u, "test.user", pw);
-  ok(await u.locator("#tabs a").count() === 2, "user sees only Dashboard and Tasks");
+  ok(await u.locator("#tabs a").count() === 3, "user sees Dashboard, Tasks and Reminders");
   await u.click('.kpi[data-k="overdue"]'); await u.waitForSelector("#rows tr[data-id]");
   ok(await u.locator(".cb").count() === 0 && await u.locator("[data-quick]").count() === 0, "no edit controls for a user");
   await u.locator("#rows tr[data-id]").first().click(); await u.waitForSelector(".drawer.on"); await u.waitForTimeout(600);
@@ -87,7 +87,7 @@ const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++
   ok((await u.request.get(`${BASE}/api/users`)).status() === 403, "API refuses /api/users for a user");
   await p.goto(BASE + "/#/settings"); await p.click('.opt[data-v="none"]'); await p.waitForTimeout(500);
   await u.goto(BASE + "/#/dashboard"); await u.reload(); await u.waitForSelector(".kpi"); await u.waitForTimeout(800);
-  ok(await u.locator("#tabs a").count() === 1, "setting 'only dashboard' hides Tasks");
+  ok(await u.locator("#tabs a").count() === 2, "setting only-dashboard hides Tasks");
   ok((await u.request.get(`${BASE}/api/tasks`)).status() === 403, "API refuses the list under 'only dashboard'");
   await p.click('.opt[data-v="all"]'); await p.waitForTimeout(400);
 

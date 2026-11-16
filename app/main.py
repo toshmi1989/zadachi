@@ -11,7 +11,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, backup, importer, stats, tasks
+from . import auth, backup, importer, reminders, stats, tasks, telegram
 from .db import STATUSES, audit, connect, init_db, now, setting, tx
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -24,6 +24,7 @@ async def lifespan(_app):
     init_db()
     if os.environ.get("ZADACHI_NO_BACKUP") != "1":
         backup.start()
+    telegram.start()
     yield
 
 
@@ -31,7 +32,7 @@ app = FastAPI(title="Zadachi", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 OPEN_PATHS = ("/healthz", "/login")
-ADMIN_ONLY = re.compile(r"^/api/(users|import|settings|backup|audit)(/|$)")
+ADMIN_ONLY = re.compile(r"^/api/(users|import|settings|backup|audit|reminders/(settings|preview|run|log))(/|$)")
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -279,10 +280,13 @@ async def api_task_update(request: Request, task_id: int):
     if not changes:
         bad("Нечего менять")
     with tx() as c:
+        before = c.execute("SELECT assignee_id FROM tasks WHERE id=?", (task_id,)).fetchone()
         changed = tasks.update_task(c, task_id, changes, me(request)["id"])
         if changed:
             audit(c, "task.update", "task", task_id, changes)
         out = tasks.get_task(c, task_id, me(request), False)
+    if changed and before and out["assignee_id"] and out["assignee_id"] != before["assignee_id"] and out["assignee_id"] != me(request)["id"]:
+        reminders.notify_assigned([(task_id, out["assignee_id"])])
     return out | {"changed": changed}
 
 
@@ -297,11 +301,17 @@ async def api_task_bulk(request: Request):
     changes = {k: b[k] for k in EDITABLE if k in b}
     if not changes:
         bad("Нечего менять")
-    n = 0
+    n, assigned = 0, []
     with tx() as c:
         for i in ids:
+            old = c.execute("SELECT assignee_id FROM tasks WHERE id=?", (i,)).fetchone()
             n += tasks.update_task(c, i, changes, me(request)["id"])
+            new = c.execute("SELECT assignee_id FROM tasks WHERE id=?", (i,)).fetchone()
+            if old and new and new["assignee_id"] and new["assignee_id"] != old["assignee_id"] and new["assignee_id"] != me(request)["id"]:
+                assigned.append((i, new["assignee_id"]))
         audit(c, "task.bulk", "task", None, {"ids": len(ids), "changed": n, **changes})
+    if assigned:
+        reminders.notify_assigned(assigned)
     return {"changed": n, "total": len(ids)}
 
 
@@ -486,5 +496,133 @@ def api_audit(limit: int = 100):
         return {"items": [dict(r) for r in c.execute(
             """SELECT a.id, a.action, a.entity, a.entity_id, a.details, a.ip, a.created_at, u.name AS who
                FROM audit a LEFT JOIN users u ON u.id=a.user_id ORDER BY a.id DESC LIMIT ?""", (max(1, min(limit, 500)),))]}
+    finally:
+        c.close()
+
+
+# ---------------------------------------------------------------- Telegram and reminders
+
+def _tg_state(uid: int) -> dict:
+    c = connect()
+    try:
+        u = c.execute("SELECT tg_chat_id, tg_username, tg_code_exp FROM users WHERE id=?", (uid,)).fetchone()
+    finally:
+        c.close()
+    return {"configured": telegram.configured(), "bot": telegram.bot_username() if telegram.configured() else "", "linked": bool(u["tg_chat_id"]),
+            "username": u["tg_username"], "error": setting("tg_error") if telegram.configured() else "",
+            "running": bool(setting("tg_seen")) and telegram.configured()}
+
+
+@app.get("/api/telegram")
+def api_telegram(request: Request):
+    return _tg_state(me(request)["id"])
+
+
+@app.post("/api/telegram/link")
+def api_telegram_link(request: Request):
+    if not telegram.configured():
+        bad("Бот не подключён: администратору нужно указать TELEGRAM_BOT_TOKEN в .env на сервере")
+    res = telegram.new_link_code(me(request)["id"])
+    if not res["url"]:
+        bad("Не удалось связаться с Telegram. Проверьте токен бота и доступ сервера к api.telegram.org")
+    return res
+
+
+@app.post("/api/telegram/unlink")
+def api_telegram_unlink(request: Request):
+    with tx() as c:
+        c.execute("UPDATE users SET tg_chat_id='', tg_username='', tg_code='', tg_code_exp='' WHERE id=?", (me(request)["id"],))
+        audit(c, "telegram.unlink", "user", me(request)["id"], {"by": "site"})
+    return {"ok": True}
+
+
+@app.post("/api/telegram/test")
+def api_telegram_test(request: Request):
+    c = connect()
+    try:
+        u = c.execute("SELECT tg_chat_id FROM users WHERE id=?", (me(request)["id"],)).fetchone()
+    finally:
+        c.close()
+    if not u["tg_chat_id"]:
+        bad("Сначала привяжите Telegram")
+    ok, err = telegram.send(u["tg_chat_id"], "✅ <b>Проверка связи</b>\nНапоминания о задачах будут приходить сюда.")
+    if not ok:
+        bad("Не отправилось: " + err, 502)
+    return {"ok": True}
+
+
+def _my_reminders(uid: int) -> dict:
+    c = connect()
+    try:
+        u = c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        g = reminders.global_cfg(c)
+    finally:
+        c.close()
+    return {"mine": reminders.user_cfg(u, g), "defaults": {k: g[k] for k in ("enabled", "time", "weekdays", "days", "overdue", "by")}}
+
+
+@app.get("/api/reminders/me")
+def api_reminders_me(request: Request):
+    return _my_reminders(me(request)["id"])
+
+
+@app.put("/api/reminders/me")
+async def api_reminders_me_put(request: Request):
+    b = await _json(request)
+    sets, vals = [], []
+    if "remind" in b:
+        sets.append("remind=?"); vals.append(int(bool(b["remind"])))
+    if "notify_assign" in b:
+        sets.append("notify_assign=?"); vals.append(int(bool(b["notify_assign"])))
+    if "days" in b:   # null = "like everyone"
+        sets.append("remind_days=?"); vals.append("" if b["days"] is None else ",".join(map(str, reminders.parse_days(b["days"]))))
+    if "overdue" in b:
+        if b["overdue"] is not None and b["overdue"] not in reminders.OVERDUE_CHOICES:
+            bad("Недопустимая частота напоминаний о просрочке")
+        sets.append("remind_overdue=?"); vals.append(b["overdue"])
+    if sets:
+        with tx() as c:
+            c.execute(f"UPDATE users SET {', '.join(sets)} WHERE id=?", (*vals, me(request)["id"]))
+    return _my_reminders(me(request)["id"])
+
+
+@app.get("/api/reminders/settings")
+def api_reminders_settings():
+    return reminders.global_cfg()
+
+
+@app.put("/api/reminders/settings")
+async def api_reminders_settings_put(request: Request):
+    b = await _json(request)
+    try:
+        values = reminders.validate_global(b)
+    except (ValueError, TypeError) as e:
+        bad(str(e) or "Неверное значение")
+    with tx() as c:
+        from .db import put_settings
+        put_settings(c, values)
+        audit(c, "settings.reminders", "settings", None, values)
+    return reminders.global_cfg()
+
+
+@app.get("/api/reminders/preview")
+def api_reminders_preview():
+    return {"items": reminders.run_due(dry=True, force=True), "config": reminders.global_cfg()}
+
+
+@app.post("/api/reminders/run")
+def api_reminders_run(request: Request):
+    res = reminders.run_due(force=True)
+    with tx() as c:
+        audit(c, "reminders.run", "reminders", None, {"sent": sum(1 for r in res if r["status"] == "sent")})
+    return {"items": [{k: v for k, v in r.items() if k != "text"} for r in res]}
+
+
+@app.get("/api/reminders/log")
+def api_reminders_log():
+    c = connect()
+    try:
+        return {"items": [dict(r) for r in c.execute("""SELECT l.day, l.kind, l.ok, l.count, l.detail, l.created_at, u.name FROM reminder_log l
+                                                       JOIN users u ON u.id=l.user_id WHERE l.detail != 'nothing to send' ORDER BY l.id DESC LIMIT 30""")]}
     finally:
         c.close()
