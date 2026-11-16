@@ -194,10 +194,11 @@ routes.dashboard = async function (page) {
     <section class="card rise" style="--i:8;margin-bottom:16px"><div class="card-head"><div><h2>Нагрузка по отделам</h2>
       <p class="sub">Сроки по задачам каждого отдела. У управления — сумма с его отделами. Нажмите на цвет — увидите эти задачи.</p></div></div>
       <div class="people" id="ubars"></div></section>`);
-  /* the department matrix is the block right under the KPI cards, above the workload per person */
+  /* the department matrix stands right under "Нагрузка по отделам" */
   const umSection = $("#um", page).closest("section");
-  umSection.style.setProperty("--i", 6); umSection.style.marginBottom = "16px";
-  $(".kpis", page).after(umSection);
+  const ubarsSection = $("#ubars", page).closest("section");
+  umSection.style.setProperty("--i", 8); umSection.style.marginBottom = "16px";
+  ubarsSection.after(umSection);
   $("#um-ctl", page).appendChild(seg(METRICS, metric, v => { metric = v; try { localStorage.setItem("umMetric", v); } catch (e) {} paintUnits(); }));
   const unitLabel = r => (r.num ? (r.level ? r.num + ". " : r.num + " · ") : "") + r.name;
   function paintUnits() {
@@ -305,10 +306,10 @@ routes.dashboard = async function (page) {
   page.insertAdjacentHTML("beforeend", `
     <section class="card rise" style="--i:10;margin-bottom:16px"><div class="card-head"><div><h2>Сотрудники × сроки</h2><p class="sub" id="mx-sub"></p></div><div id="mx-ctl"></div></div>
       <div class="tablewrap"><table class="mx" id="mx"></table></div></section>`);
-  /* "Сотрудники × сроки" stands right under "Отделы × типы документов" */
+  /* "Сотрудники × сроки" stands right under the KPI cards */
   const mxSection = $("#mx", page).closest("section");
-  mxSection.style.setProperty("--i", 7);
-  umSection.after(mxSection);
+  mxSection.style.setProperty("--i", 6);
+  $(".kpis", page).after(mxSection);
   $("#mx-ctl", page).appendChild(seg([["all", "Всего"]].concat(d.months.map(m => [m, monthLabel(m)])), period, v => { period = v; try { localStorage.setItem("mxPeriod", v); } catch (e) {} paintMatrix(); }));
   const monthBounds = (ym, a, b) => { const last = new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate(); return { date_from: `${ym}-${String(a).padStart(2, "0")}`, date_to: `${ym}-${String(Math.min(b, last)).padStart(2, "0")}` }; };
   function paintMatrix() {
