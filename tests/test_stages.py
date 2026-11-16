@@ -186,3 +186,21 @@ def test_status_one_with_answers_means_in_work(admin, key):
     push(key, "ST0003", [10, 25], 1)
     t = admin.get(f"/api/tasks/{uid}").json()
     assert t["status"] == "done" and t["site"]["site_open_we_done"] is True                  # not reverted by itself: only flagged
+
+
+def test_the_main_label_does_not_say_approval_when_the_task_is_back_with_us():
+    # status 2 stays on the site after an answer, after a return (29) and after the Chamber's request (49): the stage decides what is said
+    for types, want in (([10, 25, 35, 49], "Вернулась от Счётной палаты"), ([10, 29], "Вернулась к вам"), ([10, 25], "Ответ дан, идёт согласование"), ([10, 25, 35], "Ответ дан, идёт согласование")):
+        s = snap(types, 2)
+        cl, st, label, note = ijro.shown(s, None)
+        assert label.startswith(want), (types, label)
+    cl, st, label, note = ijro.shown(snap([10, 25, 35, 49], 2), None)
+    assert cl["status"] == "progress" and "ждёт вашего ответа" in label and "НЕ выполнена" in note        # the proposed status is unchanged: still "in work"
+
+
+def test_the_card_and_the_review_use_the_same_words(admin, key):
+    push(key, "ST0001", [10, 25, 35, 49], 2, due=ms(2027, 3, 1))
+    t = task(admin, "ST0001")
+    full = admin.get(f"/api/tasks/{t['id']}").json()
+    assert full["site"]["label"].startswith("Вернулась от Счётной палаты") and "согласование" not in full["site"]["label"]
+    assert task(admin, "ST0001")["site"]["label"].startswith("Вернулась")

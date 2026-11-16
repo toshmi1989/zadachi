@@ -297,17 +297,28 @@ def answers_out(snap) -> list[dict]:
     return out
 
 
+def shown(snap, due: str | None, dates: bool = True) -> tuple[dict, dict, str, str]:
+    """(classification, stage, label, note) as they are shown. The site's number 2 stays after an answer, after a return (29) and after the
+    Chamber's request (49) alike, so the number alone says "the answer is being approved" also when the task is back with us. Then the stage speaks."""
+    cl, st = classify(snap, due, dates=dates), stage_of(snap, due, dates=dates)
+    label, note = cl["label"], cl["note"]
+    if cl["status"] == "progress" and st["code"] in ("info", "returned", "chamber_other"):
+        label = {"info": "Вернулась от Счётной палаты — ждёт вашего ответа", "returned": "Вернулась к вам — ждёт вашего ответа", "chamber_other": "Ответ Счётной палаты: проверьте на сайте"}[st["code"]]
+        note = st["hint"]
+    return cl, st, label, note
+
+
 def site_info(snap, our_status: str, due: str | None = None, admin: bool = True) -> dict:
     """The block 'С ijro.uz' of a task card: for administrators, and for the employee a task is assigned to (without the official term)."""
-    cl = classify(snap, due, dates=admin)
+    cl, st, label, note = shown(snap, due, dates=admin)
     diff = bool(cl["status"] and cl["status"] != our_status and our_status != "info")
     return {"found": bool(snap["found"]), "section": snap["section"], "section_name": (SECTION_BY_ID.get(snap["section"]) or {}).get("name", ""),
-            "label": cl["label"], "note": cl["note"], "known": cl["known"], "proposed": cl["status"],
+            "label": label, "note": note, "known": cl["known"], "proposed": cl["status"],
             "proposed_label": STATUSES.get(cl["status"], "") if cl["status"] else "", "diff": diff,
             "site_open_we_done": bool(snap["found"] and cl["known"] and (cl["status"] in ("todo", "progress") or cl.get("open")) and our_status == "done"),
             "checked_at": snap["checked_at"], "link": card_link(snap), "exact_link": bool(setting("ijro_card_tpl").strip() and snap["recipient_id"]),
             "secret": bool(snap["is_secret"]), "answers": answers_out(snap), "late": snap["site_status"] == 21,
-            "stage": {k: v for k, v in stage_of(snap, due, dates=admin).items() if k != "new_due" or admin}}
+            "stage": {k: v for k, v in st.items() if k != "new_due" or admin}}
 
 
 # ---------------------------------------------------------------- receiving
@@ -378,7 +389,7 @@ def review(c) -> dict:
                         FROM ijro_snapshots s JOIN tasks t ON t.id=s.task_id LEFT JOIN users a ON a.id=t.assignee_id ORDER BY t.seq, t.id""").fetchall()
     items, counts = [], {"checked": len(rows), "found": 0, "not_found": 0, "unknown": 0, "to_done": 0, "to_progress": 0, "to_todo": 0, "site_open_we_done": 0, "same": 0}
     for r in rows:
-        cl = classify(r, r["due"])
+        cl, _st, site_label, site_note = shown(r, r["due"])
         counts["found"] += bool(r["found"])
         if not r["found"]:
             counts["not_found"] += 1
@@ -395,7 +406,7 @@ def review(c) -> dict:
             counts["same"] += 1
         if kind or not r["found"] or not cl["known"]:
             items.append({"task_id": r["task_id"], "code": r["code"], "kind": r["kind"], "doc_no": r["doc_no"], "point": r["point"], "text": (r["text"] or "")[:160],
-                          "assignee": r["assignee"] or "", "our_status": r["our_status"], "site_label": cl["label"], "note": cl["note"],
+                          "assignee": r["assignee"] or "", "our_status": r["our_status"], "site_label": site_label, "note": site_note,
                           "proposed": cl["status"], "change": kind or ("not_found" if not r["found"] else "unknown"), "checked_at": r["checked_at"],
                           "link": card_link(r), "exact_link": bool(setting("ijro_card_tpl").strip() and r["recipient_id"])})
     runs = [dict(x) for x in c.execute("""SELECT r.*, k.name AS key_name FROM sync_runs r LEFT JOIN sync_keys k ON k.id=r.key_id ORDER BY r.id DESC LIMIT 8""")]
