@@ -113,10 +113,13 @@ def read(c, data: bytes, due_from: str | None, due_to: str | None) -> tuple[list
     units = c.execute("SELECT id, name FROM units WHERE active=1").fetchall()
     unit_name = {u["id"]: u["name"] for u in units}
     known = {}   # employees of ours (name -> unit of the user): their rows are ours even when the department name is not matched
-    for u in c.execute("SELECT name, excel_name, unit_id FROM users WHERE active=1 AND unit_id IS NOT NULL"):
+    who_is = {}  # the same names -> the user
+    for u in c.execute("SELECT id, name, excel_name, unit_id FROM users WHERE active=1"):
         for nm in (u["name"], u["excel_name"]):
             if nm:
-                known[auth.norm_name(nm)] = u["unit_id"]
+                who_is[auth.norm_name(nm)] = u
+                if u["unit_id"] is not None:
+                    known[auth.norm_name(nm)] = u["unit_id"]
     depts: dict[str, dict] = {}
     chosen: dict[str, dict] = {}
     skipped = {"window": 0, "not_ours": 0}
@@ -179,7 +182,18 @@ def read(c, data: bytes, due_from: str | None, due_to: str | None) -> tuple[list
         st = STATE.get(r["state"].strip().casefold(), "todo")
         rows.append({"code": code, "seq": 0, "kind": kind_of(r["kind"]), "doc_no": doc_no, "doc_date": doc_date, "point": point, "text": text, "due": r["_due"], "close_date": None,
                      "who": r["who"], "status": st, "tag": "", "unit_id": r["_unit"], "department": r["dept"], "ext": r["ext"]})
-    report = {"file_rows": len(raw), "file_tasks": len(all_codes), "skipped": skipped, "tasks": len(rows),
+    votes: dict[tuple, int] = {}            # which unit the export puts a person in, and where he is now
+    for r in rows:
+        u = who_is.get(auth.norm_name(r["who"])) if r["who"] else None
+        if u is not None and r["unit_id"] is not None:
+            votes[(u["id"], r["unit_id"])] = votes.get((u["id"], r["unit_id"]), 0) + 1
+    moves = []
+    for uid in {k[0] for k in votes}:
+        wanted = max((k for k in votes if k[0] == uid), key=lambda k: votes[k])[1]
+        u = next(x for x in who_is.values() if x["id"] == uid)
+        if u["unit_id"] is not None and u["unit_id"] != wanted:
+            moves.append({"user_id": uid, "name": u["name"], "now": unit_name.get(u["unit_id"], "?"), "wanted_id": wanted, "wanted": unit_name.get(wanted, "?"), "tasks": votes[(uid, wanted)]})
+    report = {"people_moves": sorted(moves, key=lambda m: -m["tasks"]), "file_rows": len(raw), "file_tasks": len(all_codes), "skipped": skipped, "tasks": len(rows),
               "departments": sorted(({"key": k, "name": d["name"], "rows": d["rows"], "tasks": len(d["tasks"]), "unit_id": d["unit_id"], "unit": unit_name.get(d["unit_id"], ""),
                                       "how": d["how"], "suggest": d["suggest"], "suggest_name": unit_name.get(d["suggest"], ""), "score": d["score"],
                                       "people": sorted(d["people"], key=lambda n: -d["people"][n])[:3]} for k, d in depts.items()), key=lambda x: (x["unit_id"] is None, -x["rows"])),

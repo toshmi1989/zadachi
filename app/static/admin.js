@@ -90,8 +90,10 @@ routes.import = async function (page) {
     drop.addEventListener("drop", e => { if (e.dataTransfer.files[0]) preview(e.dataTransfer.files[0]); });
     inp.onchange = () => { if (inp.files[0]) preview(inp.files[0]); };
   }
-  const nextMonth = () => { const t = new Date(); const a = new Date(t.getFullYear(), t.getMonth() + 1, 1), b = new Date(t.getFullYear(), t.getMonth() + 2, 0); const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; return [iso(a), iso(b)]; };
-  let win = nextMonth(), useAi = true;
+  const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const presets = { soon: () => { const t = new Date(); return [iso(new Date(t.getFullYear(), t.getMonth(), t.getDate() - 30)), iso(new Date(t.getFullYear(), t.getMonth(), t.getDate() + 60))]; },
+    next: () => { const t = new Date(); return [iso(new Date(t.getFullYear(), t.getMonth() + 1, 1)), iso(new Date(t.getFullYear(), t.getMonth() + 2, 0))]; }, all: () => ["2000-01-01", "2099-12-31"] };
+  let win = presets.soon(), useAi = true;   // by default: the terms of the last 30 days (still open) and of the next 60
   async function send(file, dry) {
     const f = new FormData(); f.append("file", file);
     return api(`/api/import?dry=${dry}&due_from=${win[0]}&due_to=${win[1]}&ai=${useAi ? 1 : 0}`, { method: "POST", form: f });
@@ -104,12 +106,13 @@ routes.import = async function (page) {
     const dep = r.departments.filter(d => d.unit_id || d.suggest || d.rows >= 5);
     return `<div class="sec-t" style="margin-top:0">Выгрузка с сайта ijro</div>
       <div class="inl" style="gap:12px;flex-wrap:wrap;margin-bottom:10px"><label class="hint">Сроки с <input type="date" id="w-from" value="${win[0]}"></label><label class="hint">по <input type="date" id="w-to" value="${win[1]}"></label><button class="btn sm" id="w-go">Пересчитать</button>
-        <span class="hint">Берутся задачи наших отделов со сроком в этом окне. Месяц по умолчанию — следующий.</span></div>
+        <span class="hint">Быстро: <a href="#" class="w-pre" data-p="soon">−30 / +60 дней</a> · <a href="#" class="w-pre" data-p="next">следующий месяц</a> · <a href="#" class="w-pre" data-p="all">все сроки</a>. Берутся задачи наших отделов со сроком в окне.</span></div>
       <div class="stats">${[[r.file_tasks, "задач в файле"], [r.tasks, "наших в этом окне"], [r.skipped.not_ours, "строк чужих отделов"], [r.skipped.window, "строк вне окна сроков"]].map(([n, l]) => `<div class="stat"><b class="num">${n}</b><span>${l}</span></div>`).join("")}</div>
       <details ${dep.some(d => !d.unit_id) ? "open" : ""} style="margin:10px 0"><summary><b>Отделы в выгрузке и соответствие нашей структуре</b> <span class="hint">(${dep.filter(d => d.unit_id).length} наших)</span></summary>
         <div class="scroll-x"><table class="plain"><thead><tr><th>Отдел в выгрузке</th><th>Строк</th><th>Наш отдел</th><th></th></tr></thead><tbody>${dep.map(d => `<tr><td>${esc(d.name)}<div class="hint">${esc(d.people.join(", "))}</div></td><td class="num">${d.rows}</td>
           <td><select class="dep-map" data-key="${esc(d.key)}" data-init="${d.unit_id || ""}">${unitOpts(d.unit_id || null)}</select></td><td class="hint">${how(d)}${!d.unit_id && d.suggest ? `<div>Предложение: ${esc(d.suggest_name.length > 36 ? d.suggest_name.slice(0, 34) + "…" : d.suggest_name)} <a href="#" class="dep-sg" data-unit="${d.suggest}">выбрать</a></div>` : ""}</td></tr>`).join("")}</tbody></table></div>
         <div class="inl" style="margin-top:8px"><button class="btn sm pri" id="dep-save">Запомнить соответствие и пересчитать</button><span class="hint">Запоминается только то, что вы изменили, и действует на следующие выгрузки. Строки сотрудников, которые у нас уже есть, берутся и без этого.</span></div></details>
+      ${r.people_moves && r.people_moves.length ? `<details open style="margin:10px 0"><summary><b>Сотрудники в другом отделе, чем в выгрузке: ${r.people_moves.length}</b></summary><div class="scroll-x"><table class="plain"><thead><tr><th></th><th>Сотрудник</th><th>У нас сейчас</th><th>По выгрузке</th><th>Задач</th></tr></thead><tbody>${r.people_moves.map(m => `<tr><td><input type="checkbox" class="pm-one" data-u="${m.user_id}" data-w="${m.wanted_id}"></td><td>${esc(m.name)}</td><td>${esc(m.now)}</td><td>${esc(m.wanted)}</td><td class="num">${m.tasks}</td></tr>`).join("")}</tbody></table></div><div class="inl" style="margin-top:8px"><button class="btn sm pri" id="pm-save">Перевести отмеченных</button><span class="hint">Меняется только отдел сотрудника у нас; его задачи не затрагиваются.</span></div></details>` : ""}
       ${r.absent && r.absent.length ? `<details style="margin:10px 0"><summary><b>Есть у нас, но нет в выгрузке: ${r.absent.length}</b> <span class="hint">— возможно, уже выполнены на сайте (ничего не меняется)</span></summary><p class="hint" style="margin:6px 0">${r.absent.slice(0, 40).map(a => esc(a.code)).join(", ")}${r.absent.length > 40 ? "…" : ""}</p></details>` : ""}
       <label class="switchrow"><input type="checkbox" id="use-ai" ${useAi ? "checked" : ""}><span><b>Подобрать даты закрытия автоматически</b> — по тому, как вы ставили даты раньше (и с помощью ИИ, если он подключён в «Настройках»). Предложенные даты помечаются, их можно подтвердить или поправить.</span></label>`;
   }
@@ -117,6 +120,12 @@ routes.import = async function (page) {
     const g = id => $(id, stage); if (!g("#w-go") && !g("#use-ai")) return;
     const re = async () => { win = [g("#w-from").value || win[0], g("#w-to").value || win[1]]; await preview(file); };
     if (g("#w-go")) g("#w-go").onclick = re;
+    $$(".w-pre", stage).forEach(a => a.onclick = async e => { e.preventDefault(); win = presets[a.dataset.p](); await preview(file); });
+    if (g("#pm-save")) g("#pm-save").onclick = async () => {
+      const moves = $$(".pm-one:checked", stage).map(x => ({ user_id: +x.dataset.u, unit_id: +x.dataset.w }));
+      if (!moves.length) { toast("Отметьте сотрудников", "error"); return; }
+      try { const r = await api("/api/import/people-units", { method: "PUT", json: { moves } }); toast("Переведено: " + r.moved); await re(); } catch (e) { toast(e.message, "error"); }
+    };
     if (g("#use-ai")) g("#use-ai").onchange = e => { useAi = e.target.checked; };
     $$(".dep-sg", stage).forEach(a => a.onclick = e => { e.preventDefault(); a.closest("tr").querySelector(".dep-map").value = a.dataset.unit; });
     if (g("#dep-save")) g("#dep-save").onclick = async () => {

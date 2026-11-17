@@ -598,6 +598,23 @@ async def api_import_aliases(request: Request):
     return {"saved": n}
 
 
+@app.put("/api/import/people-units")
+async def api_import_people_units(request: Request):
+    """Moves employees to the unit the export puts them in (the administrator ticks whom)."""
+    b = await _json(request)
+    moves = b.get("moves")
+    if not isinstance(moves, list) or not moves or not all(isinstance(m, dict) and isinstance(m.get("user_id"), int) and isinstance(m.get("unit_id"), int) for m in moves):
+        bad("moves: список {user_id, unit_id}")
+    with tx() as c:
+        n = 0
+        for m in moves:
+            if not c.execute("SELECT 1 FROM users WHERE id=?", (m["user_id"],)).fetchone() or not c.execute("SELECT 1 FROM units WHERE id=?", (m["unit_id"],)).fetchone():
+                bad("Сотрудник или отдел не найден", 404)
+            n += c.execute("UPDATE users SET unit_id=? WHERE id=?", (m["unit_id"], m["user_id"])).rowcount
+        audit(c, "import.people_units", "users", None, {"moved": n})
+    return {"moved": n}
+
+
 @app.get("/api/ai")
 def api_ai():
     c = connect()

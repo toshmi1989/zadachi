@@ -150,3 +150,14 @@ def test_not_a_table_of_the_site_is_refused(admin):
     b = io.BytesIO()
     openpyxl.Workbook().save(b)
     assert admin.post("/api/import?dry=1", files={"file": ("x.xlsx", b.getvalue())}).status_code == 400
+
+
+def test_an_employee_in_another_unit_than_the_export_is_listed_and_can_be_moved(admin):
+    r = post(admin, [row("SX0030", PRIMARY, "Siteb Ambulance", "25.12.2026")]).json()           # Siteb Ambulance is in the unit of the ambulance department; the export puts him in the primary one
+    mv = [m for m in r["site"]["people_moves"] if m["name"] == "Siteb Ambulance"]
+    assert mv and mv[0]["now"].startswith("Тез тиббий") and mv[0]["wanted"].startswith("Бирламчи") and mv[0]["tasks"] == 1
+    assert admin.put("/api/import/people-units", json={"moves": [{"user_id": mv[0]["user_id"], "unit_id": mv[0]["wanted_id"]}]}).json() == {"moved": 1}
+    r = post(admin, [row("SX0030", PRIMARY, "Siteb Ambulance", "25.12.2026")]).json()
+    assert not [m for m in r["site"]["people_moves"] if m["name"] == "Siteb Ambulance"]          # nothing left to move
+    assert admin.put("/api/import/people-units", json={"moves": [{"user_id": mv[0]["user_id"], "unit_id": 99999}]}).status_code == 404
+    assert admin.put("/api/import/people-units", json={"moves": []}).status_code == 400
