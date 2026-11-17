@@ -66,7 +66,7 @@ def test_only_our_departments_in_the_window(admin):
             row("SX0004", PRIMARY, "Sitea Primary", "25.01.2027"), row("SX0005", PRIMARY, "Sitea Primary", "25.12.2026", state="Бажарилган")]
     r = post(admin, rows).json()
     assert r["site"]["file_tasks"] == 5 and r["site"]["tasks"] == 3                         # the foreign department and the other month are left out
-    assert r["site"]["skipped"] == {"window": 1, "not_ours": 1} and r["created"] == 3 and r["dry"] is True
+    assert r["site"]["skipped"] == {"window": 1, "not_ours": 1, "coexec": 0} and r["created"] == 3 and r["dry"] is True
     names = {d["name"]: d for d in r["site"]["departments"]}
     assert names[PRIMARY]["how"] == "auto" and names[AMBULANCE]["unit"].startswith("Тез тиббий") and names[FOREIGN]["unit_id"] is None
     assert admin.get("/api/tasks?q=SX0001").json()["total"] == 0                            # a preview writes nothing
@@ -98,11 +98,11 @@ def test_reimport_keeps_dates_numbers_status_and_manual_work(admin):
 
 
 def test_the_person_who_has_the_task_keeps_it_and_the_main_executor_is_preferred(admin):
-    rows = [row("SX0007", PRIMARY, "Sitea Primary", "25.12.2026", role="Ҳамижрочи"), row("SX0007", AMBULANCE, "Siteb Ambulance", "25.12.2026", role="Асосий")]
+    rows = [row("SX0007", PRIMARY, "Sitea Primary", "25.12.2026", role="Тенг кучли"), row("SX0007", AMBULANCE, "Siteb Ambulance", "25.12.2026", role="Асосий")]
     r = post(admin, rows, dry=0).json()
     assert any("несколько ответственных" in w for w in r["warnings"])
     assert admin.get("/api/tasks?q=SX0007").json()["items"][0]["assignee_name"] == "Siteb Ambulance"     # the main executor
-    rows = [row("SX0007", PRIMARY, "Sitea Primary", "25.12.2026", role="Асосий"), row("SX0007", AMBULANCE, "Siteb Ambulance", "25.12.2026", role="Ҳамижрочи")]
+    rows = [row("SX0007", PRIMARY, "Sitea Primary", "25.12.2026", role="Асосий"), row("SX0007", AMBULANCE, "Siteb Ambulance", "25.12.2026", role="Тенг кучли")]
     post(admin, rows, dry=0)
     assert admin.get("/api/tasks?q=SX0007").json()["items"][0]["assignee_name"] == "Siteb Ambulance"     # already his: not moved to somebody else
 
