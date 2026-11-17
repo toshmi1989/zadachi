@@ -184,5 +184,41 @@ const fake = http.createServer((req, res) => {
   ok(lost.session.has_recipient_db_id && lost.session.has_session_id && !JSON.stringify(lost).includes("live-session") && !JSON.stringify(lost).includes("ORG1"), "the diagnostics never contain the session id or the organisation id");
   layout = "normal";
 
+  // ---- the «Hisobot» export: report -> one-time link -> xlsx, for each list and tab; the platform's plan says what to ask
+  const xkey = (await admin("POST", "/api/sync/keys", { name: "export" })).key;       // an earlier part of this test revokes the first key
+  const xserver = (m, p, b) => server(m, p, b, xkey);
+  const xplan = await xserver("GET", "/api/sync/export-plan");
+  ok(xplan.sections.length === 3 && xplan.tabs.length === 2 && xplan.tabs[0].statuses.join() === "-1,1,0,2,3,4" && xplan.tabs[1].statuses.join() === "10,12,11,13,14", "the plan: 3 lists x the tabs Bajarilmoqda and Muddati o'tgan with the site's own statuses");
+  const xcalls = [], xsent = [];
+  const xxl = new Uint8Array([0x50, 0x4b, 3, 4, 9, 9]);
+  const xFetch = async (url, init = {}) => {
+    xcalls.push({ url, init });
+    if (url === xplan.urls.export) return new Response(core.encode({ id: "F" + xcalls.length }), { status: 201 });
+    if (url === xplan.urls.presigned) return new Response(core.encode({ url: "https://files.example/dl/" + xcalls.length, expires_in_seconds: 5 }), { status: 201 });
+    return new Response(xxl, { status: 200 });
+  };
+  const xupload = async (path, buf) => { xsent.push({ path, len: buf.byteLength }); return { rows: 5, created: 2, updated: 1, unchanged: 2, unmapped: ["Foreign dept"], closing: path.includes("last=1") ? { proposed: 3 } : null }; };
+  const xsess = { id: "live-session", year: 2026 };
+  const xclient = core.makeClient({ pageFetch: xFetch, getSession: () => xsess, apiBase, sleep: async () => {} });
+  const xres = await core.runExports({ server: xserver, upload: xupload, client: xclient, recipientDb: "ORG1", sleep: noSleep, pageFetch: xFetch, pause: 0 });
+  ok(xres.files === 6 && xsent.length === 6 && xres.created === 12 && xres.unmapped.has("Foreign dept") && xres.errors.length === 0, "6 files (3 lists x 2 tabs) downloaded and handed to the platform");
+  ok(xsent.filter(x => x.path.includes("last=1")).length === 1 && xsent[5].path.includes("last=1") && xsent[0].path.includes("source=president-in_progress") && xres.closing && xres.closing.proposed === 3, "only the final file asks the platform to propose closing dates");
+  const exportCalls = xcalls.filter(c => c.url === xplan.urls.export), fileCalls = xcalls.filter(c => c.url.startsWith("https://files.example/"));
+  ok(exportCalls.length === 6 && fileCalls.length === 6, "three steps per file");
+  ok(fileCalls.every(c => c.init.credentials === "omit" && !(c.init.headers && (c.init.headers["x-session-id"] || c.init.headers["X-Session-Id"]))), "the file host gets no session headers");
+  const bodyOf = c => core.decode(new Uint8Array(c.init.body));
+  ok(bodyOf(exportCalls[0]).statuses.join() === "-1,1,0,2,3,4" && bodyOf(exportCalls[1]).statuses.join() === "10,12,11,13,14" && bodyOf(exportCalls[0]).recipient_db_id === "ORG1" && bodyOf(exportCalls[0]).year === null && bodyOf(exportCalls[0]).limit === null, "the report request: the tab's statuses, our organization, year null, no paging");
+  ok(bodyOf(exportCalls[0]).type_ids.length === 5 && bodyOf(exportCalls[2]).type_ids.length === 21 && bodyOf(exportCalls[4]).type_ids.length === 6, "each list sends its own document types");
+  // one list failing does not lose the others; a lost session stops the run
+  let n = 0; const xflaky = async (u, i) => { if (u === xplan.urls.export && ++n === 2) return new Response("x", { status: 400 }); return xFetch(u, i); };
+  const cf = core.makeClient({ pageFetch: xflaky, getSession: () => xsess, apiBase, sleep: async () => {} });
+  xsent.length = 0;
+  const xresf = await core.runExports({ server: xserver, upload: xupload, client: cf, recipientDb: "ORG1", sleep: noSleep, pageFetch: xflaky, pause: 0 });
+  ok(xresf.errors.length === 1 && xresf.files === 5, "one failed file is reported, the other five still go: " + xresf.errors.join("|"));
+  const xdead = async () => new Response("no", { status: 401 });
+  const xresd = await core.runExports({ server: xserver, upload: xupload, client: core.makeClient({ pageFetch: xdead, getSession: () => xsess, apiBase, sleep: async () => {} }), recipientDb: "ORG1", sleep: noSleep, pageFetch: xdead, pause: 0 });
+  ok(xresd.stopped && xresd.files === 0, "a lost session stops the run: " + xresd.stopped);
+  ok((await core.runExports({ server: xserver, upload: xupload, client: xclient, recipientDb: "", sleep: noSleep, pageFetch: xFetch }).then(() => "no", e => e.name)) !== "no", "no organization known: a clear error, nothing is downloaded");
+
   fake.close(); console.log(fails ? fails + " FAILED" : "ALL PASS"); process.exit(fails ? 1 : 0);
 })().catch(e => { console.error("ERROR", e); process.exit(1); });

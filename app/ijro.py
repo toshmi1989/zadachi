@@ -19,6 +19,10 @@ from .db import STATUSES, TZ, audit, now, setting, today
 
 SECTIONS = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ijro_sections.json"), encoding="utf-8"))
 SECTION_BY_ID = {s["id"]: s for s in SECTIONS["sections"]}
+EDO_API = "https://edo.ijro.uz/api"
+# the tabs of the site that the export is taken for (their statuses are those the site itself sends): what is open and what is overdue.
+# Closed tasks are not downloaded: the 8 MB of the president's list is 88% closed ones, and the open ones are checked task by task anyway.
+EXPORT_TABS = [{"id": "in_progress", "statuses": [-1, 1, 0, 2, 3, 4]}, {"id": "overdue", "statuses": [10, 12, 11, 13, 14]}]
 MAX_ITEMS = 200
 MAX_TEXT = 600
 MAX_ANSWERS = 30

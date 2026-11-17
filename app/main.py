@@ -33,7 +33,7 @@ app = FastAPI(title="Zadachi", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 OPEN_PATHS = ("/healthz", "/login", "/api/login-users", "/ijro-sync.user.js")
-BEARER_PATHS = ("/api/sync/job", "/api/sync/ingest", "/api/sync/export")   # opened with a key of the platform (collector in a browser), not with a cookie
+BEARER_PATHS = ("/api/sync/job", "/api/sync/ingest", "/api/sync/export", "/api/sync/export-plan")   # opened with a key of the platform (collector in a browser), not with a cookie
 ADMIN_ONLY = re.compile(r"^/api/(users|units|import|settings|backup|audit|ai|closing|sync/(keys|review|apply|settings)|reminders/(settings|preview|run|log))(/|$)")
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -584,6 +584,13 @@ async def api_import(request: Request, file: UploadFile = File(...), dry: int = 
     if len(data) > MAX_UPLOAD:
         bad("Файл больше 15 МБ")
     return import_file(data, file.filename or "export.xlsx", me(request)["id"], bool(dry), due_from or None, due_to or None, bool(ai))
+
+
+@app.get("/api/sync/export-plan")
+def api_sync_export_plan():
+    """What the collector downloads with the site's «Hisobot» button: for each of the three lists the open and the overdue tasks (the two tabs of the site)."""
+    return {"sections": [{"id": x["id"], "type_ids": x["type_ids"]} for x in ijro.SECTIONS["sections"]], "tabs": ijro.EXPORT_TABS,
+            "urls": {"export": ijro.SECTIONS["api_tasks"] + "/report/list-by-recipient-export", "presigned": ijro.EDO_API + "/v2/files/presigned-url/download"}}
 
 
 @app.post("/api/sync/export")

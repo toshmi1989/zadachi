@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.0.6
-// @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Ничего не меняет на ijro.
+// @version      1.1.0
+// @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
 // @grant        GM_xmlhttpRequest
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.0.6";
+  const VERSION = "1.1.0";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -145,7 +145,7 @@
     async function raw(path, body) {   // one request, answer as is (for diagnostics)
       const s = getSession();
       if (!s.id) throw new SessionError("Не удалось получить сессию ijro: откройте любой раздел «Топшириқлар» на сайте и повторите.");
-      const res = await pageFetch(apiBase + path, { method: "POST", headers: { "Content-Type": "application/octet-stream", "x-session-id": s.id, "x-year": String(s.year), "x-request-id": rid() }, body: encode(body) });
+      const res = await pageFetch((/^https?:/.test(path) ? path : apiBase + path), { method: "POST", headers: { "Content-Type": "application/octet-stream", "x-session-id": s.id, "x-year": String(s.year), "x-request-id": rid() }, body: encode(body) });
       let data = null, err = null;
       try { data = decode(new Uint8Array(await res.arrayBuffer())); } catch (e) { err = String(e.message || e); }
       return { status: res.status, data, err };
@@ -158,7 +158,7 @@
         if (!s.id) throw new SessionError("Не удалось получить сессию ijro: откройте любой раздел «Топшириқлар» на сайте и повторите.");
         let res = null, why = "";
         try {
-          res = await withTimeout(pageFetch(apiBase + path, { method: "POST", headers: { "Content-Type": "application/octet-stream", "x-session-id": s.id, "x-year": String(s.year), "x-request-id": rid() }, body: encode(body) }), 40000);
+          res = await withTimeout(pageFetch((/^https?:/.test(path) ? path : apiBase + path), { method: "POST", headers: { "Content-Type": "application/octet-stream", "x-session-id": s.id, "x-year": String(s.year), "x-request-id": rid() }, body: encode(body) }), 40000);
         } catch (e) { why = "нет ответа от ijro"; }
         if (res) {
           if (res.status === 401 || res.status === 403) throw new SessionError("Сессия ijro закончилась или доступ закрыт (" + res.status + "). Войдите заново и повторите.");
@@ -206,6 +206,45 @@
       answers: (answerList || []).map(a => ({ a, t: toMs(pick(a, ["created_at_ms", "created_at", "date_row_ms", "date", "sent_at", "updated_at"])) })).sort((x, y) => (x.t || 0) - (y.t || 0)).slice(-30).map(({ a, t }) => ({ sender_type: num(a.sender_type), state: num(a.state), active: !!a.active,
         at_ms: t, text: String(pick(a, ["contents", "comment", "text", "description", "content", "message", "note"]) ?? "").slice(0, 600) })),
     };
+  }
+
+  /* ───────────── the site's «Hisobot» export: new tasks and their texts, terms, responsible people ─────────────
+     The button does three things: asks for a report (the answer carries a file id), asks for a one-time link to it (alive ~5 seconds), downloads the xlsx.
+     We repeat exactly that, with the session of this tab, and hand the file to the platform, which imports it the same way as a file picked by hand. */
+  const exportBody = (recipientDb, typeIds, statuses) => ({ limit: null, page: null, document_number: null, statuses, from_due_date: null, to_due_date: null, document_type_id: null,
+    undistributed_tasks: false, seen: null, main_recipient: false, recipient_db_id: recipientDb, is_rayosat: false, not_rayosat: false, type_ids: typeIds, tasks: [], due_date_sort: null,
+    active_state_high_org_id: null, repeatable: false, strict_search: false, year: null, recipient_user_id: null, document_from_date: null, document_to_date: null, offset: null });
+  async function fetchExport(client, plan, recipientDb, section, tab, pageFetch) {
+    const j1 = await client.call(plan.urls.export, exportBody(recipientDb, section.type_ids, tab.statuses));
+    if (!j1 || !j1.id) throw new Error("выгрузка: сайт не вернул номер файла");
+    const j2 = await client.call(plan.urls.presigned, { file_id: j1.id });
+    if (!j2 || !j2.url) throw new Error("выгрузка: сайт не дал ссылку на файл");
+    const r = await pageFetch(j2.url, { credentials: "omit" });   // at once: the link lives about 5 seconds; no session headers go to the file host
+    if (!r.ok) throw new Error("скачивание файла: HTTP " + r.status);
+    const buf = await r.arrayBuffer(), head = new Uint8Array(buf.slice(0, 2));
+    if (head[0] !== 0x50 || head[1] !== 0x4b) throw new Error("скачанный файл не xlsx");
+    return buf;
+  }
+  async function runExports({ server, upload, client, recipientDb, onProgress, shouldStop, sleep, pageFetch, pause = 1500 }) {
+    const plan = await server("GET", "/api/sync/export-plan");
+    if (!recipientDb) throw new SessionError("Не удалось узнать вашу организацию: откройте на сайте раздел «Топшириқлар» и повторите.");
+    const jobs = []; plan.sections.forEach(sec => plan.tabs.forEach(tab => jobs.push({ sec, tab })));
+    const sum = { files: 0, rows: 0, created: 0, updated: 0, unchanged: 0, unmapped: new Set(), closing: null, errors: [], stopped: "" };
+    for (let i = 0; i < jobs.length; i++) {
+      if (shouldStop && shouldStop()) { sum.stopped = "Остановлено вами"; break; }
+      const { sec, tab } = jobs[i];
+      if (onProgress) onProgress({ i, n: jobs.length, what: sec.id + " / " + tab.id });
+      try {
+        const buf = await fetchExport(client, plan, recipientDb, sec, tab, pageFetch);
+        const r = await upload("/api/sync/export?source=" + encodeURIComponent(sec.id + "-" + tab.id) + (i === jobs.length - 1 ? "&last=1" : ""), buf);
+        sum.files++; sum.rows += r.rows; sum.created += r.created; sum.updated += r.updated; sum.unchanged += r.unchanged; (r.unmapped || []).forEach(x => sum.unmapped.add(x)); if (r.closing) sum.closing = r.closing;
+      } catch (e) {
+        if (e instanceof SessionError || e instanceof RateError) { sum.stopped = e.message; break; }
+        sum.errors.push(sec.id + "/" + tab.id + ": " + (e.message || e));   // one list failing does not lose the others
+      }
+      await sleep(pause);
+    }
+    return sum;
   }
 
   /* ───────────── one synchronisation run ───────────── */
@@ -295,7 +334,7 @@
     return out;
   }
 
-  const core = { encode, decode, makeClient, runSync, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
+  const core = { encode, decode, makeClient, runSync, runExports, fetchExport, exportBody, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
   if (typeof module !== "undefined" && module.exports) { module.exports = core; return; }
   if (typeof GM_xmlhttpRequest === "undefined" || typeof document === "undefined") return;
 
@@ -338,9 +377,16 @@
       onload: r => { let j = null; try { j = JSON.parse(r.responseText); } catch (e) { /* ignore */ } if (r.status >= 200 && r.status < 300) resolve(j); else reject(new Error((j && j.error) || "Платформа ответила " + r.status)); },
       onerror: () => reject(new Error("Нет связи с платформой " + SERVER)), ontimeout: () => reject(new Error("Платформа не отвечает")) });
   });
+  const upload = (path, buf) => new Promise((resolve, reject) => {   // the xlsx as it is, to the platform
+    const key = GM_getValue("zk", "");
+    if (!key) return reject(new Error("Нет ключа синхронизации"));
+    GM_xmlhttpRequest({ method: "POST", url: SERVER + path, headers: { Authorization: "Bearer " + key, "Content-Type": "application/octet-stream" }, data: new Blob([buf]), timeout: 300000,
+      onload: r => { let j = null; try { j = JSON.parse(r.responseText); } catch (e) { /* ignore */ } if (r.status >= 200 && r.status < 300) resolve(j); else reject(new Error((j && j.error) || "Платформа ответила " + r.status)); },
+      onerror: () => reject(new Error("Нет связи с платформой")), ontimeout: () => reject(new Error("Платформа долго обрабатывает файл")) });
+  });
   const client = () => makeClient({ pageFetch, getSession: () => state, apiBase: "https://adliya.ijro.uz/api", sleep });
 
-  let stop = false, running = false, resume = false;
+  let stop = false, running = false, resume = false, withExports = GM_getValue("exports", "1") !== "0";
   function panel() {
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;font:14px/1.4 system-ui,sans-serif";
@@ -352,13 +398,16 @@
       .box.on{display:block}.row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.bar{height:8px;background:#eef1f8;border-radius:8px;overflow:hidden;margin:10px 0}.bar i{display:block;height:100%;width:0;background:#4f46e5;transition:width .3s}
       .log{max-height:150px;overflow:auto;font-size:12.5px;color:#56607a;white-space:pre-wrap}b{font-weight:600}</style>
       <div class="box" id="box"><b>Синхронизация с «Задачи»</b>
-        <div class="log" id="hint">Читаю статусы открытых задач на ijro и передаю их в платформу. На ijro ничего не меняется.</div>
+        <div class="log" id="hint">Скачиваю выгрузки «Hisobot» (новые задачи), затем читаю статусы открытых задач и передаю в платформу. На ijro ничего не меняется.</div>
         <div class="bar"><i id="bar"></i></div><div class="log" id="log"></div>
-        <div class="row"><button class="pri" id="go">Синхронизировать</button><button id="stop" disabled>Стоп</button><button id="diag">Диагностика</button><button id="key">Ключ…</button><button id="close">Закрыть</button></div></div>
+        <div class="row"><button class="pri" id="go">Синхронизировать</button><button id="stop" disabled>Стоп</button><button id="diag">Диагностика</button><button id="key">Ключ…</button><button id="exp">Выгрузки: вкл</button><button id="close">Закрыть</button></div></div>
       <button class="fab" id="fab">⇄ Задачи</button>`;
     const $ = id => sh.getElementById(id), log = t => { $("log").textContent = t; };
     $("fab").onclick = () => $("box").classList.toggle("on"); $("close").onclick = () => $("box").classList.remove("on");
     $("key").onclick = () => { const v = prompt("Ключ синхронизации (из раздела «Синхронизация» платформы):", ""); if (v !== null) { GM_setValue("zk", v.trim()); log(v.trim() ? "Ключ сохранён в этом браузере." : "Ключ удалён."); } };
+    const showExp = () => { $("exp").textContent = "Выгрузки: " + (withExports ? "вкл" : "выкл"); };
+    $("exp").onclick = () => { withExports = !withExports; GM_setValue("exports", withExports ? "1" : "0"); showExp(); log(withExports ? "Перед проверкой статусов скачаются выгрузки «Hisobot» (новые задачи, тексты, сроки)." : "Выгрузки отключены: только статусы известных задач."); };
+    showExp();
     $("stop").onclick = () => { stop = true; };
     $("diag").onclick = async () => {
       if (running) return; running = true; log("Диагностика…");
@@ -367,10 +416,19 @@
     };
     $("go").onclick = async () => {
       if (running) return; running = true; stop = false; $("go").disabled = true; $("stop").disabled = false; $("bar").style.width = "0"; log("Запрашиваю список задач…");
+      let exp = null;
+      if (withExports) {
+        try {
+          exp = await runExports({ server, upload, client: client(), recipientDb: state.recipientDb, sleep, pageFetch, shouldStop: () => stop, onProgress: p => { $("bar").style.width = Math.round(100 * p.i / p.n) + "%"; log(`Выгрузка ${p.i + 1} из ${p.n}: ${p.what}…`); } });
+        } catch (e) { exp = { files: 0, errors: [e.message], unmapped: new Set(), created: 0, updated: 0, unchanged: 0, rows: 0, stopped: "" }; }
+        if (exp.stopped) { log(exp.stopped); running = false; $("go").disabled = false; $("stop").disabled = true; return; }
+        $("bar").style.width = "0";
+      }
+      const expLine = () => !exp ? "" : `\nВыгрузки: файлов ${exp.files}, новых задач ${exp.created}, обновлено ${exp.updated}${exp.unmapped.size ? ", отделов без сопоставления " + exp.unmapped.size + " (откройте импорт в платформе)" : ""}${exp.errors.length ? "\nНе удалось: " + exp.errors.join("; ") : ""}`;
       try {
         const r = await runSync({ server, client: client(), sleep, resume, shouldStop: () => stop, onProgress: p => { $("bar").style.width = Math.round(100 * p.done / Math.max(1, p.total)) + "%"; log(`Проверено ${p.done} из ${p.total} · найдено на сайте ${p.found}${p.failed ? " · пропущено (сайт не ответил) " + p.failed : ""}`); } });
         resume = !!(r.stopped || r.failed.length);   // after an interrupted run the same button continues where it stopped
-        log(`${r.stopped ? r.stopped + "\n" : ""}Проверено ${r.done} из ${r.total}, найдено ${r.found}, передано ${r.sent}.${r.failed.length ? "\nНе удалось проверить " + r.failed.length + " (сайт не отвечал): " + r.failed.slice(0, 8).join(", ") + (r.failed.length > 8 ? "…" : "") + ". Нажмите «Продолжить»." : ""}\nОткройте в платформе раздел «Синхронизация»: там список изменений.`);
+        log(`${r.stopped ? r.stopped + "\n" : ""}Проверено ${r.done} из ${r.total}, найдено ${r.found}, передано ${r.sent}.${r.failed.length ? "\nНе удалось проверить " + r.failed.length + " (сайт не отвечал): " + r.failed.slice(0, 8).join(", ") + (r.failed.length > 8 ? "…" : "") + ". Нажмите «Продолжить»." : ""}\nОткройте в платформе раздел «Синхронизация»: там список изменений.${expLine()}`);
       } catch (e) { resume = true; log("Ошибка: " + e.message + "\nНажмите «Продолжить»: уже проверенное повторно не читается."); }
       running = false; $("go").disabled = false; $("stop").disabled = true; $("go").textContent = resume ? "Продолжить" : "Синхронизировать";
     };
