@@ -90,6 +90,8 @@ def _where(f: dict, by: str, user: dict | None, own_only: bool) -> tuple[str, di
         clauses.append("t.assignee_id = :assignee")
         p["assignee"] = int(a)
     s = f.get("status") or ""
+    if s != "gone":
+        clauses.append("t.status != 'gone'")        # tasks the site no longer lists as ours are off the lists, unless asked for
     if s == "open":
         clauses.append("t.status IN ('todo','progress')")
     elif s in STATUSES:

@@ -220,5 +220,13 @@ const fake = http.createServer((req, res) => {
   ok(xresd.stopped && xresd.files === 0, "a lost session stops the run: " + xresd.stopped);
   ok((await core.runExports({ server: xserver, upload: xupload, client: xclient, recipientDb: "", sleep: noSleep, pageFetch: xFetch }).then(() => "no", e => e.name)) !== "no", "no organization known: a clear error, nothing is downloaded");
 
+  // ---- the final call: only a complete run is judged
+  const fcalls = []; const fserver = async (m, p, b) => { fcalls.push(b); return { judged: true }; };
+  await core.finishRun({ server: fserver, run: "abc", exp: { files: 6, expected: 6, errors: [], stopped: "" }, sync: { stopped: "", failed: [] } });
+  await core.finishRun({ server: fserver, run: "abc", exp: { files: 5, expected: 6, errors: [], stopped: "" }, sync: { stopped: "", failed: [] } });
+  await core.finishRun({ server: fserver, run: "abc", exp: { files: 6, expected: 6, errors: [], stopped: "" }, sync: { stopped: "", failed: ["X1"] } });
+  await core.finishRun({ server: fserver, run: "abc", exp: { files: 6, expected: 6, errors: [], stopped: "" }, sync: { stopped: "Остановлено вами", failed: [] } });
+  ok(fcalls.map(x => x.complete).join() === "true,false,false,false" && /^[0-9a-f-]{8,64}$/.test(core.newRun()), "a run is complete only with every file, no failures and no stop");
+
   fake.close(); console.log(fails ? fails + " FAILED" : "ALL PASS"); process.exit(fails ? 1 : 0);
 })().catch(e => { console.error("ERROR", e); process.exit(1); });

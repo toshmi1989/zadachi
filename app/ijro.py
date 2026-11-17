@@ -12,7 +12,7 @@ import hmac
 import json
 import os
 import secrets
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from . import tasks
 from .db import STATUSES, TZ, audit, now, setting, today
@@ -386,6 +386,76 @@ def ingest(c, key_row, body: dict) -> dict:
     if run_id:
         c.execute("UPDATE sync_runs SET received=received+?, found=found+?, finished_at=? WHERE id=? AND key_id=?", (stored, found, now(), run_id, key_row["id"]))
     return {"stored": stored, "found": found, "auto_applied": auto}
+
+
+# ---------------------------------------------------------------- tasks the site no longer lists as ours
+
+SITE_OPEN_STATUSES = {st for t in EXPORT_TABS for st in t["statuses"]}
+EXPORT_FILES = len(SECTIONS["sections"]) * len(EXPORT_TABS)
+
+
+def record_export(c, run: str, codes) -> None:
+    """One export file of a run arrived: the codes it listed as ours (department, role, kind; whatever the term)."""
+    t = now()
+    c.execute("DELETE FROM export_seen WHERE run IN (SELECT run FROM export_runs WHERE created_at < ?)", ((datetime.now(TZ) - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S"),))
+    c.execute("DELETE FROM export_runs WHERE created_at < ?", ((datetime.now(TZ) - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S"),))
+    c.execute("INSERT INTO export_runs(run, files, created_at) VALUES (?,0,?) ON CONFLICT(run) DO NOTHING", (run, t))
+    c.execute("UPDATE export_runs SET files=files+1 WHERE run=?", (run,))
+    c.executemany("INSERT OR IGNORE INTO export_seen(run, code) VALUES (?,?)", [(run, x) for x in codes])
+
+
+def finish_run(c, run: str, complete: bool) -> dict:
+    """After the whole run (exports, then the check of every open task). Finds the open tasks that the site does not list as ours any more and that
+    the check of THIS run found open on the site. Nothing is judged unless every export file arrived and the run was complete: a half run proves nothing.
+    Up to a quarter of the open tasks go off the dashboard at once; more than that waits for the administrator."""
+    r = c.execute("SELECT files, created_at FROM export_runs WHERE run=?", (run,)).fetchone()
+    if not r:
+        return {"judged": False, "why": "Файлы выгрузок этого запуска не получены"}
+    if r["files"] < EXPORT_FILES or not complete:
+        return {"judged": False, "why": f"Запуск неполный (файлов {r['files']} из {EXPORT_FILES}{'' if complete else ', проверка статусов не завершена'}): задачи не трогаю"}
+    rows = c.execute("""SELECT t.id, t.code, s.site_status, s.found, s.checked_at FROM tasks t LEFT JOIN ijro_snapshots s ON s.task_id=t.id
+                        WHERE t.status IN ('todo','progress') AND t.code NOT IN (SELECT code FROM export_seen WHERE run=?)""", (run,)).fetchall()
+    stale, unsure = [], 0
+    for x in rows:
+        site_open = x["found"] and x["checked_at"] and x["checked_at"] >= r["created_at"] and x["site_status"] in SITE_OPEN_STATUSES
+        if site_open:
+            stale.append(x["id"])
+        else:
+            unsure += 1       # not checked in this run, not found, or closed / in a state the exported tabs do not cover: left alone
+    c.execute("DELETE FROM site_stale")
+    t = now()
+    c.executemany("INSERT INTO site_stale(task_id, run, reason, found_at) VALUES (?,?,?,?)",
+                  [(i, run, "Сайт не относит задачу к нашим выгрузкам (другой вид документа, не наш отдел или соисполнитель)", t) for i in stale])
+    open_total = c.execute("SELECT COUNT(*) FROM tasks WHERE status IN ('todo','progress')").fetchone()[0]
+    out = {"judged": True, "stale": len(stale), "unsure": unsure, "open": open_total, "archived": 0, "waiting": 0}
+    if not stale:
+        return out
+    if setting("ijro_auto_archive") == "1" and len(stale) <= max(10, open_total // 4):
+        out["archived"] = archive(c, stale)
+    else:
+        out["waiting"] = len(stale)
+    return out
+
+
+def archive(c, ids: list[int]) -> int:
+    """Takes tasks off the dashboard (status «Нет на сайте»). Nothing is deleted: the history stays, and a task listed again comes back by itself."""
+    n, t = 0, now()
+    for i in ids:
+        r = c.execute("SELECT status FROM tasks WHERE id=? AND status IN ('todo','progress')", (i,)).fetchone()
+        if not r:
+            continue
+        c.execute("INSERT INTO task_events(task_id, user_id, field, old, new, created_at) VALUES (?,?,?,?,?,?)", (i, None, "status", STATUSES.get(r["status"], r["status"]), STATUSES["gone"], t))
+        c.execute("UPDATE tasks SET status='gone', updated_at=? WHERE id=?", (t, i))
+        c.execute("DELETE FROM site_stale WHERE task_id=?", (i,))
+        n += 1
+    if n:
+        audit(c, "ijro.archive", "task", None, {"tasks": n})
+    return n
+
+
+def stale_list(c) -> list[dict]:
+    return [dict(r) for r in c.execute("""SELECT t.id, t.code, t.kind, t.doc_no, t.point, substr(t.text,1,160) AS text, t.due, a.name AS assignee, x.found_at FROM site_stale x
+                                          JOIN tasks t ON t.id=x.task_id LEFT JOIN users a ON a.id=t.assignee_id WHERE t.status IN ('todo','progress') ORDER BY t.kind, t.code""")]
 
 
 # ---------------------------------------------------------------- review and apply

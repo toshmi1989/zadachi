@@ -29,7 +29,7 @@ def dashboard(c, by: str = "close") -> dict:
     by = by if by in ("due", "strict") else "close"
     t = today()
     rows = c.execute("""SELECT t.id, t.assignee_id, t.status, t.due, t.close_date, t.kind, t.doc_no, t.code, t.point, t.text, t.done_at, u.unit_id
-                        FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id""").fetchall()
+                        FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id WHERE t.status != 'gone'""").fetchall()
     users = {u["id"]: u for u in c.execute("SELECT id, name, active, role FROM users")}
     unit_cells: dict[tuple[int, str], dict] = {}
     per_month: dict[int, dict[str, dict]] = {}   # person -> "YYYY-MM" -> how many tasks fall on days 1-10 / 11-15 / 16-20 / 21-end

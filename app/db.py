@@ -29,7 +29,7 @@ UNITS_SEED = [
 UNITS_EXTRA = UNITS_SEED[-1:]
 # departments that were added by mistake (they are not part of the structure): removed once, unless somebody works in them
 UNITS_NOT_OURS = ["Стандартлар ва клиник қўлланмаларни ишлаб чиқиш ва жорий қилиш бошқармаси", "Иккинчи бўлим"]
-STATUSES = {"todo": "Не выполнено", "progress": "В работе", "done": "Выполнено", "info": "К сведению"}
+STATUSES = {"todo": "Не выполнено", "progress": "В работе", "done": "Выполнено", "info": "К сведению", "gone": "Нет на сайте"}   # "gone": taken off the dashboard because the site no longer lists it as ours; comes back by itself if it reappears
 OPEN = ("todo", "progress")
 
 
@@ -131,6 +131,11 @@ CREATE TABLE IF NOT EXISTS sync_keys (
     last_used TEXT NOT NULL DEFAULT '',
     revoked INTEGER NOT NULL DEFAULT 0
 );
+-- the export files of one synchronisation run (the run is a token made by the collector): which tasks they listed, and how many files arrived
+CREATE TABLE IF NOT EXISTS export_runs (run TEXT PRIMARY KEY, files INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS export_seen (run TEXT NOT NULL, code TEXT NOT NULL, PRIMARY KEY (run, code));
+-- open tasks that the site no longer lists as ours (waiting for the administrator's decision when there are many)
+CREATE TABLE IF NOT EXISTS site_stale (task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE, run TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', found_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sync_runs (
     id INTEGER PRIMARY KEY,
     key_id INTEGER REFERENCES sync_keys(id),
@@ -214,6 +219,7 @@ DEFAULT_SETTINGS = {
     "ai_key": "",
     "ai_model": "gpt-4o-mini",
     "ai_base_url": "",
+    "ijro_auto_archive": "1",     # take tasks the site no longer lists as ours off the dashboard after a complete synchronisation (up to a quarter of the open ones; more waits for a confirmation)
     "ijro_auto_apply": "1",       # apply clear changes from the site automatically after each synchronisation
     "ijro_card_tpl": "",          # address of a task card on edo.ijro.uz: {section_path} and {id} are substituted
 }

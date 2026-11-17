@@ -33,7 +33,7 @@ app = FastAPI(title="Zadachi", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 OPEN_PATHS = ("/healthz", "/login", "/api/login-users", "/ijro-sync.user.js")
-BEARER_PATHS = ("/api/sync/job", "/api/sync/ingest", "/api/sync/export", "/api/sync/export-plan")   # opened with a key of the platform (collector in a browser), not with a cookie
+BEARER_PATHS = ("/api/sync/job", "/api/sync/ingest", "/api/sync/export", "/api/sync/export-plan", "/api/sync/finish")   # opened with a key of the platform (collector in a browser), not with a cookie
 ADMIN_ONLY = re.compile(r"^/api/(users|units|import|settings|backup|audit|ai|closing|sync/(keys|review|apply|settings)|reminders/(settings|preview|run|log))(/|$)")
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -421,7 +421,7 @@ def user_row(r) -> dict:
             "tg_linked": bool(r["tg_chat_id"]), "tg_username": r["tg_username"], "remind": bool(r["remind"])}
 
 
-USERS_SQL = """SELECT u.*, (SELECT name FROM units WHERE id=u.unit_id) unit_name, (SELECT COUNT(*) FROM tasks WHERE assignee_id=u.id) n,
+USERS_SQL = """SELECT u.*, (SELECT name FROM units WHERE id=u.unit_id) unit_name, (SELECT COUNT(*) FROM tasks WHERE assignee_id=u.id AND status != 'gone') n,
                (SELECT COUNT(*) FROM tasks WHERE assignee_id=u.id AND status IN ('todo','progress')) o FROM users u"""
 
 
@@ -555,14 +555,14 @@ def ai_on() -> bool:
     return setting("ai_enabled") == "1"
 
 
-def import_file(data: bytes, filename: str, user_id: int, dry: bool, due_from: str | None, due_to: str | None, ai: bool, suggest: bool = True) -> dict:
+def import_file(data: bytes, filename: str, user_id: int, dry: bool, due_from: str | None, due_to: str | None, ai: bool, suggest: bool = True, ours_out: set | None = None) -> dict:
     """One import, shared by the screen (a file picked by the administrator) and the collector (the export the site's own button makes)."""
     site = site_import.is_site_export(data)
     report = None
     try:
         if site:
             with tx() as c:
-                rows, warnings, report = site_import.read(c, data, due_from, due_to)
+                rows, warnings, report = site_import.read(c, data, due_from, due_to, ours_out)
                 report["absent"] = site_import.absent(c, {r["code"] for r in site_import._read_rows(data)}, due_from, due_to)[:200]
         else:
             rows, warnings = importer.read(data)
@@ -594,7 +594,7 @@ def api_sync_export_plan():
 
 
 @app.post("/api/sync/export")
-async def api_sync_export(request: Request, source: str = "", last: int = 0):
+async def api_sync_export(request: Request, source: str = "", last: int = 0, run: str = ""):
     """The Excel export of one of the three lists of the site, sent by the collector (the file is what the site's own «Hisobot» button gives).
     Imported at once with the default window (the last 30 days and the next 60 of terms) and the remembered department mapping;
     departments that are not mapped yet are only reported (they are mapped once, on the import screen). `last=1` on the final file of a run:
@@ -606,8 +606,12 @@ async def api_sync_export(request: Request, source: str = "", last: int = 0):
         bad("Это не выгрузка «Топшириқлар кесимида» сайта")
     from datetime import timedelta
     t = today()
+    ours: set = set()
     out = import_file(data, f"sync:{source or 'export'}.xlsx", request.state.key["created_by"], False, (t - timedelta(days=30)).isoformat(), (t + timedelta(days=60)).isoformat(),
-                      ai_on(), suggest=bool(last))
+                      ai_on(), suggest=bool(last), ours_out=ours)
+    if re.fullmatch(r"[0-9a-fA-F-]{8,64}", run or ""):
+        with tx() as c:
+            ijro.record_export(c, run, ours)
     site = out.get("site", {})
     return {"source": source, "rows": out["rows"], "created": out["created"], "updated": out["updated"], "unchanged": out["unchanged"],
             "unmapped": [d["name"] for d in site.get("departments", []) if not d.get("unit_id") and d.get("how") != "confirmed"][:30], "skipped": site.get("skipped", {}),
@@ -1005,6 +1009,40 @@ async def api_sync_ingest(request: Request):
     return out
 
 
+@app.post("/api/sync/finish")
+async def api_sync_finish(request: Request):
+    """The collector finished a run: the tasks that the site no longer lists as ours are found (and, within the limit, taken off the dashboard)."""
+    b = await _json(request)
+    run = str(b.get("run") or "")
+    if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", run):
+        bad("Неверный номер запуска")
+    with tx() as c:
+        return ijro.finish_run(c, run, bool(b.get("complete")))
+
+
+@app.get("/api/sync/stale")
+def api_sync_stale():
+    c = connect()
+    try:
+        return {"items": ijro.stale_list(c), "auto_archive": setting("ijro_auto_archive") == "1"}
+    finally:
+        c.close()
+
+
+@app.post("/api/sync/archive")
+async def api_sync_archive(request: Request):
+    """The administrator takes the proposed tasks off the dashboard (all of them, or the ticked ones)."""
+    b = await _json(request)
+    with tx() as c:
+        ids = b.get("task_ids")
+        if ids is None:
+            ids = [r["task_id"] for r in c.execute("SELECT task_id FROM site_stale")]
+        if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+            bad("task_ids: список номеров задач")
+        allowed = {r["task_id"] for r in c.execute("SELECT task_id FROM site_stale")}
+        return {"archived": ijro.archive(c, [i for i in ids if i in allowed])}      # only what the last run proposed
+
+
 @app.get("/api/sync/keys")
 def api_sync_keys():
     c = connect()
@@ -1040,6 +1078,8 @@ def api_sync_review():
         out = ijro.review(c)
         out["card_tpl"] = setting("ijro_card_tpl")
         out["auto_apply"] = setting("ijro_auto_apply") == "1"
+        out["auto_archive"] = setting("ijro_auto_archive") == "1"
+        out["stale"] = c.execute("SELECT COUNT(*) FROM site_stale").fetchone()[0]
         return out
     finally:
         c.close()
@@ -1048,11 +1088,14 @@ def api_sync_review():
 @app.put("/api/sync/settings")
 async def api_sync_settings(request: Request):
     b = await _json(request)
-    if "auto_apply" in b and "card_tpl" not in b:      # only the switch of the automatic application
+    if ("auto_apply" in b or "auto_archive" in b) and "card_tpl" not in b:      # only the switches of the automatic application and the automatic archive
         with tx() as c:
             from .db import put_settings
-            put_settings(c, {"ijro_auto_apply": "1" if b["auto_apply"] else "0"})
-            audit(c, "sync.settings", "sync", None, {"auto_apply": bool(b["auto_apply"])})
+            if "auto_apply" in b:
+                put_settings(c, {"ijro_auto_apply": "1" if b["auto_apply"] else "0"})
+            if "auto_archive" in b:
+                put_settings(c, {"ijro_auto_archive": "1" if b["auto_archive"] else "0"})
+            audit(c, "sync.settings", "sync", None, {k: bool(b[k]) for k in ("auto_apply", "auto_archive") if k in b})
         return {"ok": True}
     tpl = str(b.get("card_tpl") or "").strip()
     if tpl and not re.fullmatch(r"https://edo\.ijro\.uz/[^\s]*", tpl):

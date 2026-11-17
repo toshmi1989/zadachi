@@ -169,7 +169,9 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
             for k in ("text", "point"):                 # the same words written with other blank lines or "-банд-банд" are not a change
                 if _same_words(cur_row[k], r[k]):
                     fields.pop(k)
-        if cur_row["edited"]:
+        if cur_row["status"] == "gone" and "unit_id" in r:
+            fields.update(status=r["status"], assignee_id=uid)          # the site lists it as ours again: back on the dashboard
+        elif cur_row["edited"]:
             kept += 1  # the administrator already worked on this task: the file does not overwrite assignee, status, closing date
         elif "unit_id" in r:
             # the raw export of the site: it has no closing date (never erased) and says "in progress" for everything open (never lowers our status)

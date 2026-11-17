@@ -6,10 +6,11 @@ const CHANGE_CHIP = { to_done: "done", to_progress: "progress", to_todo: "todo",
 
 routes.sync = async function (page) {
   if (!isAdmin()) throw new Error("Раздел доступен только администратору");
-  let [rev, keys] = await Promise.all([api("/api/sync/review"), api("/api/sync/keys")]);
+  let [rev, keys, stale] = await Promise.all([api("/api/sync/review"), api("/api/sync/keys"), api("/api/sync/stale")]);
   let filter = "apply", chosen = new Set();
   page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Синхронизация с ijro.uz</h1><p>Статусы и ответы по задачам берутся с официального сайта через ваш браузер. Платформа сама на сайт не заходит и ничего там не меняет.</p></div></div>
     <div class="two"><div class="card rise" style="--i:1" id="s-how"></div><div class="card rise" style="--i:2" id="s-key"></div></div>
+    <div class="card rise" style="--i:3;margin-bottom:16px" id="s-stale"></div>
     <div class="card rise" style="--i:3;margin-bottom:16px" id="s-rev"></div>
     <div class="card rise" style="--i:4" id="s-runs"></div>`;
 
@@ -65,6 +66,16 @@ routes.sync = async function (page) {
   const c = () => rev.counts;
   const FILTERS = [["apply", "К применению"], ["to_done", "Выполнены на сайте"], ["to_progress", "Ответ дан"], ["site_open_we_done", "Расходятся"], ["not_found", "Не найдены"], ["unknown", "Неизвестные"], ["all", "Все"]];
   const matches = i => filter === "all" || (filter === "apply" ? !!i.proposed && ["to_done", "to_progress", "to_todo"].includes(i.change) : i.change === filter);
+  /* ---- tasks the site no longer lists as ours ---- */
+  function paintStale() {
+    const box = $("#s-stale", page), n = stale.items.length;
+    box.innerHTML = `<label class="switchrow"><input type="checkbox" id="auto-arch" ${stale.auto_archive ? "checked" : ""}><span><b>Убирать с дашборда задачи, которых нет в выгрузках сайта</b> — после полной синхронизации открытые задачи, которые сайт не относит к нашим (другой вид документа, не наш отдел, соисполнитель), получают статус «Нет на сайте» и пропадают с дашборда. Ничего не удаляется: если задача снова появится в выгрузке, она вернётся сама. Если таких больше четверти открытых, они ждут вашего решения здесь.</span></label>`
+      + (n ? `<div class="warn" style="margin:12px 0">${icon("alert")}<span>Ждут решения: <b>${n}</b> задач не относятся к нашим выгрузкам.</span></div><div class="scroll-x" style="max-height:340px;overflow:auto"><table class="plain"><thead><tr><th>Задача</th><th>Вид</th><th>Срок</th><th>Ответственный</th></tr></thead><tbody>${stale.items.map(i => `<tr><td><b>${esc(i.code)}</b> <span class="hint">${esc(i.doc_no)}</span><div style="color:var(--text-2);font-size:13px">${esc(i.text)}</div></td><td>${esc(i.kind)}</td><td>${esc(i.due || "")}</td><td>${esc(i.assignee || "")}</td></tr>`).join("")}</tbody></table></div>
+        <div class="inl" style="margin-top:12px"><button class="btn pri" id="arch-go">Убрать с дашборда (${n})</button><span class="hint">Статус «Нет на сайте»; задачи можно найти в списке по этому статусу.</span></div>` : "");
+    $("#auto-arch", page).onchange = async e => { try { await api("/api/sync/settings", { method: "PUT", json: { auto_archive: e.target.checked } }); stale.auto_archive = e.target.checked; toast(e.target.checked ? "Автоматическое снятие включено" : "Автоматическое снятие выключено: решения будут ждать здесь"); } catch (er) { toast(er.message, "error"); e.target.checked = !e.target.checked; } };
+    const go = $("#arch-go", page);
+    if (go) go.onclick = async () => { go.disabled = true; try { const r = await api("/api/sync/archive", { method: "POST", json: {} }); toast("Убрано с дашборда: " + r.archived); stale = await api("/api/sync/stale"); paintStale(); } catch (er) { toast(er.message, "error"); go.disabled = false; } };
+  }
   function paintRev() {
     const k = c(), list = rev.items.filter(matches);
     if (!k.checked) {
@@ -99,6 +110,7 @@ routes.sync = async function (page) {
     $$("tbody tr[data-id]", page).forEach(tr => tr.addEventListener("click", e => { if (e.target.closest("a,input,button")) return; openTask(+tr.dataset.id); }));
   }
   paintRev();
+  paintStale();
 
   /* ---- history of runs ---- */
   $("#s-runs", page).innerHTML = `<div class="card-head"><h2>Запуски</h2></div>` + (rev.runs.length ? `<div class="scroll-x"><table class="plain"><thead><tr><th>Когда</th><th>Ключ</th><th>Ожидалось</th><th>Получено</th><th>Найдено на сайте</th></tr></thead><tbody>${rev.runs.map(r => `<tr><td class="num">${esc(r.started_at.slice(0, 16))}</td><td>${esc(r.key_name || "")}</td><td class="num">${r.expected}</td><td class="num">${r.received}</td><td class="num">${r.found}</td></tr>`).join("")}</tbody></table></div>` : '<p class="hint">Запусков ещё не было.</p>');

@@ -120,7 +120,7 @@ def suggest_unit(c, name: str, units=None) -> tuple[int | None, float]:
     return (best[1], best[0])
 
 
-def read(c, data: bytes, due_from: str | None, due_to: str | None) -> tuple[list[dict], list[str], dict]:
+def read(c, data: bytes, due_from: str | None, due_to: str | None, ours_out: set | None = None) -> tuple[list[dict], list[str], dict]:
     """(rows in the shape of importer.apply, warnings, report). due_from/due_to: only the terms of this window are taken (ISO dates, both ends included)."""
     raw = _read_rows(data)
     aliases = load_aliases(c)
@@ -180,6 +180,8 @@ def read(c, data: bytes, due_from: str | None, due_to: str | None) -> tuple[list
         if uid is None:
             skipped["not_ours"] += 1
             continue
+        if ours_out is not None:
+            ours_out.add(r["code"])                                  # ours by department, role and kind, whatever the term is
         due, prob = parse_date(r["due"])
         if prob or not due:
             warnings.append(f"{r['code']}: срок — {prob or 'пусто'}; строка пропущена")

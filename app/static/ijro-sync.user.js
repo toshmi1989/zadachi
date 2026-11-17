@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.1.0
+// @version      1.2.0
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.1.0";
+  const VERSION = "1.2.0";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -225,18 +225,18 @@
     if (head[0] !== 0x50 || head[1] !== 0x4b) throw new Error("скачанный файл не xlsx");
     return buf;
   }
-  async function runExports({ server, upload, client, recipientDb, onProgress, shouldStop, sleep, pageFetch, pause = 1500 }) {
+  async function runExports({ server, upload, client, recipientDb, onProgress, shouldStop, sleep, pageFetch, pause = 1500, run = "" }) {
     const plan = await server("GET", "/api/sync/export-plan");
     if (!recipientDb) throw new SessionError("Не удалось узнать вашу организацию: откройте на сайте раздел «Топшириқлар» и повторите.");
     const jobs = []; plan.sections.forEach(sec => plan.tabs.forEach(tab => jobs.push({ sec, tab })));
-    const sum = { files: 0, rows: 0, created: 0, updated: 0, unchanged: 0, unmapped: new Set(), closing: null, errors: [], stopped: "" };
+    const sum = { expected: jobs.length, files: 0, rows: 0, created: 0, updated: 0, unchanged: 0, unmapped: new Set(), closing: null, errors: [], stopped: "" };
     for (let i = 0; i < jobs.length; i++) {
       if (shouldStop && shouldStop()) { sum.stopped = "Остановлено вами"; break; }
       const { sec, tab } = jobs[i];
       if (onProgress) onProgress({ i, n: jobs.length, what: sec.id + " / " + tab.id });
       try {
         const buf = await fetchExport(client, plan, recipientDb, sec, tab, pageFetch);
-        const r = await upload("/api/sync/export?source=" + encodeURIComponent(sec.id + "-" + tab.id) + (i === jobs.length - 1 ? "&last=1" : ""), buf);
+        const r = await upload("/api/sync/export?source=" + encodeURIComponent(sec.id + "-" + tab.id) + (i === jobs.length - 1 ? "&last=1" : "") + (run ? "&run=" + run : ""), buf);
         sum.files++; sum.rows += r.rows; sum.created += r.created; sum.updated += r.updated; sum.unchanged += r.unchanged; (r.unmapped || []).forEach(x => sum.unmapped.add(x)); if (r.closing) sum.closing = r.closing;
       } catch (e) {
         if (e instanceof SessionError || e instanceof RateError) { sum.stopped = e.message; break; }
@@ -334,7 +334,14 @@
     return out;
   }
 
-  const core = { encode, decode, makeClient, runSync, runExports, fetchExport, exportBody, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
+  /* after the exports and the check of every open task: the platform finds the tasks that the site no longer lists as ours. Only a COMPLETE run is judged. */
+  async function finishRun({ server, run, exp, sync }) {
+    const complete = !!(exp && exp.files >= exp.expected && !exp.errors.length && !exp.stopped && sync && !sync.stopped && !sync.failed.length);
+    return server("POST", "/api/sync/finish", { run, complete });
+  }
+  const newRun = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Array.from({ length: 32 }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join(""));
+
+  const core = { encode, decode, makeClient, runSync, finishRun, newRun, runExports, fetchExport, exportBody, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
   if (typeof module !== "undefined" && module.exports) { module.exports = core; return; }
   if (typeof GM_xmlhttpRequest === "undefined" || typeof document === "undefined") return;
 
@@ -416,19 +423,23 @@
     };
     $("go").onclick = async () => {
       if (running) return; running = true; stop = false; $("go").disabled = true; $("stop").disabled = false; $("bar").style.width = "0"; log("Запрашиваю список задач…");
-      let exp = null;
+      let exp = null; const run = newRun();
       if (withExports) {
         try {
-          exp = await runExports({ server, upload, client: client(), recipientDb: state.recipientDb, sleep, pageFetch, shouldStop: () => stop, onProgress: p => { $("bar").style.width = Math.round(100 * p.i / p.n) + "%"; log(`Выгрузка ${p.i + 1} из ${p.n}: ${p.what}…`); } });
+          exp = await runExports({ server, upload, client: client(), recipientDb: state.recipientDb, sleep, pageFetch, shouldStop: () => stop, run, onProgress: p => { $("bar").style.width = Math.round(100 * p.i / p.n) + "%"; log(`Выгрузка ${p.i + 1} из ${p.n}: ${p.what}…`); } });
         } catch (e) { exp = { files: 0, errors: [e.message], unmapped: new Set(), created: 0, updated: 0, unchanged: 0, rows: 0, stopped: "" }; }
         if (exp.stopped) { log(exp.stopped); running = false; $("go").disabled = false; $("stop").disabled = true; return; }
         $("bar").style.width = "0";
       }
+      let finLine = "";
       const expLine = () => !exp ? "" : `\nВыгрузки: файлов ${exp.files}, новых задач ${exp.created}, обновлено ${exp.updated}${exp.unmapped.size ? ", отделов без сопоставления " + exp.unmapped.size + " (откройте импорт в платформе)" : ""}${exp.errors.length ? "\nНе удалось: " + exp.errors.join("; ") : ""}`;
       try {
         const r = await runSync({ server, client: client(), sleep, resume, shouldStop: () => stop, onProgress: p => { $("bar").style.width = Math.round(100 * p.done / Math.max(1, p.total)) + "%"; log(`Проверено ${p.done} из ${p.total} · найдено на сайте ${p.found}${p.failed ? " · пропущено (сайт не ответил) " + p.failed : ""}`); } });
+        let fin = null;
+        if (exp) { try { fin = await finishRun({ server, run, exp, sync: r }); } catch (e) { fin = { judged: false, why: e.message }; } }
+        finLine = !fin ? "" : !fin.judged ? "\nСнятие лишних задач: пропущено (" + fin.why + ")" : `\nСнятие лишних задач: не относятся к нашим выгрузкам ${fin.stale}${fin.archived ? ", убрано с дашборда " + fin.archived : ""}${fin.waiting ? ", ждут вашего решения в платформе (раздел «Синхронизация»)" : ""}${fin.unsure ? "; не проверялись или закрыты: " + fin.unsure : ""}`;
         resume = !!(r.stopped || r.failed.length);   // after an interrupted run the same button continues where it stopped
-        log(`${r.stopped ? r.stopped + "\n" : ""}Проверено ${r.done} из ${r.total}, найдено ${r.found}, передано ${r.sent}.${r.failed.length ? "\nНе удалось проверить " + r.failed.length + " (сайт не отвечал): " + r.failed.slice(0, 8).join(", ") + (r.failed.length > 8 ? "…" : "") + ". Нажмите «Продолжить»." : ""}\nОткройте в платформе раздел «Синхронизация»: там список изменений.${expLine()}`);
+        log(`${r.stopped ? r.stopped + "\n" : ""}Проверено ${r.done} из ${r.total}, найдено ${r.found}, передано ${r.sent}.${r.failed.length ? "\nНе удалось проверить " + r.failed.length + " (сайт не отвечал): " + r.failed.slice(0, 8).join(", ") + (r.failed.length > 8 ? "…" : "") + ". Нажмите «Продолжить»." : ""}\nОткройте в платформе раздел «Синхронизация»: там список изменений.${expLine()}${finLine}`);
       } catch (e) { resume = true; log("Ошибка: " + e.message + "\nНажмите «Продолжить»: уже проверенное повторно не читается."); }
       running = false; $("go").disabled = false; $("stop").disabled = true; $("go").textContent = resume ? "Продолжить" : "Синхронизировать";
     };

@@ -200,3 +200,77 @@ def test_of_the_cabinet_list_only_the_new_resolution_kind_is_kept(admin):
                      row("SX0053", PRIMARY, "Sitea Primary", "25.12.2026", kind="  " + k.upper() + " "),
                      row("SX0054", PRIMARY, "Sitea Primary", "25.12.2026", kind="Қарор")]).json()          # a kind of another list is not touched
     assert r["site"]["skipped"]["doc_type"] == 3 and r["site"]["tasks"] == 2 and r["created"] == 2
+
+
+def test_tasks_the_site_no_longer_lists_leave_the_dashboard_but_only_after_a_complete_run(admin):
+    import uuid
+    from datetime import timedelta
+    from app import ijro
+    from app.db import connect, now, today
+    due = (today() + timedelta(days=20)).strftime("%d.%m.%Y")
+    d0 = connect(); d0.execute("DELETE FROM unit_aliases"); d0.commit(); d0.close()
+    k = admin.post("/api/sync/keys", json={"name": "stale-test"}).json()["key"]
+    h = {"authorization": "Bearer " + k, "content-type": "application/octet-stream"}
+    # on the platform already (an earlier import): a wanted task, one of an unwanted kind, one the site closed meanwhile, one never checked
+    c = connect()
+    for code, kind in (("SX0060", "ВМ"), ("SX0061", "ВМ"), ("SX0062", "ВМ"), ("SX0063", "ВМ")):
+        c.execute("INSERT INTO tasks(code, kind, text, due, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)", (code, kind, "t", today().isoformat(), "todo", now(), now()))
+    ids = {r["code"]: r["id"] for r in c.execute("SELECT id, code FROM tasks WHERE code LIKE 'SX006%'")}
+    c.commit(); c.close()
+    run = str(uuid.uuid4())
+    data = export([row("SX0060", PRIMARY, "Sitea Primary", due, kind="Вазирлар маҳкамаси қарори (Янги)"), row("SX0061", PRIMARY, "Sitea Primary", due, kind="Бош вазир топшириқлари")])
+    def snap(code, status, found=1):
+        d = connect()
+        d.execute("INSERT OR REPLACE INTO ijro_snapshots(task_id, found, site_status, is_done, checked_at) VALUES (?,?,?,?,?)", (ids[code], found, status, 1 if status in (20, 21) else 0, now()))
+        d.commit(); d.close()
+    for i in range(ijro.EXPORT_FILES):                                                           # the six files of a run (here the same one six times)
+        assert admin.post(f"/api/sync/export?source=x{i}&run={run}", content=data, headers=h).status_code == 200
+    snap("SX0060", 1); snap("SX0061", 1); snap("SX0062", 20)                                       # SX0063 is never checked
+    # an incomplete run proves nothing
+    r = admin.post("/api/sync/finish", json={"run": run, "complete": False}, headers={"authorization": "Bearer " + k}).json()
+    assert r["judged"] is False and admin.get(f"/api/tasks?q=SX0061").json()["total"] == 1
+    r = admin.post("/api/sync/finish", json={"run": str(uuid.uuid4()), "complete": True}, headers={"authorization": "Bearer " + k}).json()
+    assert r["judged"] is False                                                                    # unknown run: no files received
+    r = admin.post("/api/sync/finish", json={"run": run, "complete": True}, headers={"authorization": "Bearer " + k}).json()
+    assert r["judged"] and r["stale"] == 1 and r["archived"] == 1 and r["unsure"] >= 2, r          # only SX0061; the closed one and the unchecked one are left alone
+    got = {x["code"]: x["status"] for x in admin.get("/api/tasks?q=SX006&size=50").json()["items"]}
+    assert "SX0061" not in got and got["SX0060"] == "todo" and got["SX0062"] == "todo" and got["SX0063"] == "todo"     # off the lists
+    assert admin.get("/api/tasks?q=SX0061&status=gone").json()["total"] == 1                       # but not deleted
+    ev = admin.get(f"/api/tasks/{ids['SX0061']}").json()
+    assert "Нет на сайте" in json.dumps(ev, ensure_ascii=False)
+    # listed again: back by itself
+    data2 = export([row("SX0061", PRIMARY, "Sitea Primary", due, kind="Президент администрацияси раҳбари резолюцияси")])
+    assert admin.post("/api/sync/export?source=back", content=data2, headers=h).status_code == 200
+    assert admin.get("/api/tasks?q=SX0061").json()["items"][0]["status"] == "todo"
+    d = connect(); d.execute("DELETE FROM tasks WHERE code LIKE 'SX006%'"); d.commit(); d.close()
+    admin.delete("/api/sync/keys/" + str(admin.get("/api/sync/keys").json()["items"][0]["id"]))
+
+
+def test_many_stale_tasks_wait_for_the_administrator_and_the_dashboard_skips_gone(admin):
+    import uuid
+    from app import ijro
+    from app.db import connect, now, today
+    k = admin.post("/api/sync/keys", json={"name": "stale-test2"}).json()["key"]
+    h = {"authorization": "Bearer " + k, "content-type": "application/octet-stream"}
+    c = connect()
+    c.execute("INSERT INTO tasks(code, kind, text, due, status, created_at, updated_at) VALUES ('SX0070','ВМ','t',?, 'todo', ?, ?)", (today().isoformat(), now(), now()))
+    tid = c.execute("SELECT id FROM tasks WHERE code='SX0070'").fetchone()["id"]
+    c.execute("INSERT OR REPLACE INTO ijro_snapshots(task_id, found, site_status, is_done, checked_at) VALUES (?,1,1,0,?)", (tid, now()))
+    c.commit(); c.close()
+    assert admin.put("/api/sync/settings", json={"auto_archive": False}).status_code == 200      # the automatic removal is off: the decision waits
+    run = str(uuid.uuid4())
+    data = export([row("SX0071", PRIMARY, "Sitea Primary", "25.12.2026")])
+    for i in range(ijro.EXPORT_FILES):
+        admin.post(f"/api/sync/export?source=y{i}&run={run}", content=data, headers=h)
+    r = admin.post("/api/sync/finish", json={"run": run, "complete": True}, headers={"authorization": "Bearer " + k}).json()
+    assert r["archived"] == 0 and r["waiting"] >= 1
+    assert any(x["code"] == "SX0070" for x in admin.get("/api/sync/stale").json()["items"])
+    before = admin.get("/api/dashboard").json()
+    assert admin.post("/api/sync/archive", json={"task_ids": [tid]}).json()["archived"] == 1
+    assert admin.post("/api/sync/archive", json={"task_ids": [tid]}).json()["archived"] == 0        # only what the last run proposed, once
+    assert admin.get("/api/tasks?q=SX0070").json()["total"] == 0
+    after = admin.get("/api/dashboard").json()
+    assert after["totals"]["total"] == before["totals"]["total"] - 1                                   # the dashboard no longer counts it
+    admin.put("/api/sync/settings", json={"auto_archive": True})
+    d = connect(); d.execute("DELETE FROM tasks WHERE code IN ('SX0070','SX0071')"); d.commit(); d.close()
+    admin.delete("/api/sync/keys/" + str(admin.get("/api/sync/keys").json()["items"][0]["id"]))
