@@ -168,3 +168,25 @@ def test_a_co_executors_task_is_not_taken(admin):
     r = post(admin, rows, dry=0).json()
     assert r["site"]["skipped"]["coexec"] == 1 and r["created"] == 2                       # the main and the equal executors are ours; the co-executor is not
     assert admin.get("/api/tasks?q=SX0040").json()["total"] == 0 and admin.get("/api/tasks?q=SX0041").json()["total"] == 1
+
+
+def test_the_collector_sends_the_export_and_it_is_imported_at_once(admin):
+    from datetime import timedelta
+    from app.db import today
+    due = (today() + timedelta(days=20)).strftime("%d.%m.%Y")
+    from app.db import connect
+    d0 = connect(); d0.execute("DELETE FROM unit_aliases"); d0.commit(); d0.close()                # earlier tests may have remembered a department as "not ours"
+    k = admin.post("/api/sync/keys", json={"name": "export-test"}).json()["key"]
+    h = {"authorization": "Bearer " + k, "content-type": "application/octet-stream"}
+    data = export([row("SX0040", PRIMARY, "Sitea Primary", due), row("SX0041", FOREIGN, "Sitec Foreign", due), row("SX0042", PRIMARY, "Sitea Primary", due, role="Ҳамижрочи")])
+    assert admin.post("/api/sync/export?source=pa", content=data).status_code in (401, 403)        # no key: refused (a cookie alone does not open this door)
+    assert admin.post("/api/sync/export", content=b"not an excel", headers=h).status_code == 400
+    r = admin.post("/api/sync/export?source=pa&last=0", content=data, headers=h).json()
+    assert r["created"] == 1 and r["skipped"]["not_ours"] == 1 and r["skipped"]["coexec"] == 1 and r["closing"] is None
+    assert FOREIGN in r["unmapped"]                                                                    # not mapped yet: reported, the person decides once on the import screen
+    t = admin.get("/api/tasks?q=SX0040").json()["items"][0]
+    assert t["code"] == "SX0040"
+    r2 = admin.post("/api/sync/export?source=pa&last=1", content=data, headers=h).json()
+    assert r2["created"] == 0 and r2["unchanged"] == 1                                                 # a second run changes nothing
+    d = admin.get("/api/sync/keys").json()["items"][0]
+    admin.delete(f"/api/sync/keys/{d['id']}")

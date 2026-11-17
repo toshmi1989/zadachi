@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 
 from . import auth, backup, closing, importer, ijro, reminders, site_import, stats, tasks, telegram
-from .db import STATUSES, audit, connect, init_db, now, setting, tx
+from .db import STATUSES, audit, connect, init_db, now, setting, today, tx
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(BASE, "static")
@@ -33,7 +33,7 @@ app = FastAPI(title="Zadachi", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 OPEN_PATHS = ("/healthz", "/login", "/api/login-users", "/ijro-sync.user.js")
-BEARER_PATHS = ("/api/sync/job", "/api/sync/ingest")   # opened with a key of the platform (collector in a browser), not with a cookie
+BEARER_PATHS = ("/api/sync/job", "/api/sync/ingest", "/api/sync/export")   # opened with a key of the platform (collector in a browser), not with a cookie
 ADMIN_ONLY = re.compile(r"^/api/(users|units|import|settings|backup|audit|ai|closing|sync/(keys|review|apply|settings)|reminders/(settings|preview|run|log))(/|$)")
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -551,30 +551,60 @@ async def api_my_password(request: Request):
 
 # ---------------------------------------------------------------- import, settings, backup, audit
 
+def ai_on() -> bool:
+    return setting("ai_enabled") == "1"
+
+
+def import_file(data: bytes, filename: str, user_id: int, dry: bool, due_from: str | None, due_to: str | None, ai: bool, suggest: bool = True) -> dict:
+    """One import, shared by the screen (a file picked by the administrator) and the collector (the export the site's own button makes)."""
+    site = site_import.is_site_export(data)
+    report = None
+    try:
+        if site:
+            with tx() as c:
+                rows, warnings, report = site_import.read(c, data, due_from, due_to)
+                report["absent"] = site_import.absent(c, {r["code"] for r in site_import._read_rows(data)}, due_from, due_to)[:200]
+        else:
+            rows, warnings = importer.read(data)
+    except importer.ImportError_ as e:
+        bad(str(e))
+    with tx() as c:
+        summary = importer.apply(c, rows, warnings, filename or "export.xlsx", user_id, dry)
+    if report is not None:
+        summary["site"] = report
+    if site and not dry and ai and suggest:
+        summary["closing"] = closing.suggest()
+    return summary
+
+
 @app.post("/api/import")
 async def api_import(request: Request, file: UploadFile = File(...), dry: int = 1, due_from: str = "", due_to: str = "", ai: int = 1):
     """The old processed list, or the raw export of the site (then: only our departments, a window of terms, and the closing dates are proposed)."""
     data = await file.read(MAX_UPLOAD + 1)
     if len(data) > MAX_UPLOAD:
         bad("Файл больше 15 МБ")
-    site = site_import.is_site_export(data)
-    report = None
-    try:
-        if site:
-            with tx() as c:
-                rows, warnings, report = site_import.read(c, data, due_from or None, due_to or None)
-                report["absent"] = site_import.absent(c, {r["code"] for r in site_import._read_rows(data)}, due_from or None, due_to or None)[:200]
-        else:
-            rows, warnings = importer.read(data)
-    except importer.ImportError_ as e:
-        bad(str(e))
-    with tx() as c:
-        summary = importer.apply(c, rows, warnings, file.filename or "export.xlsx", me(request)["id"], bool(dry))
-    if report is not None:
-        summary["site"] = report
-    if site and not dry and ai:
-        summary["closing"] = closing.suggest()
-    return summary
+    return import_file(data, file.filename or "export.xlsx", me(request)["id"], bool(dry), due_from or None, due_to or None, bool(ai))
+
+
+@app.post("/api/sync/export")
+async def api_sync_export(request: Request, source: str = "", last: int = 0):
+    """The Excel export of one of the three lists of the site, sent by the collector (the file is what the site's own «Hisobot» button gives).
+    Imported at once with the default window (the last 30 days and the next 60 of terms) and the remembered department mapping;
+    departments that are not mapped yet are only reported (they are mapped once, on the import screen). `last=1` on the final file of a run:
+    then the closing dates are proposed for the new tasks (once per run, not once per file)."""
+    data = await request.body()
+    if len(data) > MAX_UPLOAD:
+        bad("Файл больше 15 МБ", 413)
+    if not data or not site_import.is_site_export(data):
+        bad("Это не выгрузка «Топшириқлар кесимида» сайта")
+    from datetime import timedelta
+    t = today()
+    out = import_file(data, f"sync:{source or 'export'}.xlsx", request.state.key["created_by"], False, (t - timedelta(days=30)).isoformat(), (t + timedelta(days=60)).isoformat(),
+                      ai_on(), suggest=bool(last))
+    site = out.get("site", {})
+    return {"source": source, "rows": out["rows"], "created": out["created"], "updated": out["updated"], "unchanged": out["unchanged"],
+            "unmapped": [d["name"] for d in site.get("departments", []) if not d.get("unit_id") and d.get("how") != "confirmed"][:30], "skipped": site.get("skipped", {}),
+            "closing": out.get("closing")}
 
 
 @app.put("/api/import/aliases")
