@@ -274,3 +274,14 @@ def test_many_stale_tasks_wait_for_the_administrator_and_the_dashboard_skips_gon
     admin.put("/api/sync/settings", json={"auto_archive": True})
     d = connect(); d.execute("DELETE FROM tasks WHERE code IN ('SX0070','SX0071')"); d.commit(); d.close()
     admin.delete("/api/sync/keys/" + str(admin.get("/api/sync/keys").json()["items"][0]["id"]))
+
+
+def test_the_done_tab_is_exported_but_does_not_count_as_open_on_the_site(admin):
+    from app import ijro
+    assert [t["id"] for t in ijro.EXPORT_TABS] == ["in_progress", "overdue", "done"] and ijro.EXPORT_FILES == 9
+    assert not ({20, 21, 31} & ijro.SITE_OPEN_STATUSES) and {-1, 0, 1, 2, 3, 4, 10, 14} <= ijro.SITE_OPEN_STATUSES
+    r = post(admin, [row("SX0080", PRIMARY, "Sitea Primary", "25.12.2026", state="Бажарилган"), row("SX0081", PRIMARY, "Sitea Primary", "25.12.2026", state="Бажарилмасдан ёпилган")], dry=0).json()
+    got = {x["code"]: x["status"] for x in admin.get("/api/tasks?q=SX008&size=20").json()["items"]}
+    assert got == {"SX0080": "done", "SX0081": "info"}                                           # done, and closed without execution (for information)
+    from app.db import connect
+    d = connect(); d.execute("DELETE FROM tasks WHERE code LIKE 'SX008%'"); d.commit(); d.close()

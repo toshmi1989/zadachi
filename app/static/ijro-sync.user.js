@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.2.0
+// @version      1.3.0
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.2.0";
+  const VERSION = "1.3.0";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -152,13 +152,13 @@
     }
     const BACKOFF = [2000, 5000, 10000, 20000, 30000];
     const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
-    async function call(path, body) {
+    async function call(path, body, timeoutMs = 40000) {
       for (let attempt = 0; ; attempt++) {
         const s = getSession();
         if (!s.id) throw new SessionError("Не удалось получить сессию ijro: откройте любой раздел «Топшириқлар» на сайте и повторите.");
         let res = null, why = "";
         try {
-          res = await withTimeout(pageFetch((/^https?:/.test(path) ? path : apiBase + path), { method: "POST", headers: { "Content-Type": "application/octet-stream", "x-session-id": s.id, "x-year": String(s.year), "x-request-id": rid() }, body: encode(body) }), 40000);
+          res = await withTimeout(pageFetch((/^https?:/.test(path) ? path : apiBase + path), { method: "POST", headers: { "Content-Type": "application/octet-stream", "x-session-id": s.id, "x-year": String(s.year), "x-request-id": rid() }, body: encode(body) }), timeoutMs);
         } catch (e) { why = "нет ответа от ijro"; }
         if (res) {
           if (res.status === 401 || res.status === 403) throw new SessionError("Сессия ijro закончилась или доступ закрыт (" + res.status + "). Войдите заново и повторите.");
@@ -215,7 +215,7 @@
     undistributed_tasks: false, seen: null, main_recipient: false, recipient_db_id: recipientDb, is_rayosat: false, not_rayosat: false, type_ids: typeIds, tasks: [], due_date_sort: null,
     active_state_high_org_id: null, repeatable: false, strict_search: false, year: null, recipient_user_id: null, document_from_date: null, document_to_date: null, offset: null });
   async function fetchExport(client, plan, recipientDb, section, tab, pageFetch) {
-    const j1 = await client.call(plan.urls.export, exportBody(recipientDb, section.type_ids, tab.statuses));
+    const j1 = await client.call(plan.urls.export, exportBody(recipientDb, section.type_ids, tab.statuses), 180000);   // the site builds a big report for up to a minute
     if (!j1 || !j1.id) throw new Error("выгрузка: сайт не вернул номер файла");
     const j2 = await client.call(plan.urls.presigned, { file_id: j1.id });
     if (!j2 || !j2.url) throw new Error("выгрузка: сайт не дал ссылку на файл");
