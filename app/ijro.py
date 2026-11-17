@@ -22,6 +22,8 @@ SECTION_BY_ID = {s["id"]: s for s in SECTIONS["sections"]}
 EDO_API = "https://edo.ijro.uz/api"
 # the tabs of the site that the export is taken for (their statuses are those the site itself sends): what is open and what is overdue.
 # Closed tasks are not downloaded: the 8 MB of the president's list is 88% closed ones, and the open ones are checked task by task anyway.
+# of the Cabinet's list only «Вазирлар маҳкамаси қарори (Янги)» is downloaded (the platform also drops the other kinds when a file is imported)
+EXPORT_TYPES_ONLY = {"government": ["68d805f2c8d2f3123184e0f4"]}
 EXPORT_TABS = [{"id": "in_progress", "statuses": [-1, 1, 0, 2, 3, 4]}, {"id": "overdue", "statuses": [10, 12, 11, 13, 14]}]
 MAX_ITEMS = 200
 MAX_TEXT = 600

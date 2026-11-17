@@ -190,3 +190,13 @@ def test_the_collector_sends_the_export_and_it_is_imported_at_once(admin):
     assert r2["created"] == 0 and r2["unchanged"] == 1                                                 # a second run changes nothing
     d = admin.get("/api/sync/keys").json()["items"][0]
     admin.delete(f"/api/sync/keys/{d['id']}")
+
+
+def test_of_the_cabinet_list_only_the_new_resolution_kind_is_kept(admin):
+    k = "Ўзбекистон Республикаси Президенти Администрацияси раҳбари топшириқлари"
+    r = post(admin, [row("SX0050", PRIMARY, "Sitea Primary", "25.12.2026", kind="Вазирлар маҳкамаси қарори (Янги)"),
+                     row("SX0051", PRIMARY, "Sitea Primary", "25.12.2026", kind="Вазирлар Маҳкамаси қарорлари"),
+                     row("SX0052", PRIMARY, "Sitea Primary", "25.12.2026", kind="Бош вазир топшириқлари"),
+                     row("SX0053", PRIMARY, "Sitea Primary", "25.12.2026", kind="  " + k.upper() + " "),
+                     row("SX0054", PRIMARY, "Sitea Primary", "25.12.2026", kind="Қарор")]).json()          # a kind of another list is not touched
+    assert r["site"]["skipped"]["doc_type"] == 3 and r["site"]["tasks"] == 2 and r["created"] == 2

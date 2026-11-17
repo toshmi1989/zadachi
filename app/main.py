@@ -589,7 +589,7 @@ async def api_import(request: Request, file: UploadFile = File(...), dry: int = 
 @app.get("/api/sync/export-plan")
 def api_sync_export_plan():
     """What the collector downloads with the site's «Hisobot» button: for each of the three lists the open and the overdue tasks (the two tabs of the site)."""
-    return {"sections": [{"id": x["id"], "type_ids": x["type_ids"]} for x in ijro.SECTIONS["sections"]], "tabs": ijro.EXPORT_TABS,
+    return {"sections": [{"id": x["id"], "type_ids": ijro.EXPORT_TYPES_ONLY.get(x["id"], x["type_ids"])} for x in ijro.SECTIONS["sections"]], "tabs": ijro.EXPORT_TABS,
             "urls": {"export": ijro.SECTIONS["api_tasks"] + "/report/list-by-recipient-export", "presigned": ijro.EDO_API + "/v2/files/presigned-url/download"}}
 
 

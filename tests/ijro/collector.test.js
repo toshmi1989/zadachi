@@ -208,7 +208,7 @@ const fake = http.createServer((req, res) => {
   ok(fileCalls.every(c => c.init.credentials === "omit" && !(c.init.headers && (c.init.headers["x-session-id"] || c.init.headers["X-Session-Id"]))), "the file host gets no session headers");
   const bodyOf = c => core.decode(new Uint8Array(c.init.body));
   ok(bodyOf(exportCalls[0]).statuses.join() === "-1,1,0,2,3,4" && bodyOf(exportCalls[1]).statuses.join() === "10,12,11,13,14" && bodyOf(exportCalls[0]).recipient_db_id === "ORG1" && bodyOf(exportCalls[0]).year === null && bodyOf(exportCalls[0]).limit === null, "the report request: the tab's statuses, our organization, year null, no paging");
-  ok(bodyOf(exportCalls[0]).type_ids.length === 5 && bodyOf(exportCalls[2]).type_ids.length === 21 && bodyOf(exportCalls[4]).type_ids.length === 6, "each list sends its own document types");
+  ok(bodyOf(exportCalls[0]).type_ids.length === 5 && bodyOf(exportCalls[2]).type_ids.length === 1 && bodyOf(exportCalls[2]).type_ids[0] === "68d805f2c8d2f3123184e0f4" && bodyOf(exportCalls[4]).type_ids.length === 6, "each list sends its own document types (of the Cabinet's list only the new resolution kind)");
   // one list failing does not lose the others; a lost session stops the run
   let n = 0; const xflaky = async (u, i) => { if (u === xplan.urls.export && ++n === 2) return new Response("x", { status: 400 }); return xFetch(u, i); };
   const cf = core.makeClient({ pageFetch: xflaky, getSession: () => xsess, apiBase, sleep: async () => {} });

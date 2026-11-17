@@ -54,6 +54,20 @@ def kind_of(raw: str) -> str:
     return k
 
 
+# The list of the Cabinet of Ministers has many kinds of documents; only «Вазирлар маҳкамаси қарори (Янги)» is kept (the others are not tracked by the department).
+# The values are what column B «Ҳужжат тури» holds for them; a kind that is not named here is taken as it is.
+VM_NOT_KEPT = {" ".join(n.casefold().split()) for n in (
+    "Бош вазир йўл хариталари", "Бош вазир рахбарлигидаги баёнлар", "Бош вазир раҳбарлигидаги баёнлар", "Бош вазир топшириқлари", "Вазирлар Маҳкамаси қарорлари",
+    "Вазирлар Маҳкамаси Раёсат мажлиси баёнлари", "Вазирлар Маҳкамаси фармойишлари", "Қонунчилик палатаси қўмиталари топшириқлари", "Қонунчилик палатаси топшириқлари",
+    "Сенат топшириқлари", "Ўзбекистон Республикаси Президенти Администрацияси раҳбари топшириқлари",
+    "Ўзбекистон Республикаси Президенти Администрацияси раҳбари ўринбосарлари топшириқлари", "Ўзбекистон Республикаси Президенти Администрацияси ҳужжатлари",
+    "Ўзбекистон Республикаси Президенти маслаҳатчилари топшириқлари", "Ўзбекистон Республикаси Президенти ҳузуридаги Хавфсизлик кенгаши топшириқлари")}
+
+
+def not_kept_kind(raw) -> bool:
+    return " ".join(str(raw or "").casefold().split()) in VM_NOT_KEPT
+
+
 STATE = {"бажарилган": "done", "муддатидан кеч бажарилган": "done", "бажарилмасдан ёпилган": "info", "бажарилмоқда": "todo", "бажарилмаган": "todo"}
 
 
@@ -155,6 +169,9 @@ def read(c, data: bytes, due_from: str | None, due_to: str | None) -> tuple[list
     owner = {r["code"]: r["assignee_raw"] for r in c.execute("SELECT code, assignee_raw FROM tasks WHERE assignee_raw != ''")}
     cand: dict[str, list[dict]] = {}
     for r in raw:
+        if not_kept_kind(r["kind"]):                                # a kind of document of the Cabinet's list that is not kept
+            skipped["doc_type"] = skipped.get("doc_type", 0) + 1
+            continue
         if r["role"].strip().casefold().startswith("ҳамижрочи"):     # a co-executor's task: deliberately not taken (the department does not keep them)
             skipped["coexec"] += 1
             continue
