@@ -122,7 +122,7 @@ def read(c, data: bytes, due_from: str | None, due_to: str | None) -> tuple[list
                     known[auth.norm_name(nm)] = u["unit_id"]
     depts: dict[str, dict] = {}
     chosen: dict[str, dict] = {}
-    skipped = {"window": 0, "not_ours": 0}
+    skipped = {"window": 0, "not_ours": 0, "coexec": 0}
     warnings: list[str] = []
     all_codes = {r["code"] for r in raw}
     for r in raw:
@@ -155,6 +155,9 @@ def read(c, data: bytes, due_from: str | None, due_to: str | None) -> tuple[list
     owner = {r["code"]: r["assignee_raw"] for r in c.execute("SELECT code, assignee_raw FROM tasks WHERE assignee_raw != ''")}
     cand: dict[str, list[dict]] = {}
     for r in raw:
+        if r["role"].strip().casefold().startswith("ҳамижрочи"):     # a co-executor's task: deliberately not taken (the department does not keep them)
+            skipped["coexec"] += 1
+            continue
         d = depts[skeleton(r["dept"])]
         uid = d["unit_id"] or (known.get(auth.norm_name(r["who"])) if r["who"] else None)
         if uid is None:

@@ -161,3 +161,10 @@ def test_an_employee_in_another_unit_than_the_export_is_listed_and_can_be_moved(
     assert not [m for m in r["site"]["people_moves"] if m["name"] == "Siteb Ambulance"]          # nothing left to move
     assert admin.put("/api/import/people-units", json={"moves": [{"user_id": mv[0]["user_id"], "unit_id": 99999}]}).status_code == 404
     assert admin.put("/api/import/people-units", json={"moves": []}).status_code == 400
+
+
+def test_a_co_executors_task_is_not_taken(admin):
+    rows = [row("SX0040", PRIMARY, "Sitea Primary", "25.12.2026", role="Ҳамижрочи"), row("SX0041", PRIMARY, "Sitea Primary", "25.12.2026", role="Тенг кучли"), row("SX0042", PRIMARY, "Sitea Primary", "25.12.2026")]
+    r = post(admin, rows, dry=0).json()
+    assert r["site"]["skipped"]["coexec"] == 1 and r["created"] == 2                       # the main and the equal executors are ours; the co-executor is not
+    assert admin.get("/api/tasks?q=SX0040").json()["total"] == 0 and admin.get("/api/tasks?q=SX0041").json()["total"] == 1
