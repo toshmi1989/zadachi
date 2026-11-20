@@ -84,7 +84,7 @@ routes.dashboard = async function (page) {
     });
     paintKpi(true);
   }
-  $("#kpi-seg", page).appendChild(seg(kpiMonths.map(m => [m, kpiMonthLabel(m)]).concat([["all", "Все задачи"]]), kpiPeriod, v => { kpiPeriod = v; renderKpi(false); }));
+  $("#kpi-seg", page).appendChild(seg(kpiMonths.map(m => [m, kpiMonthLabel(m)]).concat([["all", "Все задачи"]]), kpiPeriod, v => { kpiPeriod = v; period = v; renderKpi(false); paintMatrix(); }));      // the same switch drives the table "Сотрудники × сроки" below
   const h = $("#hint", page); if (h) $("button", h).onclick = () => { try { localStorage.setItem("hint1", "1"); } catch (e) {} h.style.transition = "all .3s"; h.style.opacity = 0; h.style.transform = "translateY(-8px)"; setTimeout(() => h.remove(), 300); };
   function paintKpi(first) {
     $$(".kpi", page).forEach(el => {
@@ -333,7 +333,7 @@ routes.dashboard = async function (page) {
                   ["d20", "до 20 числа", "16–20 числа", "k-later", 16, 20], ["d31", "после 20 числа", "21 число и до конца месяца", "k-nodate", 21, 31]];
   const MONTH_NAMES = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
   const monthLabel = ym => MONTH_NAMES[+ym.slice(5, 7) - 1] + " " + ym.slice(0, 4);
-  let period = "all"; try { const saved = localStorage.getItem("mxPeriod"); if (saved && d.months.includes(saved)) period = saved; } catch (e) {}
+  let period = kpiPeriod;   // the month of the table is the month of the switch above the cards (no switch of its own)
   const ZERO = { d10: 0, d15: 0, d20: 0, d31: 0, total: 0, done: 0 };
   const mOf = p => (p.months && p.months[period]) || ZERO;
   page.insertAdjacentHTML("beforeend", `
@@ -343,10 +343,10 @@ routes.dashboard = async function (page) {
   const mxSection = $("#mx", page).closest("section");
   mxSection.style.setProperty("--i", 6);
   $(".kpis", page).after(mxSection);
-  $("#mx-ctl", page).appendChild(seg([["all", "Всего"]].concat(d.months.map(m => [m, monthLabel(m)])), period, v => { period = v; try { localStorage.setItem("mxPeriod", v); } catch (e) {} paintMatrix(); }));
   const monthBounds = (ym, a, b) => { const last = new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate(); return { date_from: `${ym}-${String(a).padStart(2, "0")}`, date_to: `${ym}-${String(Math.min(b, last)).padStart(2, "0")}` }; };
   function paintMatrix() {
     const pc = Z.mode === "pct", month = period !== "all";
+    $("#mx-ctl", page).innerHTML = `<span class="ctl">${month ? "Месяц: " + esc(monthLabel(period)) : "Все задачи"} · выбирается над карточками</span>`;
     $("#mx-sub", page).textContent = month
       ? `Задачи со сроком в месяце «${monthLabel(period)}»: сколько приходится на каждую часть месяца. Срок считается по выбранной выше дате. Нажмите на ячейку — откроется список.`
       : "Точные цифры. Чем насыщеннее цвет, тем больше задач в столбце. Нажмите на ячейку — откроется список.";
