@@ -2,12 +2,21 @@
 /* Dashboard: KPI cards, workload per person (bars + exact matrix), structure donut, deadline columns, nearest terms.
    Every number, bar, slice and column is a button: it opens the task list filtered to exactly what was clicked. */
 
+let dashMonth = "";   // the month the page is built on ("" = all tasks): every list opened from a block is limited to it, so the number and the list agree
+function withMonth(p) {
+  if (!dashMonth) return p;
+  const last = new Date(+dashMonth.slice(0, 4), +dashMonth.slice(5, 7), 0).getDate(), lo = dashMonth + "-01", hi = dashMonth + "-" + String(last).padStart(2, "0");
+  const q = Object.assign({}, p);
+  q.date_from = q.date_from && q.date_from > lo ? q.date_from : lo;       // a week or a part of the month stays inside the month
+  q.date_to = q.date_to && q.date_to < hi ? q.date_to : hi;
+  return q;
+}
 function drill(p) {
   if (Z.me.tasks === "none") { toast("Список задач для вашей роли отключён администратором", "error"); return; }
   if (Z.me.role !== "admin" && Z.me.tasks === "own" && p.assignee !== undefined && String(p.assignee) !== String(Z.me.id)) {   // the list would be empty: say why
     toast("В списке вам доступны только ваши задачи. Откройте свою строку или карточку.", "error"); return;
   }
-  go("tasks", p);
+  go("tasks", withMonth(p));
 }
 function bucketDrill(key, extra) {
   const p = Object.assign({}, extra || {});
@@ -24,16 +33,20 @@ function byToggle(onChange) {
   return wrap;
 }
 
-routes.dashboard = async function (page) {
-  const d = await api("/api/dashboard?by=" + Z.by);
+routes.dashboard = async function (page, params) {
+  const want = (params && params.month) || "current";            // the address may carry ?month=YYYY-MM or ?month=all; without it: the current month
+  const d = await api("/api/dashboard?by=" + Z.by + "&month=" + (want === "all" ? "" : encodeURIComponent(want)));
+  dashMonth = d.month || "";
   const T = d.totals, people = d.people;
+  const KPI_MONTHS = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
+  const kpiMonthLabel = ym => KPI_MONTHS[+ym.slice(5, 7) - 1] + " " + ym.slice(0, 4);
   const maxTotal = Math.max(1, ...people.map(p => p.total));
   const scopeNote = Z.me.tasks === "none";
   const todayStr = new Date(d.today + "T00:00").toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric", weekday: "long" });
 
   /* ---- header ---- */
   page.innerHTML = `
-    <div class="pagehead rise" style="--i:0"><div><h1>Дашборд</h1><p>${esc(todayStr)} · на контроле ${T.total} ${plural(T.total, "задача", "задачи", "задач")}</p></div>
+    <div class="pagehead rise" style="--i:0"><div><h1>Дашборд</h1><p>${esc(todayStr)} · ${d.month ? esc(kpiMonthLabel(d.month)) + ": " : "на контроле "}${T.total} ${plural(T.total, "задача", "задачи", "задач")}</p></div>
       <div class="controls" id="ctl"></div></div>`;
   const ctl = $("#ctl", page);
   if (Z.me.role === "admin") ctl.appendChild(byToggle(() => route()));   // only the administrator can switch between the closing date and the official term
@@ -44,27 +57,24 @@ routes.dashboard = async function (page) {
   let hint = "";
   try { if (!localStorage.getItem("hint1") && !scopeNote) hint = `<div class="hint-banner rise" style="--i:1" id="hint">${icon("info")}<span>${Z.me.role !== "admin" && Z.me.tasks === "own" ? "На дашборде общая картина по всем. Нажмите на число или полосу, и в списке откроются <b>ваши</b> задачи этой группы." : "Нажимайте на карточки, полосы, сектора и столбцы — откроется список именно этих задач."}</span><button class="icon-btn" style="margin-left:auto;width:28px;height:28px;border:0;background:none;color:inherit" aria-label="Скрыть">${icon("x")}</button></div>`; } catch (e) {}
 
-  /* The cards show one month: the current one by default, the next one, any month that has tasks, or everything ("Все задачи").
-     A task belongs to the month of the date the page is built on (closing date / official term, as chosen above); tasks without a date are only in "Все задачи". */
-  const KPI_MONTHS = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
-  const kpiMonthLabel = ym => KPI_MONTHS[+ym.slice(5, 7) - 1] + " " + ym.slice(0, 4);
+  /* One switch for the whole page: the current month by default, the next one, any month that has tasks, or everything ("Все задачи").
+     A task belongs to the month of the date the page is built on (closing date / official term, as chosen above); tasks without a date are only in "Все задачи".
+     The month is in the address (#/dashboard?month=2026-12), so "back" from a list returns to the same month. The server builds EVERY block from that month. */
   const curYm = d.today.slice(0, 7);
   const nextYm = +curYm.slice(5, 7) === 12 ? (+curYm.slice(0, 4) + 1) + "-01" : curYm.slice(0, 5) + String(+curYm.slice(5, 7) + 1).padStart(2, "0");
   const kpiMonths = [...new Set([curYm, nextYm, ...d.months])].sort();
-  let kpiPeriod = curYm;
-  const KPI_BLANK = { total: 0, open: 0, overdue: 0, week: 0, month: 0, later: 0, nodate: 0, done: 0, info: 0 };
-  const kpiBounds = ym => { const last = new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate(); return { date_from: ym + "-01", date_to: ym + "-" + String(last).padStart(2, "0") }; };
+  const kpiPeriod = d.month || "all";
   function kpiList() {
-    const all = kpiPeriod === "all", S = all ? T : (d.month_kpi[kpiPeriod] || KPI_BLANK), b = all ? {} : kpiBounds(kpiPeriod);
+    const all = kpiPeriod === "all", S = T;
     return [
-      { id: "all", cls: "", icon: "stack", lbl: "Всего задач", n: S.total, of: S.total, meta: `${S.open} в работе · ${S.done} выполнено`, go: () => drill(Object.assign({}, b)) },
-      { id: "open", cls: "k-month", icon: "clock", lbl: "В работе", n: S.open, of: S.total, meta: "ещё не выполнены", go: () => bucketDrill("open", b) },
-      { id: "overdue", cls: "k-overdue", icon: "alert", lbl: "Просрочено", n: S.overdue, of: S.open, meta: "от задач в работе", go: () => bucketDrill("overdue", b) },
-      { id: "week", cls: "k-week", icon: "cal", lbl: "Срок ≤ 7 дней", n: S.week, of: S.open, meta: "от задач в работе", go: () => bucketDrill("week", b) },
-      { id: "done", cls: "k-done", icon: "check", lbl: "Выполнено", n: S.done, of: S.total - S.info, meta: all ? (d.closed_14d ? `+${d.closed_14d} за 14 дней` : "от всех задач") : "от задач месяца", go: () => bucketDrill("done", b) },
+      { id: "all", cls: "", icon: "stack", lbl: "Всего задач", n: S.total, of: S.total, meta: `${S.open} в работе · ${S.done} выполнено`, go: () => drill({}) },
+      { id: "open", cls: "k-month", icon: "clock", lbl: "В работе", n: S.open, of: S.total, meta: "ещё не выполнены", go: () => bucketDrill("open") },
+      { id: "overdue", cls: "k-overdue", icon: "alert", lbl: "Просрочено", n: S.overdue, of: S.open, meta: "от задач в работе", go: () => bucketDrill("overdue") },
+      { id: "week", cls: "k-week", icon: "cal", lbl: "Срок ≤ 7 дней", n: S.week, of: S.open, meta: "от задач в работе", go: () => bucketDrill("week") },
+      { id: "done", cls: "k-done", icon: "check", lbl: "Выполнено", n: S.done, of: S.total - S.info, meta: all ? (d.closed_14d ? `+${d.closed_14d} за 14 дней` : "от всех задач") : "от задач месяца", go: () => bucketDrill("done") },
     ];
   }
-  page.insertAdjacentHTML("beforeend", hint + `<div class="kpi-period rise" style="--i:1"><span>Показатели за:</span><div id="kpi-seg"></div></div><section class="kpis"></section>`);
+  page.insertAdjacentHTML("beforeend", hint + `<div class="kpi-period rise" style="--i:1"><span>Показатели за:</span><div id="kpi-seg"></div><small>Месяц действует на все блоки ниже</small></div><section class="kpis"></section>`);
   const kpiBox = $(".kpis", page);
   let kpi = [];
   function renderKpi(first) {
@@ -84,7 +94,7 @@ routes.dashboard = async function (page) {
     });
     paintKpi(true);
   }
-  $("#kpi-seg", page).appendChild(seg(kpiMonths.map(m => [m, kpiMonthLabel(m)]).concat([["all", "Все задачи"]]), kpiPeriod, v => { kpiPeriod = v; period = v; renderKpi(false); paintMatrix(); }));      // the same switch drives the table "Сотрудники × сроки" below
+  $("#kpi-seg", page).appendChild(seg(kpiMonths.map(m => [m, kpiMonthLabel(m)]).concat([["all", "Все задачи"]]), kpiPeriod, v => go("dashboard", { month: v })));
   const h = $("#hint", page); if (h) $("button", h).onclick = () => { try { localStorage.setItem("hint1", "1"); } catch (e) {} h.style.transition = "all .3s"; h.style.opacity = 0; h.style.transform = "translateY(-8px)"; setTimeout(() => h.remove(), 300); };
   function paintKpi(first) {
     $$(".kpi", page).forEach(el => {
@@ -101,7 +111,7 @@ routes.dashboard = async function (page) {
     const mx = Math.max(1, ...SG.steps.map(x => x.count));
     page.insertAdjacentHTML("beforeend", `<section class="card rise" style="--i:5;margin-bottom:16px"><div class="card-head"><div><h2>Этапы согласования</h2><p class="sub">Где сейчас открытые задачи после ответа. Нажмите на этап — откроются эти задачи.${SG.unchecked ? ` Ещё не проверялись на сайте: <b>${SG.unchecked}</b>.` : ""}</p></div>${SG.attention ? `<span class="chip overdue">требуют внимания: ${SG.attention}</span>` : ""}</div>
       <div class="funnel">${SG.steps.map((x, i) => `<button type="button" class="fn fn-${x.code}" data-stage="${x.code}" style="--i:${i}" data-tip="${esc(x.hint)}"><span class="fn-n">${x.count}</span><span class="fn-l">${esc(x.label)}</span><span class="fn-b"><i style="--w:${(x.count / mx * 100).toFixed(1)}%"></i></span></button>`).join("")}</div></section>`);
-    $$(".fn", page).forEach(b => b.onclick = () => { location.hash = `#/tasks?status=open&stage=${b.dataset.stage}`; });
+    $$(".fn", page).forEach(b => b.onclick = () => drill({ status: "open", stage: b.dataset.stage }));
   }
 
   /* ---- people: bars + legend ---- */
@@ -333,11 +343,11 @@ routes.dashboard = async function (page) {
                   ["d20", "до 20 числа", "16–20 числа", "k-later", 16, 20], ["d31", "после 20 числа", "21 число и до конца месяца", "k-nodate", 21, 31]];
   const MONTH_NAMES = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
   const monthLabel = ym => MONTH_NAMES[+ym.slice(5, 7) - 1] + " " + ym.slice(0, 4);
-  let period = kpiPeriod;   // the month of the table is the month of the switch above the cards (no switch of its own)
+  const period = kpiPeriod;   // the month of the table is the month of the switch above the cards (no switch of its own)
   const ZERO = { d10: 0, d15: 0, d20: 0, d31: 0, total: 0, done: 0 };
   const mOf = p => (p.months && p.months[period]) || ZERO;
   page.insertAdjacentHTML("beforeend", `
-    <section class="card rise" style="--i:10;margin-bottom:16px"><div class="card-head"><div><h2>Сотрудники × сроки</h2><p class="sub" id="mx-sub"></p></div><div id="mx-ctl"></div></div>
+    <section class="card rise" style="--i:10;margin-bottom:16px"><div class="card-head"><div><h2>Сотрудники × сроки</h2><p class="sub" id="mx-sub"></p></div></div>
       <div class="tablewrap"><table class="mx" id="mx"></table></div></section>`);
   /* "Сотрудники × сроки" stands right under the KPI cards */
   const mxSection = $("#mx", page).closest("section");
@@ -346,7 +356,6 @@ routes.dashboard = async function (page) {
   const monthBounds = (ym, a, b) => { const last = new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate(); return { date_from: `${ym}-${String(a).padStart(2, "0")}`, date_to: `${ym}-${String(Math.min(b, last)).padStart(2, "0")}` }; };
   function paintMatrix() {
     const pc = Z.mode === "pct", month = period !== "all";
-    $("#mx-ctl", page).innerHTML = `<span class="ctl">${month ? "Месяц: " + esc(monthLabel(period)) : "Все задачи"} · выбирается над карточками</span>`;
     $("#mx-sub", page).textContent = month
       ? `Задачи со сроком в месяце «${monthLabel(period)}»: сколько приходится на каждую часть месяца. Срок считается по выбранной выше дате. Нажмите на ячейку — откроется список.`
       : "Точные цифры. Чем насыщеннее цвет, тем больше задач в столбце. Нажмите на ячейку — откроется список.";

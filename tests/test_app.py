@@ -75,21 +75,29 @@ def test_buckets_and_dashboard(admin):
     assert d2["overdue"] == 0 and d2["later"] == 3  # by the official term nothing is overdue yet
 
 
-def test_month_cards_match_the_lists(admin):
-    """The cards of the dashboard can be switched to one month: the numbers of a month are exactly what the list shows for that month."""
+def test_the_dashboard_of_one_month_is_consistent_with_the_lists(admin):
+    """?month=YYYY-MM builds EVERY block from the tasks whose term falls in that month: the numbers agree with each other and with the list behind them."""
     import calendar
-    d = admin.get("/api/dashboard?by=close").json()
-    mk = d["month_kpi"]
-    assert mk and set(mk) == set(d["months"])
-    for ym, m in mk.items():
-        assert m["total"] == m["overdue"] + m["week"] + m["month"] + m["later"] + m["done"] + m["info"] and m["nodate"] == 0     # a task with a date is in exactly one group
-        assert m["open"] == m["total"] - m["done"] - m["info"]
+    full = admin.get("/api/dashboard?by=close").json()
+    assert full["month"] == "" and full["months"]
+    assert admin.get("/api/dashboard?month=bogus").json()["month"] == "" and admin.get("/api/dashboard?month=2026-13").json()["month"] == ""
+    assert admin.get("/api/dashboard?month=current").json()["month"] == "2026-11"                  # ZADACHI_TODAY of the tests
+    total_in_months = 0
+    for ym in full["months"]:
+        d = admin.get(f"/api/dashboard?by=close&month={ym}").json()
+        T = d["totals"]
+        assert d["month"] == ym and d["months"] == full["months"]                                    # the switch keeps listing every month
+        assert T["total"] == T["overdue"] + T["week"] + T["month"] + T["later"] + T["done"] + T["info"] and T["nodate"] == 0
+        assert sum(p["total"] for p in d["people"]) == T["total"] and sum(k["total"] for k in d["kinds"]) == T["total"]
+        assert d["units"]["total"]["sum"]["total"] == T["total"]
+        assert sum(x["count"] for x in d["stages"]["steps"]) + d["stages"]["unchecked"] + d["stages"]["other"] == T["open"]
+        assert all(m == ym for p in d["people"] for m in p["months"])                                # the table has nothing but this month
         last = calendar.monthrange(int(ym[:4]), int(ym[5:7]))[1]
         rng = f"date_from={ym}-01&date_to={ym}-{last:02d}&by=close"
         n = lambda extra="": admin.get(f"/api/tasks?{rng}{extra}").json()["total"]
-        assert n() == m["total"] and n("&status=open") == m["open"] and n("&status=done") == m["done"]
-        assert n("&bucket=overdue") == m["overdue"] and n("&bucket=week") == m["week"]
-    assert sum(m["total"] for m in mk.values()) <= d["totals"]["total"]       # the tasks without a date are in no month
+        assert n() == T["total"] and n("&status=open") == T["open"] and n("&status=done") == T["done"] and n("&bucket=overdue") == T["overdue"]
+        total_in_months += T["total"]
+    assert total_in_months <= full["totals"]["total"]                                                # tasks without a date are in no month
 
 
 def test_filters(admin):

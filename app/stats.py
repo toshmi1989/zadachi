@@ -1,4 +1,5 @@
 """Numbers for the dashboard: who has how many tasks, and how the terms are distributed."""
+import re
 from datetime import date, timedelta
 
 from . import auth
@@ -25,16 +26,21 @@ def _finish(d: dict) -> dict:
     return d
 
 
-def dashboard(c, by: str = "close") -> dict:
+def dashboard(c, by: str = "close", month: str = "") -> dict:
+    """month: "" = every task; "YYYY-MM" = only the tasks whose term (the date chosen by `by`) falls in that month; "current" = the month of today.
+    Every block of the page is built from the same set of tasks, so the numbers of the blocks agree with each other and with the list behind them."""
     by = by if by in ("due", "strict") else "close"
     t = today()
+    month = t.isoformat()[:7] if month == "current" else month
+    month = month if re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month or "") else ""
     rows = c.execute("""SELECT t.id, t.assignee_id, t.status, t.due, t.close_date, t.kind, t.doc_no, t.code, t.point, t.text, t.done_at, u.unit_id
                         FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id WHERE t.status != 'gone'""").fetchall()
+    months_all = sorted({e[:7] for e in (eff_value(r, by) for r in rows) if e})       # all the months that have tasks: the switch of the page lists them
+    if month:
+        rows = [r for r in rows if (eff_value(r, by) or "")[:7] == month]
     users = {u["id"]: u for u in c.execute("SELECT id, name, active, role FROM users")}
     unit_cells: dict[tuple[int, str], dict] = {}
     per_month: dict[int, dict[str, dict]] = {}   # person -> "YYYY-MM" -> how many tasks fall on days 1-10 / 11-15 / 16-20 / 21-end
-    months_seen: set[str] = set()
-    month_kpi: dict[str, dict] = {}              # "YYYY-MM" -> the numbers of the cards for the tasks whose term falls in that month
     total, per = _blank(), {}
     kinds, docs, open_rows, windows = {}, {}, [], [0] * 8
     closed_14d = 0
@@ -54,12 +60,6 @@ def dashboard(c, by: str = "close") -> dict:
             m["d10" if day <= 10 else "d15" if day <= 15 else "d20" if day <= 20 else "d31"] += 1
             m["total"] += 1
             m["done"] += r["status"] == "done"
-            months_seen.add(ym)
-            mk = month_kpi.setdefault(ym, _blank())
-            mk["total"] += 1
-            mk[b] += 1
-            if r["status"] in OPEN:
-                mk["open"] += 1
         uacc = unit_cells.setdefault((r["unit_id"] or 0, r["kind"]), _blank())
         uacc["total"] += 1
         uacc[b] += 1
@@ -105,15 +105,15 @@ def dashboard(c, by: str = "close") -> dict:
                          "text": (r["text"] or "").split("\n")[0][:140], "assignee": auth.short_name(a["name"]) if a else "Не назначен"})
     doc_list = sorted(({"doc": k, **_finish(v)} for k, v in docs.items()), key=lambda x: (-x["open"], x["doc"]))[:10]
     return {
-        "units": _units(c, unit_cells, kinds), "months": sorted(months_seen), "month_kpi": {k: _finish(v) for k, v in sorted(month_kpi.items())}, "today": t.isoformat(), "by": by, "totals": _finish(total), "closed_14d": closed_14d, "people": people,
+        "units": _units(c, unit_cells, kinds), "months": months_all, "month": month, "today": t.isoformat(), "by": by, "totals": _finish(total), "closed_14d": closed_14d, "people": people,
         "timeline": timeline, "kinds": sorted(({"kind": k, **_finish(v)} for k, v in kinds.items()), key=lambda x: -x["total"]),
-        "docs": doc_list, "upcoming": upcoming, "bucket_labels": BUCKETS, "stages": _stages(c),
+        "docs": doc_list, "upcoming": upcoming, "bucket_labels": BUCKETS, "stages": _stages(c, month, by),
     }
 
 
-def _stages(c) -> dict:
+def _stages(c, month: str = "", by: str = "close") -> dict:
     from . import ijro
-    return ijro.funnel(c)
+    return ijro.funnel(c, month, by)
 
 
 def _add(a: dict, b: dict) -> dict:

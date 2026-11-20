@@ -235,10 +235,10 @@ def api_me(request: Request):
 
 
 @app.get("/api/dashboard")
-def api_dashboard(request: Request, by: str = "close"):
+def api_dashboard(request: Request, by: str = "close", month: str = ""):
     c = connect()
     try:
-        return stats.dashboard(c, tasks.norm_by(by, me(request)))
+        return stats.dashboard(c, tasks.norm_by(by, me(request)), month)
     finally:
         c.close()
 

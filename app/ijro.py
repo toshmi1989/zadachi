@@ -145,15 +145,20 @@ FUNNEL = [("none", "Ответ не введён", "Исполнитель ещ�
 _FUNNEL_OF = {"none": "none", "answered": "moj", "moj": "moj", "cab": "cab", "chamber": "chamber", "chamber_other": "chamber", "info": "info", "returned": "returned"}
 
 
-def _open_stage_rows(c):
-    return c.execute("""SELECT s.*, t.due, t.id AS tid FROM tasks t LEFT JOIN ijro_snapshots s ON s.task_id=t.id WHERE t.status IN ('todo','progress')""").fetchall()
+def _open_stage_rows(c, month: str = "", by: str = "close"):
+    q = """SELECT s.*, t.due, t.id AS tid FROM tasks t LEFT JOIN ijro_snapshots s ON s.task_id=t.id WHERE t.status IN ('todo','progress')"""
+    args: tuple = ()
+    if month:                                                    # only the tasks whose term (the date the dashboard is built on) falls in this month
+        q += f" AND substr({tasks.eff_sql(by)}, 1, 7) = ?"
+        args = (month,)
+    return c.execute(q, args).fetchall()
 
 
-def funnel(c) -> dict:
+def funnel(c, month: str = "", by: str = "close") -> dict:
     """How many open tasks are at each stage (for the dashboard). Tasks never checked on the site are counted apart."""
     counts = {k: 0 for k, _, _ in FUNNEL}
     unchecked = other = 0
-    for r in _open_stage_rows(c):
+    for r in _open_stage_rows(c, month, by):
         if r["task_id"] is None:
             unchecked += 1
             continue
