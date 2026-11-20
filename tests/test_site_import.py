@@ -309,3 +309,12 @@ def test_an_export_without_the_executor_column_is_refused_not_emptied(admin):
     b = io.BytesIO(); wb.save(b)
     resp = admin.post("/api/import?dry=1&ai=0", files={"file": ("e.xlsx", b.getvalue())})
     assert resp.status_code == 400 and "Масъул ижрочи" in resp.text
+
+
+def test_departments_of_other_executors_are_not_asked_about(admin):
+    rows = [row("SX0096", PRIMARY, "Sitea Primary", "25.12.2026"),
+            row("SX0097", FOREIGN, "Sitec Foreign", "25.12.2026", executor="Таълим ва илм-фан вазирлиги")]
+    r = post(admin, rows).json()
+    names = [d["name"] for d in r["site"]["departments"]]
+    assert PRIMARY in names and FOREIGN not in names                       # the department of a foreign executor is not offered for mapping
+    assert r["site"]["file_tasks"] == 2 and r["site"]["skipped"]["executor"] == 1

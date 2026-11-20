@@ -133,7 +133,8 @@ def suggest_unit(c, name: str, units=None) -> tuple[int | None, float]:
 
 def read(c, data: bytes, due_from: str | None, due_to: str | None, ours_out: set | None = None) -> tuple[list[dict], list[str], dict]:
     """(rows in the shape of importer.apply, warnings, report). due_from/due_to: only the terms of this window are taken (ISO dates, both ends included)."""
-    raw = _read_rows(data)
+    raw_all = _read_rows(data)
+    raw = [r for r in raw_all if executor_ok(r["exec"])]       # the main executor is another body: not ours, whatever the department says (and its department is not asked about)
     aliases = load_aliases(c)
     units = c.execute("SELECT id, name FROM units WHERE active=1").fetchall()
     unit_name = {u["id"]: u["name"] for u in units}
@@ -147,9 +148,9 @@ def read(c, data: bytes, due_from: str | None, due_to: str | None, ours_out: set
                     known[auth.norm_name(nm)] = u["unit_id"]
     depts: dict[str, dict] = {}
     chosen: dict[str, dict] = {}
-    skipped = {"window": 0, "not_ours": 0, "coexec": 0, "executor": 0}
+    skipped = {"window": 0, "not_ours": 0, "coexec": 0, "executor": len(raw_all) - len(raw)}
     warnings: list[str] = []
-    all_codes = {r["code"] for r in raw}
+    all_codes = {r["code"] for r in raw_all}
     for r in raw:
         key = skeleton(r["dept"])
         d = depts.setdefault(key, {"name": r["dept"], "rows": 0, "tasks": set(), "people": {}, "unit_id": None, "how": "", "suggest": None, "score": 0.0})
@@ -182,9 +183,6 @@ def read(c, data: bytes, due_from: str | None, due_to: str | None, ours_out: set
     for r in raw:
         if not_kept_kind(r["kind"]):                                # a kind of document of the Cabinet's list that is not kept
             skipped["doc_type"] = skipped.get("doc_type", 0) + 1
-            continue
-        if not executor_ok(r["exec"]):                              # the main executor is another body: not ours, whatever the department says
-            skipped["executor"] += 1
             continue
         if r["role"].strip().casefold().startswith("ҳамижрочи"):     # a co-executor's task: deliberately not taken (the department does not keep them)
             skipped["coexec"] += 1
@@ -229,7 +227,7 @@ def read(c, data: bytes, due_from: str | None, due_to: str | None, ours_out: set
         u = next(x for x in who_is.values() if x["id"] == uid)
         if u["unit_id"] is not None and u["unit_id"] != wanted:
             moves.append({"user_id": uid, "name": u["name"], "now": unit_name.get(u["unit_id"], "?"), "wanted_id": wanted, "wanted": unit_name.get(wanted, "?"), "tasks": votes[(uid, wanted)]})
-    report = {"people_moves": sorted(moves, key=lambda m: -m["tasks"]), "file_rows": len(raw), "file_tasks": len(all_codes), "skipped": skipped, "tasks": len(rows),
+    report = {"people_moves": sorted(moves, key=lambda m: -m["tasks"]), "file_rows": len(raw_all), "file_tasks": len(all_codes), "skipped": skipped, "tasks": len(rows),
               "departments": sorted(({"key": k, "name": d["name"], "rows": d["rows"], "tasks": len(d["tasks"]), "unit_id": d["unit_id"], "unit": unit_name.get(d["unit_id"], ""),
                                       "how": d["how"], "suggest": d["suggest"], "suggest_name": unit_name.get(d["suggest"], ""), "score": d["score"],
                                       "people": sorted(d["people"], key=lambda n: -d["people"][n])[:3]} for k, d in depts.items()), key=lambda x: (x["unit_id"] is None, -x["rows"])),
