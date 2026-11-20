@@ -17,8 +17,9 @@ AMBULANCE = "Tez tibbiy yordam boʻlimi"
 FOREIGN = "Investitsion siyosat departamenti"
 
 
-def row(code, dept, who, due, kind="Президент администрацияси раҳбари резолюцияси", text="1-банд-банд\nИш режаси тайёрлансин\n\n\nМеханизм: -", state="Бажарилмоқда", role="Асосий"):
-    return ["1", kind, "02-PA 1/1-3112 \n 25.09.2025", text, "-", due, "Соғлиқни сақлаш вазирлиги", "Соғлиқни сақлаш вазирлиги", who, dept, "Тизимга маълумот киритилмаган", "Бажарилмаган", "Йўқ", "Йўқ", code, "-", "-", "-",
+def row(code, dept, who, due, kind="Президент администрацияси раҳбари резолюцияси", text="1-банд-банд\nИш режаси тайёрлансин\n\n\nМеханизм: -", state="Бажарилмоқда", role="Асосий",
+        executor="Соғлиқни сақлаш вазирлиги"):
+    return ["1", kind, "02-PA 1/1-3112 \n 25.09.2025", text, "-", due, "Соғлиқни сақлаш вазирлиги", executor, who, dept, "Тизимга маълумот киритилмаган", "Бажарилмаган", "Йўқ", "Йўқ", code, "-", "-", "-",
             state, "Соғлиқни сақлаш вазирлиги", role]
 
 
@@ -66,7 +67,7 @@ def test_only_our_departments_in_the_window(admin):
             row("SX0004", PRIMARY, "Sitea Primary", "25.01.2027"), row("SX0005", PRIMARY, "Sitea Primary", "25.12.2026", state="Бажарилган")]
     r = post(admin, rows).json()
     assert r["site"]["file_tasks"] == 5 and r["site"]["tasks"] == 3                         # the foreign department and the other month are left out
-    assert r["site"]["skipped"] == {"window": 1, "not_ours": 1, "coexec": 0} and r["created"] == 3 and r["dry"] is True
+    assert r["site"]["skipped"] == {"window": 1, "not_ours": 1, "coexec": 0, "executor": 0} and r["created"] == 3 and r["dry"] is True
     names = {d["name"]: d for d in r["site"]["departments"]}
     assert names[PRIMARY]["how"] == "auto" and names[AMBULANCE]["unit"].startswith("Тез тиббий") and names[FOREIGN]["unit_id"] is None
     assert admin.get("/api/tasks?q=SX0001").json()["total"] == 0                            # a preview writes nothing
@@ -285,3 +286,26 @@ def test_the_done_tab_is_exported_but_does_not_count_as_open_on_the_site(admin):
     assert got == {"SX0080": "done", "SX0081": "info"}                                           # done, and closed without execution (for information)
     from app.db import connect
     d = connect(); d.execute("DELETE FROM tasks WHERE code LIKE 'SX008%'"); d.commit(); d.close()
+
+
+def test_only_rows_whose_main_executor_is_the_health_ministry_are_taken(admin):
+    due = "25.12.2026"
+    rows = [row("SX0090", PRIMARY, "Sitea Primary", due),                                                      # ours
+            row("SX0091", PRIMARY, "Sitea Primary", due, executor="Таълим ва илм-фан вазирлиги"),               # our department, but another main executor
+            row("SX0092", PRIMARY, "Sitea Primary", due, executor="Sog'liqni saqlash vazirligi"),              # the same ministry written in Latin
+            row("SX0093", PRIMARY, "Sitea Primary", due, executor="Соғлиқни сақлаш вазирлиги ҳузуридаги агентлик"),   # a longer name is another body
+            row("SX0094", PRIMARY, "Sitea Primary", due, executor="")]
+    r = post(admin, rows, dry=0).json()
+    assert r["site"]["skipped"]["executor"] == 3 and r["created"] == 2
+    got = {c: admin.get(f"/api/tasks?q={c}").json()["total"] for c in ("SX0090", "SX0091", "SX0092", "SX0093", "SX0094")}
+    assert got == {"SX0090": 1, "SX0091": 0, "SX0092": 1, "SX0093": 0, "SX0094": 0}
+
+
+def test_an_export_without_the_executor_column_is_refused_not_emptied(admin):
+    head = [h for h in HEAD if h != "Масъул ижрочи"]
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(head)
+    r0 = row("SX0095", PRIMARY, "Sitea Primary", "25.12.2026"); ws.append(r0[:7] + r0[8:])
+    b = io.BytesIO(); wb.save(b)
+    resp = admin.post("/api/import?dry=1&ai=0", files={"file": ("e.xlsx", b.getvalue())})
+    assert resp.status_code == 400 and "Масъул ижрочи" in resp.text

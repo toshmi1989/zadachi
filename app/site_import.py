@@ -17,6 +17,10 @@ import openpyxl
 from . import auth
 from .importer import ImportError_, parse_date, parse_doc, parse_text
 
+# Only the tasks whose main executor («Масъул ижрочи») is this ministry are taken: the export of the site also carries rows of other executors.
+# Compared in the one transliterated form, so Latin / Cyrillic spelling and the apostrophes of the site do not matter.
+EXECUTOR = "Соғлиқни сақлаш вазирлиги"
+
 AUTO_MATCH = 0.90          # a department name this similar to a unit of ours is taken without asking
 SUGGEST_MIN = 0.75
 
@@ -41,6 +45,11 @@ def skeleton(s) -> str:
 
 def similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, skeleton(a), skeleton(b)).ratio()
+
+
+def executor_ok(raw) -> bool:
+    """True when the «Масъул ижрочи» cell is exactly our ministry (whole value, not a part of a longer name)."""
+    return skeleton(raw) == skeleton(EXECUTOR)
 
 
 def kind_of(raw: str) -> str:
@@ -105,6 +114,8 @@ def _read_rows(data: bytes) -> list[dict]:
                         "dept": re.sub(r"\s+", " ", str(get("dept") or "")).strip(), "state": str(get("state") or "").strip(), "role": str(get("role") or "").strip(),
                         "exec": str(get("exec") or "").strip(), "ext": str(get("ext_n") or "").strip(), "n": i})
         if header:
+            if cols.get("exec") is None:       # without the column the filter would drop everything: say so instead
+                raise ImportError_("В выгрузке нет колонки «Масъул ижрочи»: по ней отбираются задачи Соғлиқни сақлаш вазирлиги")
             return out
     raise ImportError_("Не нашёл таблицу выгрузки с сайта (нужны колонки «Бўлим номи», «Топшириқ коди», «Топшириқ муддати»)")
 
@@ -136,7 +147,7 @@ def read(c, data: bytes, due_from: str | None, due_to: str | None, ours_out: set
                     known[auth.norm_name(nm)] = u["unit_id"]
     depts: dict[str, dict] = {}
     chosen: dict[str, dict] = {}
-    skipped = {"window": 0, "not_ours": 0, "coexec": 0}
+    skipped = {"window": 0, "not_ours": 0, "coexec": 0, "executor": 0}
     warnings: list[str] = []
     all_codes = {r["code"] for r in raw}
     for r in raw:
@@ -171,6 +182,9 @@ def read(c, data: bytes, due_from: str | None, due_to: str | None, ours_out: set
     for r in raw:
         if not_kept_kind(r["kind"]):                                # a kind of document of the Cabinet's list that is not kept
             skipped["doc_type"] = skipped.get("doc_type", 0) + 1
+            continue
+        if not executor_ok(r["exec"]):                              # the main executor is another body: not ours, whatever the department says
+            skipped["executor"] += 1
             continue
         if r["role"].strip().casefold().startswith("ҳамижрочи"):     # a co-executor's task: deliberately not taken (the department does not keep them)
             skipped["coexec"] += 1
