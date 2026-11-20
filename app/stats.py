@@ -34,6 +34,7 @@ def dashboard(c, by: str = "close") -> dict:
     unit_cells: dict[tuple[int, str], dict] = {}
     per_month: dict[int, dict[str, dict]] = {}   # person -> "YYYY-MM" -> how many tasks fall on days 1-10 / 11-15 / 16-20 / 21-end
     months_seen: set[str] = set()
+    month_kpi: dict[str, dict] = {}              # "YYYY-MM" -> the numbers of the cards for the tasks whose term falls in that month
     total, per = _blank(), {}
     kinds, docs, open_rows, windows = {}, {}, [], [0] * 8
     closed_14d = 0
@@ -54,6 +55,11 @@ def dashboard(c, by: str = "close") -> dict:
             m["total"] += 1
             m["done"] += r["status"] == "done"
             months_seen.add(ym)
+            mk = month_kpi.setdefault(ym, _blank())
+            mk["total"] += 1
+            mk[b] += 1
+            if r["status"] in OPEN:
+                mk["open"] += 1
         uacc = unit_cells.setdefault((r["unit_id"] or 0, r["kind"]), _blank())
         uacc["total"] += 1
         uacc[b] += 1
@@ -99,7 +105,7 @@ def dashboard(c, by: str = "close") -> dict:
                          "text": (r["text"] or "").split("\n")[0][:140], "assignee": auth.short_name(a["name"]) if a else "Не назначен"})
     doc_list = sorted(({"doc": k, **_finish(v)} for k, v in docs.items()), key=lambda x: (-x["open"], x["doc"]))[:10]
     return {
-        "units": _units(c, unit_cells, kinds), "months": sorted(months_seen), "today": t.isoformat(), "by": by, "totals": _finish(total), "closed_14d": closed_14d, "people": people,
+        "units": _units(c, unit_cells, kinds), "months": sorted(months_seen), "month_kpi": {k: _finish(v) for k, v in sorted(month_kpi.items())}, "today": t.isoformat(), "by": by, "totals": _finish(total), "closed_14d": closed_14d, "people": people,
         "timeline": timeline, "kinds": sorted(({"kind": k, **_finish(v)} for k, v in kinds.items()), key=lambda x: -x["total"]),
         "docs": doc_list, "upcoming": upcoming, "bucket_labels": BUCKETS, "stages": _stages(c),
     }

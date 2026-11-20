@@ -44,27 +44,48 @@ routes.dashboard = async function (page) {
   let hint = "";
   try { if (!localStorage.getItem("hint1") && !scopeNote) hint = `<div class="hint-banner rise" style="--i:1" id="hint">${icon("info")}<span>${Z.me.role !== "admin" && Z.me.tasks === "own" ? "На дашборде общая картина по всем. Нажмите на число или полосу, и в списке откроются <b>ваши</b> задачи этой группы." : "Нажимайте на карточки, полосы, сектора и столбцы — откроется список именно этих задач."}</span><button class="icon-btn" style="margin-left:auto;width:28px;height:28px;border:0;background:none;color:inherit" aria-label="Скрыть">${icon("x")}</button></div>`; } catch (e) {}
 
-  const kpi = [
-    { id: "all", cls: "", icon: "stack", lbl: "Всего задач", n: T.total, of: T.total, meta: `${T.open} в работе · ${T.done} выполнено`, go: () => drill({}) },
-    { id: "open", cls: "k-month", icon: "clock", lbl: "В работе", n: T.open, of: T.total, meta: "ещё не выполнены", go: () => bucketDrill("open") },
-    { id: "overdue", cls: "k-overdue", icon: "alert", lbl: "Просрочено", n: T.overdue, of: T.open, meta: "от задач в работе", go: () => bucketDrill("overdue") },
-    { id: "week", cls: "k-week", icon: "cal", lbl: "Срок ≤ 7 дней", n: T.week, of: T.open, meta: "от задач в работе", go: () => bucketDrill("week") },
-    { id: "done", cls: "k-done", icon: "check", lbl: "Выполнено", n: T.done, of: T.total - T.info, meta: d.closed_14d ? `+${d.closed_14d} за 14 дней` : "от всех задач", go: () => bucketDrill("done") },
-  ];
-  page.insertAdjacentHTML("beforeend", hint + `<section class="kpis">${kpi.map((k, i) => `
-    <button class="kpi rise ${k.cls}" style="--i:${i + 1}" data-k="${k.id}">
-      <div class="lbl">${k.lbl}${icon(k.icon)}</div>
-      <div class="val num"><span class="v">0</span><small class="u"></small></div>
-      <div class="meta">${esc(k.meta)}</div>
-      <div class="meter"><i style="width:${pct(k.n, k.of)}%"></i></div>
-    </button>`).join("")}</section>`);
+  /* The cards show one month: the current one by default, the next one, any month that has tasks, or everything ("Все задачи").
+     A task belongs to the month of the date the page is built on (closing date / official term, as chosen above); tasks without a date are only in "Все задачи". */
+  const KPI_MONTHS = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
+  const kpiMonthLabel = ym => KPI_MONTHS[+ym.slice(5, 7) - 1] + " " + ym.slice(0, 4);
+  const curYm = d.today.slice(0, 7);
+  const nextYm = +curYm.slice(5, 7) === 12 ? (+curYm.slice(0, 4) + 1) + "-01" : curYm.slice(0, 5) + String(+curYm.slice(5, 7) + 1).padStart(2, "0");
+  const kpiMonths = [...new Set([curYm, nextYm, ...d.months])].sort();
+  let kpiPeriod = curYm;
+  const KPI_BLANK = { total: 0, open: 0, overdue: 0, week: 0, month: 0, later: 0, nodate: 0, done: 0, info: 0 };
+  const kpiBounds = ym => { const last = new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate(); return { date_from: ym + "-01", date_to: ym + "-" + String(last).padStart(2, "0") }; };
+  function kpiList() {
+    const all = kpiPeriod === "all", S = all ? T : (d.month_kpi[kpiPeriod] || KPI_BLANK), b = all ? {} : kpiBounds(kpiPeriod);
+    return [
+      { id: "all", cls: "", icon: "stack", lbl: "Всего задач", n: S.total, of: S.total, meta: `${S.open} в работе · ${S.done} выполнено`, go: () => drill(Object.assign({}, b)) },
+      { id: "open", cls: "k-month", icon: "clock", lbl: "В работе", n: S.open, of: S.total, meta: "ещё не выполнены", go: () => bucketDrill("open", b) },
+      { id: "overdue", cls: "k-overdue", icon: "alert", lbl: "Просрочено", n: S.overdue, of: S.open, meta: "от задач в работе", go: () => bucketDrill("overdue", b) },
+      { id: "week", cls: "k-week", icon: "cal", lbl: "Срок ≤ 7 дней", n: S.week, of: S.open, meta: "от задач в работе", go: () => bucketDrill("week", b) },
+      { id: "done", cls: "k-done", icon: "check", lbl: "Выполнено", n: S.done, of: S.total - S.info, meta: all ? (d.closed_14d ? `+${d.closed_14d} за 14 дней` : "от всех задач") : "от задач месяца", go: () => bucketDrill("done", b) },
+    ];
+  }
+  page.insertAdjacentHTML("beforeend", hint + `<div class="kpi-period rise" style="--i:1"><span>Показатели за:</span><div id="kpi-seg"></div></div><section class="kpis"></section>`);
+  const kpiBox = $(".kpis", page);
+  let kpi = [];
+  function renderKpi(first) {
+    kpi = kpiList();
+    kpiBox.innerHTML = kpi.map((k, i) => `
+      <button class="kpi${first ? " rise" : ""} ${k.cls}" style="--i:${i + 1}" data-k="${k.id}">
+        <div class="lbl">${k.lbl}${icon(k.icon)}</div>
+        <div class="val num"><span class="v">0</span><small class="u"></small></div>
+        <div class="meta">${esc(k.meta)}</div>
+        <div class="meter"><i style="width:${pct(k.n, k.of)}%"></i></div>
+      </button>`).join("");
+    kpi.forEach(k => {
+      const el = $(`.kpi[data-k="${k.id}"]`, page);
+      el.onclick = k.go;
+      el.dataset.n = k.n; el.dataset.p = pct(k.n, k.of);
+      el.dataset.tip = `<b>${k.lbl}${kpiPeriod === "all" ? "" : " · " + esc(kpiMonthLabel(kpiPeriod))}</b>${k.n} из ${k.of} · ${pct(k.n, k.of)}%`;
+    });
+    paintKpi(true);
+  }
+  $("#kpi-seg", page).appendChild(seg(kpiMonths.map(m => [m, kpiMonthLabel(m)]).concat([["all", "Все задачи"]]), kpiPeriod, v => { kpiPeriod = v; renderKpi(false); }));
   const h = $("#hint", page); if (h) $("button", h).onclick = () => { try { localStorage.setItem("hint1", "1"); } catch (e) {} h.style.transition = "all .3s"; h.style.opacity = 0; h.style.transform = "translateY(-8px)"; setTimeout(() => h.remove(), 300); };
-  kpi.forEach(k => {
-    const el = $(`.kpi[data-k="${k.id}"]`, page);
-    el.onclick = k.go;
-    el.dataset.n = k.n; el.dataset.p = pct(k.n, k.of);
-    el.dataset.tip = `<b>${k.lbl}</b>${k.n} из ${k.of} · ${pct(k.n, k.of)}%`;
-  });
   function paintKpi(first) {
     $$(".kpi", page).forEach(el => {
       const n = +el.dataset.n, p = +el.dataset.p, v = $(".v", el), u = $(".u", el);
@@ -72,7 +93,7 @@ routes.dashboard = async function (page) {
       else { if (first) countUp(v, n); else v.textContent = n; u.textContent = el.dataset.k === "all" ? "" : `${p}%`; }
     });
   }
-  paintKpi(true);
+  renderKpi(true);
 
   /* ---- the way of the answers: where open tasks stand (Justice -> Cabinet -> Chamber of Accounts) ---- */
   const SG = d.stages;

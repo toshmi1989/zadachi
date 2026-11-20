@@ -75,6 +75,23 @@ def test_buckets_and_dashboard(admin):
     assert d2["overdue"] == 0 and d2["later"] == 3  # by the official term nothing is overdue yet
 
 
+def test_month_cards_match_the_lists(admin):
+    """The cards of the dashboard can be switched to one month: the numbers of a month are exactly what the list shows for that month."""
+    import calendar
+    d = admin.get("/api/dashboard?by=close").json()
+    mk = d["month_kpi"]
+    assert mk and set(mk) == set(d["months"])
+    for ym, m in mk.items():
+        assert m["total"] == m["overdue"] + m["week"] + m["month"] + m["later"] + m["done"] + m["info"] and m["nodate"] == 0     # a task with a date is in exactly one group
+        assert m["open"] == m["total"] - m["done"] - m["info"]
+        last = calendar.monthrange(int(ym[:4]), int(ym[5:7]))[1]
+        rng = f"date_from={ym}-01&date_to={ym}-{last:02d}&by=close"
+        n = lambda extra="": admin.get(f"/api/tasks?{rng}{extra}").json()["total"]
+        assert n() == m["total"] and n("&status=open") == m["open"] and n("&status=done") == m["done"]
+        assert n("&bucket=overdue") == m["overdue"] and n("&bucket=week") == m["week"]
+    assert sum(m["total"] for m in mk.values()) <= d["totals"]["total"]       # the tasks without a date are in no month
+
+
 def test_filters(admin):
     n = lambda q: admin.get("/api/tasks?" + q).json()["total"]
     assert n("bucket=overdue") == 1 and n("bucket=week") == 1 and n("status=done") == 1
