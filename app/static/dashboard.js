@@ -32,7 +32,8 @@ routes.dashboard = async function (page, params) {
   const unitLabel = r => (r.num ? (r.level ? r.num + ". " : r.num + " · ") : "") + r.name;
   const worked = r => r.sum.done + r.sum.open;                         // done + not done: what the percent is made of
   const pc = (a, b) => b ? Math.round(100 * a / b) : 0;
-  const tone = p => p >= 80 ? "good" : p >= 50 ? "mid" : p >= 25 ? "warn" : "bad";   // the colour of a percent: the more done, the greener
+  /* a bar of segments [number, kind]: the widths are the shares of the sum; a segment with 0 is not drawn */
+  const bar = parts => { const sum = parts.reduce((s, x) => s + x[0], 0); return `<span class="bar" aria-hidden="true">${sum ? parts.filter(x => x[0] > 0).map(x => `<i class="${x[1]}" style="width:${(100 * x[0] / sum).toFixed(2)}%"></i>`).join("") : ""}</span>`; };
   const VIEWS = [["months", "По месяцам", "cal"], ["kinds", "По видам документов", "file"], ["stages", "По этапам согласования", "list"]];
   const st = { view: VIEWS.some(v => v[0] === (params && params.view)) ? params.view : "months", q: "", empty: false, collapsed: new Set() };
   /* the stages: the way of an answer (left to right), then what needs attention, then what is not known */
@@ -51,9 +52,9 @@ routes.dashboard = async function (page, params) {
   const donePct = pc(T.done, T.done + T.open);
   page.insertAdjacentHTML("beforeend", `
     <section class="dkpis rise" style="--i:1">
-      <button type="button" class="dk" data-go=""><span class="go">открыть список →</span><span class="l">Всего задач</span><b class="v">${T.total}</b><small>${T.info ? `в том числе «к сведению» ${T.info}` : "в базе"}</small></button>
-      <button type="button" class="dk ok" data-go="done"><span class="go">открыть список →</span><span class="l">Выполнено</span><b class="v">${T.done}</b><small>${donePct}% от выполняемых</small></button>
-      <button type="button" class="dk no" data-go="open"><span class="go">открыть список →</span><span class="l">Не выполнено</span><b class="v">${T.open}</b><small>${100 - donePct}% от выполняемых</small></button>
+      <button type="button" class="dk" data-go=""><span class="go">открыть список →</span><span class="l">Всего задач</span><b class="v">${T.total}</b>${bar([[T.done, "ok"], [T.open, "no"], [T.info, "info"]])}<small>${T.info ? `в том числе «к сведению»: ${T.info}` : "выполняемых задач в базе"}</small></button>
+      <button type="button" class="dk ok" data-go="done"><span class="go">открыть список →</span><span class="l">Выполнено</span><b class="v">${T.done}</b>${bar([[T.done, "ok"], [T.open, "rest"]])}<small>${donePct}% от выполняемых</small></button>
+      <button type="button" class="dk no" data-go="open"><span class="go">открыть список →</span><span class="l">Не выполнено</span><b class="v">${T.open}</b>${bar([[T.open, "no"], [T.done, "rest"]])}<small>${100 - donePct}% от выполняемых</small></button>
     </section>
     <section class="card rise dboard" style="--i:2">
       <div class="dtabs" role="tablist">${VIEWS.map(v => `<button type="button" role="tab" class="dtab" data-view="${v[0]}">${icon(v[2])}${v[1]}</button>`).join("")}</div>
@@ -66,12 +67,12 @@ routes.dashboard = async function (page, params) {
   /* ---- cells ---- */
   const attrOf = a => Object.entries(a).filter(([, v]) => v !== undefined).map(([k, v]) => `data-${k}="${esc(v)}"`).join(" ");
   const chip = (n, cls, a) => n ? `<button type="button" class="n ${cls}" ${attrOf(a)}>${n}</button>` : `<span class="n ${cls} z">0</span>`;
-  /* one cell: the percent done, below it two numbers: done (green) and not done (red) */
+  /* one cell: the percent done and the number of tasks; a bar (done | not done); below it two buttons: done and not done */
   function pairCell(v, a, tip, extra = "") {
     const done = v ? v.done : 0, open = v ? v.open : 0, n = done + open;
     if (!n) return `<td class="dc z${extra}"><span class="dash">—</span></td>`;
     const p = pc(done, n);
-    return `<td class="dc${extra}" data-tip="${esc(tip)}: выполнено ${done} из ${n} (${p}%)"><b class="pc ${tone(p)}">${p}%</b><span class="cnt">${chip(done, "ok", { ...a, st: "done" })}${chip(open, "no", { ...a, st: "open" })}</span></td>`;
+    return `<td class="dc${extra}" data-tip="${esc(tip)}: выполнено ${done} из ${n} (${p}%)"><span class="cl"><b class="pc">${p}%</b><span class="of">из ${n}</span></span>${bar([[done, "ok"], [open, "no"]])}<span class="cnt">${chip(done, "ok", { ...a, st: "done" })}${chip(open, "no", { ...a, st: "open" })}</span></td>`;
   }
   function nameCell(r, total) {
     if (total) return `<td><div class="um-n"><span class="chev off"></span><button type="button" class="pname" data-u=""><span><b>Весь департамент</b></span></button></div></td>`;
@@ -92,11 +93,11 @@ routes.dashboard = async function (page, params) {
   const uOf = (r, total) => total ? "" : r.id;
   const sumOf = r => ({ done: r.sum.done, open: r.sum.open });
 
-  const OKB = '<span class="n ok z-demo">12</span>', NOB = '<span class="n no z-demo">5</span>';
+  const OKB = '<span class="lg"><i class="sw ok"></i>выполнено</span>', NOB = '<span class="lg"><i class="sw no"></i>не выполнено</span>';
   const HELP = {
-    months: `Ячейка — задачи отдела, срок которых в этом месяце. Крупно: доля выполненных. Кнопки: ${OKB} выполнено, ${NOB} не выполнено. <b>Нажмите на кнопку</b>, чтобы открыть список этих задач. Текущий месяц выделен.`,
-    kinds: `Ячейка — задачи отдела по одному виду документа. Крупно: доля выполненных. Кнопки: ${OKB} выполнено, ${NOB} не выполнено. <b>Нажмите на кнопку</b>, чтобы открыть список.`,
-    stages: `Здесь только задачи, которые ещё не выполнены. Слева направо путь ответа: исполнитель → Минюст → Кабинет Министров → Счётная палата. Красные кнопки — задачи, которые вернули. <b>Нажмите на число</b>, чтобы открыть список.`,
+    months: `В ячейке: доля выполненных, число задач со сроком в этом месяце, полоса прогресса (${OKB} · ${NOB}) и две кнопки с числами. <b>Нажмите на кнопку</b>, чтобы открыть список этих задач. Текущий месяц отмечен в шапке.`,
+    kinds: `В ячейке: доля выполненных, число задач вида, полоса прогресса (${OKB} · ${NOB}) и две кнопки с числами. <b>Нажмите на кнопку</b>, чтобы открыть список.`,
+    stages: `Только невыполненные задачи. Слева направо путь ответа: исполнитель → Минюст → Кабинет Министров → Счётная палата. Полоса в ячейке — доля этапа среди невыполненных задач отдела; в последней колонке — доля невыполненных среди всех задач отдела (<span class="lg"><i class="sw no"></i>не выполнено</span> · <span class="lg"><i class="sw ok"></i>выполнено</span>). <b>Нажмите на число</b>, чтобы открыть список.`,
   };
   function paint() {
     $$(".dtab", page).forEach(b => { const on = b.dataset.view === st.view; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
@@ -116,8 +117,9 @@ routes.dashboard = async function (page, params) {
         + `<tr><th>Отдел</th>${cols.map(k => `<th class="st-${k}" data-tip="${esc(STAGE[k][1])}">${esc(STAGE[k][0])}</th>`).join("")}<th class="sumc">Не выполнено</th></tr>`;
       line = (r, total) => {
         const open = r.sum.open, u = uOf(r, total);
-        const cell = k => { const n = r.stages[k] || 0; return n ? `<td class="dc sc st-${k}" data-tip="${esc(who(r, total) + " · " + STAGE[k][0])}: ${n} из ${open} не выполненных"><button type="button" class="n st" data-u="${esc(u)}" data-s="${k}">${n}</button><span class="sp">${pc(n, open)}%</span></td>` : `<td class="dc z"><span class="dash">—</span></td>`; };
-        return `<tr class="${rowCls(r, total)}">${nameCell(r, total)}${cols.map(cell).join("")}<td class="dc sc sumc">${open ? `<button type="button" class="n st" data-u="${esc(u)}" data-st="open">${open}</button>` : '<span class="dash">—</span>'}</td></tr>`;
+        const cell = k => { const n = r.stages[k] || 0; return n ? `<td class="dc sc st-${k}" data-tip="${esc(who(r, total) + " · " + STAGE[k][0])}: ${n} из ${open} не выполненных"><span class="cl"><button type="button" class="n st" data-u="${esc(u)}" data-s="${k}">${n}</button><span class="of">${pc(n, open)}%</span></span>${bar([[n, "sg"], [open - n, "rest"]])}</td>` : `<td class="dc z"><span class="dash">—</span></td>`; };
+        const all_ = r.sum.done + r.sum.open;
+        return `<tr class="${rowCls(r, total)}">${nameCell(r, total)}${cols.map(cell).join("")}<td class="dc sc sumc">${open ? `<span class="cl"><button type="button" class="n st" data-u="${esc(u)}" data-st="open">${open}</button><span class="of">${pc(open, all_)}% от всех</span></span>${bar([[open, "no"], [r.sum.done, "ok"]])}` : '<span class="dash">—</span>'}</td></tr>`;
       };
     }
     $("#d-table", page).className = "dbt um v-" + st.view;
