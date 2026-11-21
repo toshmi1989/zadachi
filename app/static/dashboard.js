@@ -51,9 +51,9 @@ routes.dashboard = async function (page, params) {
   const donePct = pc(T.done, T.done + T.open);
   page.insertAdjacentHTML("beforeend", `
     <section class="dkpis rise" style="--i:1">
-      <button type="button" class="dk" data-go=""><span class="l">Всего задач</span><b class="v">${T.total}</b><small>${T.info ? `в том числе «к сведению» ${T.info}` : "в базе"}</small></button>
-      <button type="button" class="dk ok" data-go="done"><span class="l">Выполнено</span><b class="v">${T.done}</b><small>${donePct}% от выполняемых</small></button>
-      <button type="button" class="dk no" data-go="open"><span class="l">Не выполнено</span><b class="v">${T.open}</b><small>${100 - donePct}% от выполняемых</small></button>
+      <button type="button" class="dk" data-go=""><span class="go">открыть список →</span><span class="l">Всего задач</span><b class="v">${T.total}</b><small>${T.info ? `в том числе «к сведению» ${T.info}` : "в базе"}</small></button>
+      <button type="button" class="dk ok" data-go="done"><span class="go">открыть список →</span><span class="l">Выполнено</span><b class="v">${T.done}</b><small>${donePct}% от выполняемых</small></button>
+      <button type="button" class="dk no" data-go="open"><span class="go">открыть список →</span><span class="l">Не выполнено</span><b class="v">${T.open}</b><small>${100 - donePct}% от выполняемых</small></button>
     </section>
     <section class="card rise dboard" style="--i:2">
       <div class="dtabs" role="tablist">${VIEWS.map(v => `<button type="button" role="tab" class="dtab" data-view="${v[0]}">${icon(v[2])}${v[1]}</button>`).join("")}</div>
@@ -71,7 +71,7 @@ routes.dashboard = async function (page, params) {
     const done = v ? v.done : 0, open = v ? v.open : 0, n = done + open;
     if (!n) return `<td class="dc z${extra}"><span class="dash">—</span></td>`;
     const p = pc(done, n);
-    return `<td class="dc${extra}" data-tip="${esc(tip)}: выполнено ${done} из ${n} (${p}%)"><b class="pc">${p}%</b><span class="cnt">${chip(done, "ok", { ...a, st: "done" })}·${chip(open, "no", { ...a, st: "open" })}</span></td>`;
+    return `<td class="dc${extra}" data-tip="${esc(tip)}: выполнено ${done} из ${n} (${p}%)"><b class="pc ${tone(p)}">${p}%</b><span class="cnt">${chip(done, "ok", { ...a, st: "done" })}${chip(open, "no", { ...a, st: "open" })}</span></td>`;
   }
   function nameCell(r, total) {
     if (total) return `<td><div class="um-n"><span class="chev off"></span><button type="button" class="pname" data-u=""><span><b>Весь департамент</b></span></button></div></td>`;
@@ -92,14 +92,15 @@ routes.dashboard = async function (page, params) {
   const uOf = (r, total) => total ? "" : r.id;
   const sumOf = r => ({ done: r.sum.done, open: r.sum.open });
 
+  const OKB = '<span class="n ok z-demo">12</span>', NOB = '<span class="n no z-demo">5</span>';
   const HELP = {
-    months: "Каждая ячейка — задачи отдела, срок которых приходится на этот месяц. Крупно: доля выполненных. Ниже: зелёное число — выполнено, красное — не выполнено. Текущий месяц выделен.",
-    kinds: "Каждая ячейка — задачи отдела по одному виду документа. Крупно: доля выполненных. Ниже: зелёное число — выполнено, красное — не выполнено.",
-    stages: "Здесь только задачи, которые ещё не выполнены. Слева направо путь ответа: исполнитель → Минюст → Кабинет Министров → Счётная палата. Красные числа — задачи, которые вернули и которыми нужно заняться.",
+    months: `Ячейка — задачи отдела, срок которых в этом месяце. Крупно: доля выполненных. Кнопки: ${OKB} выполнено, ${NOB} не выполнено. <b>Нажмите на кнопку</b>, чтобы открыть список этих задач. Текущий месяц выделен.`,
+    kinds: `Ячейка — задачи отдела по одному виду документа. Крупно: доля выполненных. Кнопки: ${OKB} выполнено, ${NOB} не выполнено. <b>Нажмите на кнопку</b>, чтобы открыть список.`,
+    stages: `Здесь только задачи, которые ещё не выполнены. Слева направо путь ответа: исполнитель → Минюст → Кабинет Министров → Счётная палата. Красные кнопки — задачи, которые вернули. <b>Нажмите на число</b>, чтобы открыть список.`,
   };
   function paint() {
     $$(".dtab", page).forEach(b => { const on = b.dataset.view === st.view; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
-    $("#d-help", page).textContent = HELP[st.view];
+    $("#d-help", page).innerHTML = HELP[st.view];
     const rows = visibleRows();
     let head, line;
     if (st.view === "months") {
