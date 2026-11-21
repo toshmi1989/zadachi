@@ -250,6 +250,7 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN pw_set INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN unit_id INTEGER REFERENCES units(id)",
     "ALTER TABLE ijro_snapshots ADD COLUMN task_ref TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE tasks ADD COLUMN manual INTEGER NOT NULL DEFAULT 0",       # 1 = a task added by hand: a loaded base never takes it off the dashboard
 ]
 # pw_set = somebody has issued this person a password (people created by the Excel import have none yet)
 BACKFILL_PW_SET = """UPDATE users SET pw_set=1 WHERE role='admin'

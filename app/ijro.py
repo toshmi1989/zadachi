@@ -340,7 +340,7 @@ def history_filter() -> tuple[str, list]:
     """The part of the query that says WHOSE history (answers, stages) is read, by the settings: which statuses of ours, and which month of the term.
     A task without any term is outside every month scope (there is nothing to put it in)."""
     sts = ("todo", "progress", "done", "info") if setting("history_statuses") == "all" else ("todo", "progress")
-    sql, args = f" AND t.status IN ({','.join('?' * len(sts))})", list(sts)
+    sql, args = f" AND t.manual=0 AND t.status IN ({','.join('?' * len(sts))})", list(sts)          # a task added by hand is not on the site: nothing to read
     scope = setting("history_scope")
     if scope in ("month", "month_next", "month_overdue"):
         eff = tasks.eff_sql("due" if setting("history_date") == "due" else "close")
@@ -587,7 +587,7 @@ def finish_run(c, run: str, complete: bool) -> dict:
     if r["files"] < export_files() or not complete:
         return {"judged": False, "why": f"Запуск неполный (файлов {r['files']} из {export_files()}{'' if complete else ', проверка статусов не завершена'}): задачи не трогаю"}
     rows = c.execute("""SELECT t.id, t.code, s.site_status, s.found, s.checked_at FROM tasks t LEFT JOIN ijro_snapshots s ON s.task_id=t.id
-                        WHERE t.status IN ('todo','progress') AND t.code NOT IN (SELECT code FROM export_seen WHERE run=?)""", (run,)).fetchall()
+                        WHERE t.status IN ('todo','progress') AND t.manual=0 AND t.code NOT IN (SELECT code FROM export_seen WHERE run=?)""", (run,)).fetchall()
     stale, unsure = [], 0
     for x in rows:
         site_open = x["found"] and x["checked_at"] and x["checked_at"] >= r["created_at"] and x["site_status"] in SITE_OPEN_STATUSES

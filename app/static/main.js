@@ -2,9 +2,10 @@
 /* Start-up: who am I, navigation by role, theme, account menu. */
 (async function () {
   try { Z.me = await api("/api/me"); } catch (e) { return; }
-  const me = Z.me, admin = me.role === "admin";
+  const me = Z.me, admin = me.role === "admin", staff = admin || me.role === "specialist";
   const nav = [["dashboard", "Дашборд", "dash"]];
   if (me.tasks !== "none") nav.push(["tasks", !admin && me.tasks === "own" ? "Мои задачи" : "Задачи", "list"]);
+  if (staff) nav.push(["editor", "Редактор", "list"]);
   nav.push(["reminders", "Напоминания", "bell"]);
   if (admin) nav.push(["users", "Пользователи", "users"], ["import", "Импорт", "upload"], ["sync", "Синхронизация", "sync"], ["settings", "Настройки", "gear"]);
   $("#tabs").insertAdjacentHTML("beforeend", nav.map(n => `<a href="#/${n[0]}" data-r="${n[0]}">${icon(n[2])}${n[1]}</a>`).join(""));

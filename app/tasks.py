@@ -145,7 +145,7 @@ def row_out(r, by: str) -> dict:
         "days": (date.fromisoformat(eff) - t).days if eff else None,
         "status": r["status"], "tag": r["tag"], "bucket": bucket_of(r["status"], eff, t),
         "assignee_id": r["assignee_id"], "assignee": auth.short_name(r["a_name"]) if r["a_name"] else "",
-        "assignee_name": r["a_name"] or "", "unit_id": r["a_unit"], "unit": r["unit_name"] or "", "assignee_raw": r["assignee_raw"], "done_at": r["done_at"], "edited": bool(r["edited"]),
+        "assignee_name": r["a_name"] or "", "unit_id": r["a_unit"], "unit": r["unit_name"] or "", "assignee_raw": r["assignee_raw"], "done_at": r["done_at"], "edited": bool(r["edited"]), "manual": bool(r["manual"]),
         "updated_at": r["updated_at"],
     }
 

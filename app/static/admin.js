@@ -28,7 +28,7 @@ routes.users = async function (page) {
     paintFilter();
     const list = items.filter(FILTERS[flt]);
     $("#ul", page).innerHTML = !list.length ? '<div class="card empty" style="grid-column:1/-1"><div class="big">🎉</div><b>Здесь никого нет</b><p>По этому условию все в порядке.</p></div>' : list.map((u, i) => `<div class="card ucard rise${u.active ? "" : " off"}" style="--i:${Math.min(i, 12) + 1}" data-id="${u.id}">
-      <div class="hd">${avatar(u.id, u.name, "lg")}<div style="min-width:0"><b>${esc(u.name)}</b><small>${esc(u.login)} · <span class="chip ${u.role === "admin" ? "progress" : ""}" style="padding:1px 8px">${u.role === "admin" ? "Администратор" : "Пользователь"}</span>${u.active ? "" : " · отключён"}</small></div></div>
+      <div class="hd">${avatar(u.id, u.name, "lg")}<div style="min-width:0"><b>${esc(u.name)}</b><small>${esc(u.login)} · <span class="chip ${u.role === "admin" ? "progress" : u.role === "specialist" ? "info" : ""}" style="padding:1px 8px">${u.role === "admin" ? "Администратор" : u.role === "specialist" ? "Специалист" : "Пользователь"}</span>${u.active ? "" : " · отключён"}</small></div></div>
       <div class="badges">${badges(u)}</div>
       <div class="st"><span><b class="num">${u.open}</b>в работе</span><span><b class="num">${u.tasks}</b>всего задач</span></div>
       <div class="acts"><button class="btn sm" data-a="edit">Изменить</button><button class="btn sm" data-a="pw">${icon("key")}Выдать пароль</button>${u.tasks ? `<button class="btn sm" data-a="tasks">Задачи</button>` : ""}</div></div>`).join("");
@@ -42,7 +42,7 @@ routes.users = async function (page) {
       { name: "name", label: "Имя (как в выгрузке Excel)", required: true, hint: "Например: Bilalov Baxodir Erkinovich. Задачи с таким именем привяжутся автоматически." },
       { name: "login", label: "Логин", required: true, hint: "Латиница, цифры, точка, дефис" },
       { name: "unit", label: "Отдел", type: "select", value: "", options: unitOpts() },
-      { name: "role", label: "Роль", type: "select", value: "user", options: [["user", "Пользователь — видит дашборд"], ["admin", "Администратор — управляет всем"]] },
+      { name: "role", label: "Роль", type: "select", value: "user", options: [["user", "Пользователь — видит дашборд"], ["specialist", "Специалист — редактирует задачи"], ["admin", "Администратор — управляет всем"]] },
       { name: "password", label: "Пароль", type: "text", hint: "Оставьте пустым — система придумает сама" }],
       submit: d => api("/api/users", { method: "POST", json: Object.assign({}, d, { unit_id: d.unit ? +d.unit : null }) }).then(res => Object.assign(res, { _d: d })) });
     if (!r) return;
@@ -66,7 +66,7 @@ routes.users = async function (page) {
       { name: "name", label: "Имя", value: u.name, required: true },
       { name: "excel_name", label: "Имя в выгрузке Excel", value: u.excel_name, hint: "Если в файле оно записано иначе, чем выше" },
       { name: "unit", label: "Отдел", type: "select", value: u.unit_id ? String(u.unit_id) : "", options: unitOpts() },
-      { name: "role", label: "Роль", type: "select", value: u.role, options: [["user", "Пользователь"], ["admin", "Администратор"]] },
+      { name: "role", label: "Роль", type: "select", value: u.role, options: [["user", "Пользователь"], ["specialist", "Специалист"], ["admin", "Администратор"]] },
       { name: "active", label: "Доступ", type: "select", value: u.active ? "1" : "0", options: [["1", "Активен"], ["0", "Отключён (войти нельзя, задачи остаются)"]] }],
       submit: d => api("/api/users/" + u.id, { method: "PATCH", json: Object.assign({}, d, { active: d.active === "1", unit_id: d.unit ? +d.unit : null }) }) });
     if (r) { toast("Сохранено"); reload(); }

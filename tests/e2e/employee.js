@@ -61,7 +61,8 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   await p.keyboard.press("Escape"); await p.waitForTimeout(500);
   // the dashboard does not open other people's lists
   await p.goto(BASE + "/#/dashboard"); await p.waitForSelector(".dbt"); await p.waitForTimeout(1500);
-  await p.locator("#t-kinds tbody tr.total button.n.no").first().click(); await p.waitForSelector("#rows tr[data-id]"); await p.waitForTimeout(500);
+  await p.click('.dtab[data-view="kinds"]'); await p.waitForTimeout(300);
+  await p.locator("#d-table tbody tr.total button.n.no").first().click(); await p.waitForSelector("#rows tr[data-id]"); await p.waitForTimeout(500);
   ok(await p.locator("#rows tr[data-id]").count() >= 1 && !/assignee=/.test(p.url()), "a number of the dashboard opens the list limited to the person's own tasks (the server does it)");
   // API: the server says no too
   const t0 = givenCodes[0], gid = give[0];

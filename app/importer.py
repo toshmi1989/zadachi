@@ -169,7 +169,7 @@ def apply_status(c, rows: list[dict], warnings: list[str], filename: str, user_i
 
 def absent_open(c, present: set) -> list[dict]:
     """Open tasks of the base whose code is not in the loaded file (the base is loaded as a whole, so they are no longer on the site's list)."""
-    return [dict(r) for r in c.execute("SELECT id, code, doc_no, point, substr(text, 1, 120) AS text, due FROM tasks WHERE status IN ('todo','progress') ORDER BY code")
+    return [dict(r) for r in c.execute("SELECT id, code, doc_no, point, substr(text, 1, 120) AS text, due FROM tasks WHERE status IN ('todo','progress') AND manual=0 ORDER BY code")
             if r["code"] not in present]
 
 

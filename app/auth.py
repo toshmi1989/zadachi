@@ -15,7 +15,8 @@ from contextvars import ContextVar
 from .db import connect, now, tx
 
 SESSION_DAYS = 30
-ROLES = {"admin": "Администратор", "user": "Пользователь"}
+ROLES = {"admin": "Администратор", "specialist": "Специалист", "user": "Пользователь"}
+STAFF = ("admin", "specialist")      # who edits tasks: the administrator and the specialist (the specialist never sees the official term and manages nothing else)
 CURRENT: ContextVar[dict | None] = ContextVar("current_user", default=None)
 CURRENT_IP: ContextVar[str] = ContextVar("current_ip", default="")
 

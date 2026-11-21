@@ -214,7 +214,7 @@ def logout(request: Request):
 
 def task_scope(user: dict) -> str:
     """all | own | none: what this user may see in the task list. The administrator always sees everything."""
-    if user["role"] == "admin":
+    if user["role"] in auth.STAFF:
         return "all"
     s = setting("users_tasks")
     return s if s in ("all", "own", "none") else "all"
@@ -282,7 +282,7 @@ def api_tasks(request: Request, page: int = 1, size: int = 50):
     try:
         out = tasks.list_tasks(c, filters(request), me(request), scope == "own", limit=size, offset=(max(page, 1) - 1) * size) | {"page": max(page, 1), "size": size}
         for t in out["items"]:
-            t["can_edit"] = me(request)["role"] == "admin" or t["assignee_id"] == me(request)["id"]
+            t["can_edit"] = me(request)["role"] in auth.STAFF or t["assignee_id"] == me(request)["id"]
         ijro.brief(c, [t for t in out["items"] if t["can_edit"]], me(request)["role"] == "admin")
         return out
     finally:
@@ -323,7 +323,7 @@ def api_task(request: Request, task_id: int, by: str = "close"):
     c = connect()
     try:
         out = tasks.get_task(c, task_id, me(request), scope == "own", "due" if by == "due" else "close")
-        out["can_edit"] = me(request)["role"] == "admin" or out["assignee_id"] == me(request)["id"]
+        out["can_edit"] = me(request)["role"] in auth.STAFF or out["assignee_id"] == me(request)["id"]
         if out["can_edit"]:   # what the site says: for administrators and for the employee a task belongs to (not the official term)
             snap = c.execute("SELECT * FROM ijro_snapshots WHERE task_id=?", (task_id,)).fetchone()
             out["site"] = ijro.site_info(snap, out["status"], out["due"], me(request)["role"] == "admin") if snap else None
@@ -355,7 +355,10 @@ async def api_task_update(request: Request, task_id: int):
     changes = {k: b[k] for k in EDITABLE if k in b}
     if not changes:
         bad("Нечего менять")
-    if user["role"] != "admin":
+    if user["role"] == "specialist":
+        if changes.get("status", "todo") not in ("todo", "progress", "done", "info"):
+            bad("Этот статус ставит администратор", 403)
+    elif user["role"] != "admin":
         # an employee: only the status, only of their own task, only to a status they may set
         scope = need_tasks(request)
         c = connect()
@@ -382,15 +385,55 @@ async def api_task_update(request: Request, task_id: int):
         out["can_edit"] = True
         snap = c.execute("SELECT * FROM ijro_snapshots WHERE task_id=?", (task_id,)).fetchone()
         out["site"] = ijro.site_info(snap, out["status"], out["due"], user["role"] == "admin") if snap else None
-    if user["role"] == "admin" and changed and before and out["assignee_id"] and out["assignee_id"] != before["assignee_id"] and out["assignee_id"] != user["id"]:
+    if user["role"] in auth.STAFF and changed and before and out["assignee_id"] and out["assignee_id"] != before["assignee_id"] and out["assignee_id"] != user["id"]:
         reminders.notify_assigned([(task_id, out["assignee_id"])])
     return out | {"changed": changed}
 
 
+@app.post("/api/tasks")
+async def api_task_create(request: Request):
+    """A task added by hand (administrator or specialist). It gets its own code (M00001 ...) and is never taken off the dashboard by a loaded base.
+    The official term is the administrator's: a specialist sets only the execution date (the closing date)."""
+    user = me(request)
+    if user["role"] not in auth.STAFF:
+        bad("Задачи добавляет администратор или специалист", 403)
+    b = await _json(request)
+    text = str(b.get("text") or "").strip()
+    if not text or len(text) > 4000:
+        bad("Укажите текст задачи (до 4000 знаков)")
+    status = b.get("status") or "todo"
+    if status not in ("todo", "progress"):
+        bad("Новая задача может быть только «Не выполнено» или «В работе»")
+    kind, doc_no, point = (re.sub(r"\s+", " ", str(b.get(k) or "")).strip() for k in ("kind", "doc_no", "point"))
+    if len(kind) > 60 or len(doc_no) > 200 or len(point) > 60:
+        bad("Слишком длинное значение (вид до 60, документ до 200, пункт до 60 знаков)")
+    with tx() as c:
+        doc_date = tasks._date_or_none(b.get("doc_date"))
+        close = tasks._date_or_none(b.get("close_date"))
+        due = tasks._date_or_none(b.get("due")) if user["role"] == "admin" else None
+        who = b.get("assignee_id")
+        assignee = None
+        if who not in (None, "", 0):
+            u = c.execute("SELECT id, name FROM users WHERE id=? AND active=1", (who,)).fetchone()
+            if not u:
+                bad("Такого сотрудника нет или он отключён")
+            assignee = u
+        n = c.execute("SELECT COALESCE(MAX(CAST(substr(code, 2) AS INTEGER)), 0) FROM tasks WHERE manual=1 AND code GLOB 'M[0-9]*'").fetchone()[0] + 1
+        cur = c.execute("""INSERT INTO tasks(code, seq, kind, doc_no, doc_date, point, text, due, close_date, assignee_id, assignee_raw, status, tag, manual, created_at, updated_at)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (f"M{n:05d}", 0, kind, doc_no, doc_date, point, text, due, close, assignee["id"] if assignee else None, assignee["name"] if assignee else "", status, "", 1, now(), now()))
+        audit(c, "task.create", "task", cur.lastrowid, {"code": f"M{n:05d}", "by_role": user["role"]})
+        out = tasks.get_task(c, cur.lastrowid, user, False)
+    out["can_edit"] = True
+    if assignee and assignee["id"] != user["id"]:
+        reminders.notify_assigned([(out["id"], assignee["id"])])
+    return out
+
+
 @app.post("/api/tasks/bulk")
 async def api_task_bulk(request: Request):
-    if me(request)["role"] != "admin":
-        bad("Задачи редактирует администратор", 403)
+    if me(request)["role"] not in auth.STAFF:
+        bad("Задачи редактирует администратор или специалист", 403)
     b = await _json(request)
     ids = b.get("ids")
     if not isinstance(ids, list) or not ids or len(ids) > 1000 or not all(isinstance(i, int) for i in ids):
@@ -398,6 +441,8 @@ async def api_task_bulk(request: Request):
     changes = {k: b[k] for k in EDITABLE if k in b}
     if not changes:
         bad("Нечего менять")
+    if me(request)["role"] == "specialist" and changes.get("status", "todo") not in ("todo", "progress", "done", "info"):
+        bad("Этот статус ставит администратор", 403)
     n, assigned = 0, []
     with tx() as c:
         for i in ids:

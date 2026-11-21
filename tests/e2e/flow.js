@@ -12,10 +12,10 @@ const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++
   const p = await mk(); await login(p, "admin", "secret123");
 
   // drill-down from the dashboard
-  const nOpen = await p.textContent("#t-months tbody tr.total td:last-child button.n.no");                    // «не выполнено» in the «Всего» column of the first table
-  await p.click("#t-months tbody tr.total td:last-child button.n.no"); await p.waitForSelector("#rows tr[data-id]");
+  const nOpen = (await p.textContent("#d-table tbody tr.total td:last-child button.n.no")).replace(/\D/g, "");   // «не выполнено» in the «Всего» column of the first tab
+  await p.click("#d-table tbody tr.total td:last-child button.n.no"); await p.waitForSelector("#rows tr[data-id]");
   ok(/status=open/.test(p.url()), "the red number of the total row opens the list of not done tasks");
-  ok((await p.textContent("#sub")).includes(nOpen.trim()), "the list has exactly that many tasks (" + nOpen.trim() + ")");
+  ok((await p.textContent("#sub")).includes(nOpen), "the list has exactly that many tasks (" + nOpen + ")");
   ok(await p.locator(".fchip").count() === 1, "one active filter chip");
   await p.screenshot({ path: OUT + "/10-tasks-overdue.png" });
   await p.click(".fchip button"); await p.waitForTimeout(500);
@@ -23,7 +23,8 @@ const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++
 
   // a number of the table of stages → stage + not done
   await p.goBack(); await p.waitForSelector(".dbt"); await p.waitForTimeout(1200);
-  await p.click("#t-stages tbody tr.total button.n[data-s]");
+  await p.click('.dtab[data-view="stages"]'); await p.waitForTimeout(300);
+  await p.click("#d-table tbody tr.total button.n[data-s]");
   await p.waitForSelector("#rows tr[data-id]");
   ok(/stage=\w+/.test(p.url()) && /status=open/.test(p.url()), "a number of the stages table opens stage + not done: " + p.url().split("#")[1]);
 
@@ -93,7 +94,7 @@ const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++
 
   // dark + percent + phone
   await p.goto(BASE + "/#/dashboard"); await p.waitForSelector(".dbt"); await p.waitForTimeout(1400);
-  ok((await p.textContent("#t-months tbody tr.total")).includes("%"), "the tables show the percent done");
+  ok((await p.textContent("#d-table tbody tr.total")).includes("%"), "the tables show the percent done");
   await p.click("#theme"); await p.click("#theme"); await p.waitForTimeout(500);
   await p.screenshot({ path: OUT + "/30-dark-pct.png" });
   const m = await mk({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
