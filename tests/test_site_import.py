@@ -51,8 +51,13 @@ def admin():
         d.close()
 
 
-def post(admin, rows, dry=1, window=("2026-12-01", "2026-12-31"), ai=0, mode="base"):
-    return admin.post(f"/api/import?dry={dry}&due_from={window[0]}&due_to={window[1]}&ai={ai}&mode={mode}", files={"file": ("e.xlsx", export(rows))})
+def post(admin, rows, dry=1, window=("2026-12-01", "2026-12-31"), ai=0, mode="base", extra=""):
+    return admin.post(f"/api/import?dry={dry}&due_from={window[0]}&due_to={window[1]}&ai={ai}&mode={mode}{extra}", files={"file": ("e.xlsx", export(rows))})
+
+
+def xlsx_old():
+    from test_app import xlsx
+    return xlsx([[1, "Қарор", "ПҚ-1 \n 01.01.2026", "1-банд\nТекст", "31.12.2026", "2026-12-01", "Old Person", "Бажарилмаган", "OLD0001"]])
 
 
 def sync_settings(admin, **kw):
@@ -391,7 +396,10 @@ def test_the_download_plan_follows_the_setting(admin):
 def test_the_settings_of_the_import_are_explained_and_validated(admin):
     s = admin.get("/api/settings").json()["sync"]
     fields = {f["key"]: f for f in s["fields"]}
-    assert set(fields) == {"sync_source", "sync_apply", "base_back", "base_fwd", "history_scope", "history_date", "history_statuses"}
+    assert set(fields) == {"base_manual", "base_absent", "sync_source", "sync_apply", "base_back", "base_fwd", "history_scope", "history_date", "history_statuses"}
+    assert fields["base_manual"]["value"] == "overwrite" and fields["base_absent"]["value"] == "gone"                  # the base overwrites; what is not in it leaves the dashboard
+    groups = {g["id"] for g in admin.get("/api/settings").json()["sync"]["groups"]}
+    assert groups == {"base", "history", "lists"} and {f["group"] for f in s["fields"]} == groups
     assert all(o["help"] for f in s["fields"] if f["kind"] == "choice" for o in f["options"])        # every choice says what it does
     assert fields["sync_source"]["value"] == "lists" and fields["sync_apply"]["value"] == "status" and fields["history_scope"]["value"] == "month"   # the defaults
     assert fields["history_statuses"]["value"] == "open" and fields["history_date"]["value"] == "close"
@@ -402,3 +410,68 @@ def test_the_settings_of_the_import_are_explained_and_validated(admin):
     got = {f["key"]: f["value"] for f in admin.get("/api/settings").json()["sync"]["fields"]}
     assert got["base_back"] == "" and got["history_scope"] == "all"
     sync_settings(admin, base_back="30", history_scope="month")
+
+
+def _statuses():
+    from app.db import connect
+    c = connect()
+    try:
+        return {r["id"]: r["status"] for r in c.execute("SELECT id, status FROM tasks")}
+    finally:
+        c.close()
+
+
+def _restore(before):
+    """The base load takes absent tasks off the dashboard: the tests of other modules share this database, so the statuses are put back."""
+    from app.db import connect
+    c = connect()
+    for i, st in before.items():
+        c.execute("UPDATE tasks SET status=? WHERE id=?", (st, i))
+    c.commit(); c.close()
+
+
+def test_the_base_overwrites_hand_edits_and_takes_absent_tasks_off(admin):
+    far = ("2000-01-01", "2099-12-31")
+    assert post(admin, [row("SX0200", PRIMARY, "Sitea Primary", "25.12.2026"), row("SX0201", PRIMARY, "Sitea Primary", "25.12.2026"),
+                        row("SX0202", PRIMARY, "Sitea Primary", "25.12.2026")], dry=0, window=far).json()["created"] == 3
+    t = admin.get("/api/tasks?q=SX0200").json()["items"][0]
+    assert admin.patch(f"/api/tasks/{t['id']}", json={"status": "progress", "close_date": "2026-12-15"}).status_code == 200
+    new = [row("SX0200", PRIMARY, "Sitea Primary", "25.12.2026", state="Бажарилган"), row("SX0201", PRIMARY, "Sitea Primary", "25.12.2026"),
+           row("SX0203", PRIMARY, "Sitea Primary", "25.12.2026")]                                   # SX0202 is not in the new base
+    keep = post(admin, new, dry=1, window=far).json()                                               # the API default: hand edits stay, nothing leaves
+    assert keep["kept_manual"] == 1 and keep["overwritten"] == 0 and "absent_tasks" not in keep
+    pre = post(admin, new, dry=1, window=far, extra="&overwrite=1&replace=1").json()
+    assert pre["overwritten"] == 1 and pre["created"] == 1 and pre["kept_manual"] == 0
+    ab = pre["absent_tasks"]
+    assert any(x["code"] == "SX0202" for x in ab["sample"]) and ab["count"] >= 1 and not any(x["code"] in ("SX0200", "SX0201", "SX0203") for x in ab["sample"])
+    assert admin.get("/api/tasks?q=SX0200").json()["items"][0]["status"] == "progress"              # a preview writes nothing
+    before = _statuses()
+    try:
+        assert ab["needs_confirm"]                                                                   # nearly every other open task of this database is "absent": more than a quarter
+        refused = post(admin, new, dry=0, window=far, extra="&overwrite=1&replace=1")
+        assert refused.status_code == 400 and "подтверд" in refused.text and _statuses() == before   # an incomplete load is stopped before anything is written
+        r = post(admin, new, dry=0, window=far, extra="&overwrite=1&replace=1&confirm=1").json()
+        assert r["overwritten"] == 1 and r["absent_tasks"]["taken_off"] == ab["count"]
+        a = admin.get("/api/tasks?q=SX0200").json()["items"][0]
+        assert a["status"] == "done" and a["close_date"] == "2026-12-15"                           # the file won; a closing date that is not in the file is not erased
+        assert admin.get("/api/tasks?q=SX0202&status=gone").json()["total"] == 1                    # taken off, not deleted
+        assert admin.get("/api/tasks?q=SX0203").json()["total"] == 1
+        back = post(admin, new + [row("SX0202", PRIMARY, "Sitea Primary", "25.12.2026")], dry=0, window=far, extra="&overwrite=1").json()
+        assert admin.get("/api/tasks?q=SX0202").json()["items"][0]["status"] == "todo" and back["updated"] >= 1      # it comes back when a later base has it
+    finally:
+        _restore(before)
+
+
+def test_several_files_are_one_base(admin):
+    far = ("2000-01-01", "2099-12-31")
+    one = [row("SX0210", PRIMARY, "Sitea Primary", "25.12.2026")]
+    two = [row("SX0211", PRIMARY, "Sitea Primary", "25.12.2026")]
+    assert post(admin, one + two, dry=0, window=far).json()["created"] == 2
+    url = f"/api/import?dry=1&due_from={far[0]}&due_to={far[1]}&ai=0&overwrite=1&replace=1"
+    both = admin.post(url, files=[("file", ("a.xlsx", export(one))), ("file", ("b.xlsx", export(two)))]).json()
+    assert both["rows"] == 2 and not any(x["code"] in ("SX0210", "SX0211") for x in both["absent_tasks"]["sample"])      # judged together: neither leaves
+    only = admin.post(url, files=[("file", ("a.xlsx", export(one)))]).json()
+    assert any(x["code"] == "SX0211" for x in only["absent_tasks"]["sample"])                      # one file alone would take the other one off: that is why the preview says so
+    mixed = admin.post(url, files=[("file", ("a.xlsx", export(one))), ("file", ("old.xlsx", xlsx_old()))])
+    assert mixed.status_code == 400
+    assert admin.post(url, files=[("file", ("a.xlsx", export(one)))] * 11).status_code == 400       # at most ten files

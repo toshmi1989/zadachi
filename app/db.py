@@ -221,6 +221,8 @@ DEFAULT_SETTINGS = {
     "ai_base_url": "",
     "ijro_auto_archive": "1",     # take tasks the site no longer lists as ours off the dashboard after a complete synchronisation (up to a quarter of the open ones; more waits for a confirmation)
     "ijro_auto_apply": "1",       # apply clear changes from the site automatically after each synchronisation
+    "base_manual": "overwrite",   # the loaded base vs what the administrator edited by hand: overwrite (the file wins) | keep (hand edits stay)
+    "base_absent": "gone",        # open tasks that are not in the loaded base: gone (taken off the dashboard, «Нет на сайте») | keep (stay as they are)
     "sync_source": "lists",       # what the collector downloads: lists (3 files: one list per section with every status) | tabs (3 lists x 3 tabs = 9 files)
     "sync_apply": "status",       # what a downloaded list does: status (only updates the statuses of tasks already in the base) | base (also adds new tasks and updates the fields)
     "base_back": "30",            # a list that adds tasks takes terms from this many days back (empty = no limit) ...

@@ -167,8 +167,16 @@ def apply_status(c, rows: list[dict], warnings: list[str], filename: str, user_i
     return summary
 
 
-def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int | None, dry: bool, mode: str = "base") -> dict:
-    """mode "base": the base load (new tasks are created, fields are updated). mode "status": the ordinary import, see apply_status."""
+def absent_open(c, present: set) -> list[dict]:
+    """Open tasks of the base whose code is not in the loaded file (the base is loaded as a whole, so they are no longer on the site's list)."""
+    return [dict(r) for r in c.execute("SELECT id, code, doc_no, point, substr(text, 1, 120) AS text, due FROM tasks WHERE status IN ('todo','progress') ORDER BY code")
+            if r["code"] not in present]
+
+
+def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int | None, dry: bool, mode: str = "base", overwrite: bool = False) -> dict:
+    """mode "base": the base load (new tasks are created, fields are updated). mode "status": only the statuses, see apply_status.
+    overwrite: the file wins over what the administrator edited by hand (the status and the responsible person, and the closing date when the file has one);
+    otherwise a task with hand edits keeps them."""
     if mode == "status":
         return apply_status(c, rows, warnings, filename, user_id, dry)
     users = {}
@@ -176,7 +184,7 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
         users[auth.norm_name(u["name"])] = u["id"]
         if u["excel_name"]:
             users[auth.norm_name(u["excel_name"])] = u["id"]
-    new_people, created, updated, same, kept = [], 0, 0, 0, 0
+    new_people, created, updated, same, kept, overwritten = [], 0, 0, 0, 0, 0
     existing = {r["code"]: r for r in c.execute("SELECT * FROM tasks")}
     t = now()
     for r in rows:
@@ -211,7 +219,7 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
                     fields.pop(k)
         if cur_row["status"] == "gone" and "unit_id" in r:
             fields.update(status=r["status"], assignee_id=uid)          # the site lists it as ours again: back on the dashboard
-        elif cur_row["edited"]:
+        elif cur_row["edited"] and not overwrite:
             kept += 1  # the administrator already worked on this task: the file does not overwrite assignee, status, closing date
         elif "unit_id" in r:
             # the raw export of the site: it has no closing date (never erased) and says "in progress" for everything open (never lowers our status)
@@ -224,13 +232,16 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
         if not diff:
             same += 1
             continue
+        if cur_row["edited"] and overwrite and diff.keys() & {"status", "assignee_id", "close_date"}:
+            overwritten += 1                      # something the administrator had set by hand is replaced by the file ...
+            diff["edited"] = 0                    # ... and the task is the file's again (no longer "edited by hand")
         updated += 1
         if not dry:
             if "status" in diff:
                 diff["done_at"] = t if diff["status"] == "done" else None
             diff["updated_at"] = t
             c.execute(f"UPDATE tasks SET {', '.join(k + '=?' for k in diff)} WHERE id=?", (*diff.values(), cur_row["id"]))
-    summary = {"rows": len(rows), "created": created, "updated": updated, "unchanged": same, "kept_manual": kept,
+    summary = {"rows": len(rows), "created": created, "updated": updated, "unchanged": same, "kept_manual": kept, "overwritten": overwritten,
                "new_people": new_people, "warnings": warnings, "dry": dry, "mode": "base"}
     if not dry:
         import json

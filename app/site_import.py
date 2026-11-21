@@ -133,7 +133,11 @@ def suggest_unit(c, name: str, units=None) -> tuple[int | None, float]:
 
 def read(c, data: bytes, due_from: str | None, due_to: str | None, ours_out: set | None = None) -> tuple[list[dict], list[str], dict]:
     """(rows in the shape of importer.apply, warnings, report). due_from/due_to: only the terms of this window are taken (ISO dates, both ends included)."""
-    raw_all = _read_rows(data)
+    return read_rows(c, _read_rows(data), due_from, due_to, ours_out)
+
+
+def read_rows(c, raw_all: list[dict], due_from: str | None, due_to: str | None, ours_out: set | None = None) -> tuple[list[dict], list[str], dict]:
+    """The same for rows that are already read: the rows of SEVERAL files (one list per section) are one base, so they are judged together."""
     raw = [r for r in raw_all if executor_ok(r["exec"])]       # the main executor is another body: not ours, whatever the department says (and its department is not asked about)
     aliases = load_aliases(c)
     units = c.execute("SELECT id, name FROM units WHERE active=1").fetchall()

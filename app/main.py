@@ -555,26 +555,53 @@ def ai_on() -> bool:
     return setting("ai_enabled") == "1"
 
 
-def import_file(data: bytes, filename: str, user_id: int, dry: bool, due_from: str | None, due_to: str | None, ai: bool, suggest: bool = True, ours_out: set | None = None,
-                mode: str = "base") -> dict:
-    """One import, shared by the screen (a file picked by the administrator) and the collector (the export the site's own button makes).
-    mode "base": the base load (new tasks are created, fields updated, a window of terms applies). mode "status": the ordinary import: only the
-    statuses of tasks that are already in the base are updated (no window: a status of a task is needed whatever its term is)."""
+def import_files(datas: list[bytes], filename: str, user_id: int, dry: bool, due_from: str | None, due_to: str | None, ai: bool, suggest: bool = True,
+                 ours_out: set | None = None, mode: str = "base", overwrite: bool = False, replace: bool = False, confirm: bool = False) -> dict:
+    """One import, shared by the screen (files picked by the administrator) and the collector (the list the site's own button makes).
+    The files are ONE base (a list per section): they are read together and judged together.
+    mode "base": the base load (new tasks are created, fields updated, a window of terms applies). mode "status": only the statuses of tasks already in the
+    base (no window: a status is needed whatever the term is).
+    overwrite: the file wins over what the administrator edited by hand. replace: the open tasks that are NOT in the loaded base are taken off the dashboard
+    («Нет на сайте»; nothing is deleted, they come back if a later base has them). More than a quarter of the open tasks needs `confirm`."""
     status = mode == "status"
-    site = site_import.is_site_export(data)
+    sites = [site_import.is_site_export(d) for d in datas]
+    if any(sites) and not all(sites):
+        bad("Нельзя загружать вместе выгрузки с сайта и обработанный список: загрузите их по отдельности")
+    site = bool(sites) and all(sites)
     report = None
+    present = ours_out if ours_out is not None else set()
     try:
         if site:
+            raw_all = [r for d in datas for r in site_import._read_rows(d)]
             with tx() as c:
-                rows, warnings, report = site_import.read(c, data, None if status else due_from, None if status else due_to, ours_out)
+                rows, warnings, report = site_import.read_rows(c, raw_all, None if status else due_from, None if status else due_to, present)
                 if not status:
-                    report["absent"] = site_import.absent(c, {r["code"] for r in site_import._read_rows(data)}, due_from, due_to)[:200]
+                    report["absent"] = site_import.absent(c, {r["code"] for r in raw_all}, due_from, due_to)[:200]
         else:
-            rows, warnings = importer.read(data)
+            if len(datas) > 1:
+                bad("Обработанный список загружается одним файлом")
+            rows, warnings = importer.read(datas[0])
+            present.update(r["code"] for r in rows)
     except importer.ImportError_ as e:
         bad(str(e))
+    gone: list[dict] = []
+    open_total = 0
+    if replace and not status:
+        with tx() as c:
+            present |= {r["code"] for r in rows}
+            gone = importer.absent_open(c, present)
+            open_total = c.execute("SELECT COUNT(*) FROM tasks WHERE status IN ('todo','progress')").fetchone()[0]
+        limit = max(10, open_total // 4)
+        if not dry and len(gone) > limit and not confirm:
+            bad(f"Из базы уйдёт {len(gone)} из {open_total} открытых задач (больше четверти): проверьте файлы (загружены ли все разделы?) и подтвердите снятие")
     with tx() as c:
-        summary = importer.apply(c, rows, warnings, filename or "export.xlsx", user_id, dry, mode="status" if status else "base")
+        summary = importer.apply(c, rows, warnings, filename or "export.xlsx", user_id, dry, mode="status" if status else "base", overwrite=overwrite)
+    if replace and not status:
+        summary["absent_tasks"] = {"count": len(gone), "open": open_total, "needs_confirm": len(gone) > max(10, open_total // 4), "sample": gone[:50]}
+        if not dry and gone:
+            with tx() as c:
+                summary["absent_tasks"]["taken_off"] = ijro.archive(c, [g["id"] for g in gone])
+                audit(c, "import.replace", "tasks", None, {"taken_off": summary["absent_tasks"]["taken_off"], "file": (filename or "")[:200]})
     if report is not None:
         summary["site"] = report
     if site and not dry and ai and suggest and not status:
@@ -582,16 +609,31 @@ def import_file(data: bytes, filename: str, user_id: int, dry: bool, due_from: s
     return summary
 
 
+def import_file(data: bytes, filename: str, user_id: int, dry: bool, due_from: str | None, due_to: str | None, ai: bool, suggest: bool = True, ours_out: set | None = None,
+                mode: str = "base") -> dict:
+    return import_files([data], filename, user_id, dry, due_from, due_to, ai, suggest, ours_out, mode)
+
+
 @app.post("/api/import")
-async def api_import(request: Request, file: UploadFile = File(...), dry: int = 1, due_from: str = "", due_to: str = "", ai: int = 1, mode: str = "base"):
-    """The old processed list, or the raw export of the site. mode=base: the base load (only our departments, a window of terms, new tasks, the closing dates are
-    proposed). mode=status: the ordinary import, only the statuses of tasks that are already in the base."""
+async def api_import(request: Request, file: list[UploadFile] = File(...), dry: int = 1, due_from: str = "", due_to: str = "", ai: int = 1, mode: str = "base",
+                     overwrite: int = 0, replace: int = 0, confirm: int = 0):
+    """The base load: the lists of the site (one per section, they are read together) or the old processed list. Only our departments, a window of terms,
+    the closing dates are proposed. overwrite=1: the file wins over hand edits. replace=1: open tasks that are not in the loaded base leave the dashboard.
+    mode=status: only the statuses of tasks that are already in the base."""
     if mode not in ("base", "status"):
         bad("mode: base или status")
-    data = await file.read(MAX_UPLOAD + 1)
-    if len(data) > MAX_UPLOAD:
-        bad(f"Файл больше {MAX_UPLOAD // (1024 * 1024)} МБ")
-    return import_file(data, file.filename or "export.xlsx", me(request)["id"], bool(dry), due_from or None, due_to or None, bool(ai), mode=mode)
+    if not file or len(file) > 10:
+        bad("Нужно от 1 до 10 файлов")
+    datas, total = [], 0
+    for f in file:
+        d = await f.read(MAX_UPLOAD + 1)
+        total += len(d)
+        if len(d) > MAX_UPLOAD or total > MAX_UPLOAD * 2:
+            bad(f"Файл больше {MAX_UPLOAD // (1024 * 1024)} МБ")
+        datas.append(d)
+    name = ", ".join((f.filename or "export.xlsx") for f in file)[:200]
+    return import_files(datas, name, me(request)["id"], bool(dry), due_from or None, due_to or None, bool(ai), mode=mode, overwrite=bool(overwrite), replace=bool(replace),
+                        confirm=bool(confirm))
 
 
 @app.get("/api/sync/export-plan")
@@ -727,7 +769,7 @@ def api_import_history():
 @app.get("/api/settings")
 def api_settings():
     return {"users_tasks": setting("users_tasks"), "login_list": setting("login_list") == "1",
-            "sync": {"fields": ijro.sync_settings_view(), "auto_apply": setting("ijro_auto_apply") == "1", "auto_archive": setting("ijro_auto_archive") == "1"},
+            "sync": {"groups": ijro.SYNC_GROUPS, "fields": ijro.sync_settings_view(), "auto_apply": setting("ijro_auto_apply") == "1", "auto_archive": setting("ijro_auto_archive") == "1"},
             "backup": {"files": len(backup._files()), "latest": backup.verify_latest()}}
 
 

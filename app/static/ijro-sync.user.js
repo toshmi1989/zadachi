@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.5.0
+// @version      1.6.0
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.5.0";
+  const VERSION = "1.6.0";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -401,7 +401,7 @@
   });
   const client = () => makeClient({ pageFetch, getSession: () => state, apiBase: "https://adliya.ijro.uz/api", sleep });
 
-  let stop = false, running = false, resume = false, withExports = GM_getValue("exports", "1") !== "0";
+  let stop = false, running = false, resume = false, withExports = GM_getValue("exports", "0") === "1";      // by default the script only reads the stages: the base of tasks is loaded on the platform from Excel
   function panel() {
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;font:14px/1.4 system-ui,sans-serif";
@@ -413,14 +413,14 @@
       .box.on{display:block}.row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.bar{height:8px;background:#eef1f8;border-radius:8px;overflow:hidden;margin:10px 0}.bar i{display:block;height:100%;width:0;background:#4f46e5;transition:width .3s}
       .log{max-height:150px;overflow:auto;font-size:12.5px;color:#56607a;white-space:pre-wrap}b{font-weight:600}</style>
       <div class="box" id="box"><b>Синхронизация с «Задачи»</b>
-        <div class="log" id="hint">Скачиваю списки «Hisobot» (что именно и что с ним делать, задаёт платформа: «Настройки» → «Импорт и синхронизация»), затем читаю историю этапов нужных задач и передаю в платформу. На ijro ничего не меняется.</div>
+        <div class="log" id="hint">Читаю с сайта историю этапов (ответы Адлии, Кабинета, Счётной палаты) у задач из базы платформы и записываю её к ним. Какие задачи проверять, задают «Настройки» → «Импорт и синхронизация». Задачи и их статусы приходят из базы, которую вы загружаете на странице «Импорт». На ijro ничего не меняется.</div>
         <div class="bar"><i id="bar"></i></div><div class="log" id="log"></div>
-        <div class="row"><button class="pri" id="go">Синхронизировать</button><button id="stop" disabled>Стоп</button><button id="diag">Диагностика</button><button id="key">Ключ…</button><button id="exp">Выгрузки: вкл</button><button id="close">Закрыть</button></div></div>
+        <div class="row"><button class="pri" id="go">Синхронизировать</button><button id="stop" disabled>Стоп</button><button id="diag">Диагностика</button><button id="key">Ключ…</button><button id="exp">Скачивать списки: выкл</button><button id="close">Закрыть</button></div></div>
       <button class="fab" id="fab">⇄ Задачи</button>`;
     const $ = id => sh.getElementById(id), log = t => { $("log").textContent = t; };
     $("fab").onclick = () => $("box").classList.toggle("on"); $("close").onclick = () => $("box").classList.remove("on");
     $("key").onclick = () => { const v = prompt("Ключ синхронизации (из раздела «Синхронизация» платформы):", ""); if (v !== null) { GM_setValue("zk", v.trim()); log(v.trim() ? "Ключ сохранён в этом браузере." : "Ключ удалён."); } };
-    const showExp = () => { $("exp").textContent = "Выгрузки: " + (withExports ? "вкл" : "выкл"); };
+    const showExp = () => { $("exp").textContent = "Скачивать списки: " + (withExports ? "вкл" : "выкл"); };
     $("exp").onclick = () => { withExports = !withExports; GM_setValue("exports", withExports ? "1" : "0"); showExp(); log(withExports ? "Перед проверкой статусов скачаются выгрузки «Hisobot» (новые задачи, тексты, сроки)." : "Выгрузки отключены: только статусы известных задач."); };
     showExp();
     $("stop").onclick = () => { stop = true; };
