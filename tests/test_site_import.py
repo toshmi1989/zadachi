@@ -527,3 +527,28 @@ def test_the_departments_of_a_file_can_be_added_to_the_structure(admin):
     c.execute(f"UPDATE users SET unit_id = NULL WHERE unit_id IN ({ids})")
     c.execute(f"DELETE FROM units WHERE id IN ({ids})")
     c.commit(); c.close()
+
+
+def test_the_loaded_base_replaces_everything_done_tasks_and_old_proposals_included(admin):
+    from app.db import connect
+    far = ("2000-01-01", "2099-12-31")
+    flags = "&overwrite=1&replace=1&confirm=1&f_dept=0&f_exec=0&f_kind=0&f_window=0"
+    assert post(admin, [row("SX0400", PRIMARY, "Sitea Primary", "25.12.2026"), row("SX0401", PRIMARY, "Sitea Primary", "25.12.2026", state="Бажарилган"),
+                        row("SX0402", PRIMARY, "Sitea Primary", "25.12.2026")], dry=0, window=far).json()["created"] == 3
+    c = connect()
+    c.execute("UPDATE tasks SET close_date='2026-11-10', close_src='rule', close_note='by the history' WHERE code='SX0402'")      # only a proposal: nobody confirmed it
+    c.execute("UPDATE tasks SET close_date='2026-12-15' WHERE code='SX0400'")                                                    # a date a person set
+    c.commit(); c.close()
+    before = _statuses()
+    try:
+        new = [row("SX0400", PRIMARY, "Sitea Primary", "25.12.2026"), row("SX0402", PRIMARY, "Sitea Primary", "25.12.2026")]       # SX0401 (done) is not in the new files
+        pre = post(admin, new, dry=1, window=far, extra=flags).json()["absent_tasks"]
+        assert any(x["code"] == "SX0401" and x["status"] == "done" for x in pre["sample"]) and pre["done"] >= 1 and pre["total"] >= pre["count"]    # a done task goes as well
+        r = post(admin, new, dry=0, window=far, extra=flags).json()
+        assert r["absent_tasks"]["taken_off"] == pre["count"]
+        assert admin.get("/api/tasks?q=SX0401&status=gone").json()["total"] == 1 and admin.get("/api/tasks?q=SX0401").json()["total"] == 0
+        a, b = (admin.get(f"/api/tasks?q={code}").json()["items"][0] for code in ("SX0400", "SX0402"))
+        assert a["close_date"] == "2026-12-15"                                                                                    # a confirmed date stays
+        assert b["close_date"] is None and b["close_src"] == ""                                                                   # a proposal of the old base is gone: the month follows the official term
+    finally:
+        _restore(before)

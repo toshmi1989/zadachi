@@ -167,9 +167,10 @@ def apply_status(c, rows: list[dict], warnings: list[str], filename: str, user_i
     return summary
 
 
-def absent_open(c, present: set) -> list[dict]:
-    """Open tasks of the base whose code is not in the loaded file (the base is loaded as a whole, so they are no longer on the site's list)."""
-    return [dict(r) for r in c.execute("SELECT id, code, doc_no, point, substr(text, 1, 120) AS text, due FROM tasks WHERE status IN ('todo','progress') AND manual=0 ORDER BY code")
+def absent_tasks(c, present: set) -> list[dict]:
+    """The tasks of the base whose code is not in the loaded file, whatever their status: the base is loaded as a whole, so what is not in it is no longer in the base.
+    A task added by hand is not in any file and is never one of them."""
+    return [dict(r) for r in c.execute("SELECT id, code, status, doc_no, point, substr(text, 1, 120) AS text, due FROM tasks WHERE status != 'gone' AND manual=0 ORDER BY code")
             if r["code"] not in present]
 
 
@@ -228,6 +229,8 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
                 fields.update(status=r["status"])
         else:
             fields.update(close_date=r["close_date"], assignee_id=uid, status=r["status"])
+        if overwrite and "unit_id" in r and cur_row["close_src"]:
+            fields.update(close_date=None, close_src="", close_note="")       # a closing date that is only a proposal (nobody confirmed it) goes with the old base; a confirmed one stays
         diff = {k: v for k, v in fields.items() if cur_row[k] != v}
         if not diff:
             same += 1

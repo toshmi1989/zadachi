@@ -15,8 +15,8 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   ok(total >= done + open && done + open > 0, `three tiles: total ${total}, done ${done}, not done ${open}`);
   // tabs
   ok((await p.locator(".dtab").count()) === 3 && (await p.locator(".dtab.on").count()) === 1, "three tabs, one selected");
-  ok(/%/.test(await p.textContent("#d-table tbody tr.total")) && /✓/.test(await p.textContent("#d-table tbody tr.total")), "a cell shows the percent and ✓ / ✗ numbers");
-  ok(/✓|выполнено/.test(await p.textContent("#d-help")), "a short explanation of how to read the table");
+  ok(/%/.test(await p.textContent("#d-table tbody tr.total")) && (await p.locator("#d-table tbody tr.total button.n.ok").count()) >= 1 && (await p.locator("#d-table tbody tr.total button.n.no").count()) >= 1, "a cell shows the percent, a green number (done) and a red one (not done)");
+  ok(/зелёное/.test(await p.textContent("#d-help")), "a short explanation of how to read the table");
   await p.click('.dtab[data-view="kinds"]'); await p.waitForTimeout(300);
   ok((await p.$$eval("#d-table thead th", t => t.slice(1, 6).map(x => x.textContent.trim()).join(","))) === "Фармон,Қарор,Баён,ВМ,ПА", "kinds in the requested order");
   ok(/view=kinds/.test(p.url()), "the tab is in the address (back from a list returns to it)");

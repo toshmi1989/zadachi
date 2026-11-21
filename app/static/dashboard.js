@@ -52,7 +52,7 @@ routes.dashboard = async function (page, params) {
   page.insertAdjacentHTML("beforeend", `
     <section class="dkpis rise" style="--i:1">
       <button type="button" class="dk" data-go=""><span class="l">Всего задач</span><b class="v">${T.total}</b><small>${T.info ? `в том числе «к сведению» ${T.info}` : "в базе"}</small></button>
-      <button type="button" class="dk ok" data-go="done"><span class="l">Выполнено</span><b class="v">${T.done}</b><small>${donePct}% от выполняемых</small><i class="bar"><u style="width:${donePct}%"></u></i></button>
+      <button type="button" class="dk ok" data-go="done"><span class="l">Выполнено</span><b class="v">${T.done}</b><small>${donePct}% от выполняемых</small></button>
       <button type="button" class="dk no" data-go="open"><span class="l">Не выполнено</span><b class="v">${T.open}</b><small>${100 - donePct}% от выполняемых</small></button>
     </section>
     <section class="card rise dboard" style="--i:2">
@@ -63,14 +63,15 @@ routes.dashboard = async function (page, params) {
       <p class="hint dnote">Нажмите на число или процент: откроется список именно этих задач. Задачи «К сведению» в таблицы не входят. Задача относится к отделу ответственного; без ответственного или его отдела — строка «Без отдела».</p>
     </section>`);
 
-  /* ---- one cell: the percent big, below it two numbers (✓ done, ✗ not done) and a bar ---- */
+  /* ---- cells ---- */
   const attrOf = a => Object.entries(a).filter(([, v]) => v !== undefined).map(([k, v]) => `data-${k}="${esc(v)}"`).join(" ");
-  const chip = (n, cls, sym, a) => n ? `<button type="button" class="n ${cls}" ${attrOf(a)}>${sym} ${n}</button>` : `<span class="n ${cls} z">${sym} 0</span>`;
+  const chip = (n, cls, a) => n ? `<button type="button" class="n ${cls}" ${attrOf(a)}>${n}</button>` : `<span class="n ${cls} z">0</span>`;
+  /* one cell: the percent done, below it two numbers: done (green) and not done (red) */
   function pairCell(v, a, tip, extra = "") {
     const done = v ? v.done : 0, open = v ? v.open : 0, n = done + open;
     if (!n) return `<td class="dc z${extra}"><span class="dash">—</span></td>`;
     const p = pc(done, n);
-    return `<td class="dc${extra}" data-tip="${esc(tip)}: выполнено ${done} из ${n} (${p}%)"><div class="c3"><b class="pc ${tone(p)}">${p}%</b><span class="cnt">${chip(done, "ok", "✓", { ...a, st: "done" })}${chip(open, "no", "✗", { ...a, st: "open" })}</span><i class="bar"><u style="width:${p}%"></u></i></div></td>`;
+    return `<td class="dc${extra}" data-tip="${esc(tip)}: выполнено ${done} из ${n} (${p}%)"><b class="pc">${p}%</b><span class="cnt">${chip(done, "ok", { ...a, st: "done" })}·${chip(open, "no", { ...a, st: "open" })}</span></td>`;
   }
   function nameCell(r, total) {
     if (total) return `<td><div class="um-n"><span class="chev off"></span><button type="button" class="pname" data-u=""><span><b>Весь департамент</b></span></button></div></td>`;
@@ -92,9 +93,9 @@ routes.dashboard = async function (page, params) {
   const sumOf = r => ({ done: r.sum.done, open: r.sum.open });
 
   const HELP = {
-    months: "Каждая ячейка — задачи отдела, срок которых приходится на этот месяц. Крупно: какая доля выполнена. Ниже: ✓ — выполнено, ✗ — не выполнено. Текущий месяц подсвечен.",
-    kinds: "Каждая ячейка — задачи отдела по одному виду документа. Крупно: какая доля выполнена. Ниже: ✓ — выполнено, ✗ — не выполнено.",
-    stages: "Здесь только задачи, которые ещё не выполнены. Слева направо путь ответа: исполнитель → Минюст → Кабинет Министров → Счётная палата. Красные столбцы — задачи, которые вернули и которыми нужно заняться.",
+    months: "Каждая ячейка — задачи отдела, срок которых приходится на этот месяц. Крупно: доля выполненных. Ниже: зелёное число — выполнено, красное — не выполнено. Текущий месяц выделен.",
+    kinds: "Каждая ячейка — задачи отдела по одному виду документа. Крупно: доля выполненных. Ниже: зелёное число — выполнено, красное — не выполнено.",
+    stages: "Здесь только задачи, которые ещё не выполнены. Слева направо путь ответа: исполнитель → Минюст → Кабинет Министров → Счётная палата. Красные числа — задачи, которые вернули и которыми нужно заняться.",
   };
   function paint() {
     $$(".dtab", page).forEach(b => { const on = b.dataset.view === st.view; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
@@ -114,8 +115,8 @@ routes.dashboard = async function (page, params) {
         + `<tr><th>Отдел</th>${cols.map(k => `<th class="st-${k}" data-tip="${esc(STAGE[k][1])}">${esc(STAGE[k][0])}</th>`).join("")}<th class="sumc">Не выполнено</th></tr>`;
       line = (r, total) => {
         const open = r.sum.open, u = uOf(r, total);
-        const cell = k => { const n = r.stages[k] || 0; return n ? `<td class="dc sc st-${k}" data-tip="${esc(who(r, total) + " · " + STAGE[k][0])}: ${n} из ${open} не выполненных"><div class="c3"><button type="button" class="n st" data-u="${esc(u)}" data-s="${k}">${n}</button><span class="sp">${pc(n, open)}%</span></div></td>` : `<td class="dc z"><span class="dash">—</span></td>`; };
-        return `<tr class="${rowCls(r, total)}">${nameCell(r, total)}${cols.map(cell).join("")}<td class="dc sc sumc">${open ? `<div class="c3"><button type="button" class="n st" data-u="${esc(u)}" data-st="open">${open}</button></div>` : '<span class="dash">—</span>'}</td></tr>`;
+        const cell = k => { const n = r.stages[k] || 0; return n ? `<td class="dc sc st-${k}" data-tip="${esc(who(r, total) + " · " + STAGE[k][0])}: ${n} из ${open} не выполненных"><button type="button" class="n st" data-u="${esc(u)}" data-s="${k}">${n}</button><span class="sp">${pc(n, open)}%</span></td>` : `<td class="dc z"><span class="dash">—</span></td>`; };
+        return `<tr class="${rowCls(r, total)}">${nameCell(r, total)}${cols.map(cell).join("")}<td class="dc sc sumc">${open ? `<button type="button" class="n st" data-u="${esc(u)}" data-st="open">${open}</button>` : '<span class="dash">—</span>'}</td></tr>`;
       };
     }
     $("#d-table", page).className = "dbt um v-" + st.view;

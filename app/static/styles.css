@@ -522,35 +522,6 @@ a.ext:hover{text-decoration:underline;text-underline-offset:3px}
 
 .note-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--surface-2);border-radius:12px;padding:10px 14px;margin:0 0 12px;font-size:13px}.note-bar span{flex:1;min-width:240px}
 
-/* ---- dashboard: three tables of departments ---- */
-table.dbt{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px;min-width:760px}
-.dbt th{font-weight:500;color:var(--text-3);font-size:12px;text-align:center;padding:8px 8px;white-space:nowrap;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--surface)}
-.dbt th.now{color:var(--brand);box-shadow:inset 0 -2px 0 var(--brand);font-weight:700}
-.dbt th:first-child,.dbt td:first-child{text-align:left;position:sticky;left:0;z-index:2;background:var(--surface);min-width:250px;max-width:330px}
-.dbt th:first-child{z-index:3}
-.dbt td{padding:6px 6px;text-align:center;border-bottom:1px solid var(--line);vertical-align:middle}
-.dbt tr.mgmt td:first-child{font-weight:700;background:var(--surface-2)}
-.dbt tr.kid td:first-child{padding-left:22px}
-.dbt tr.total td{border-top:2px solid var(--line-2);font-weight:700}
-.dbt tr.total td:first-child{background:var(--surface-2)}
-.dbt tr.r:hover td{filter:brightness(.98)}
-.dbt td.dc{min-width:96px;line-height:1.2}
-.dbt td.dc:not(.z):not(.sc){background:linear-gradient(90deg,color-mix(in srgb,var(--c-done) 22%,transparent) var(--p,0%),color-mix(in srgb,var(--c-overdue) 14%,transparent) var(--p,0%))}
-.dbt td.dc.z{color:var(--text-3);background:none}
-.dbt td.dc.sc{background:color-mix(in srgb,var(--c-month) 10%,transparent)}
-.dbt td.dc.st-info,.dbt td.dc.st-returned{background:color-mix(in srgb,var(--c-overdue) 14%,transparent)}
-.dbt td.dc.st-unchecked,.dbt td.dc.st-other{background:var(--surface-2)}
-.dbt .pr{display:inline-flex;align-items:center;gap:3px}.dbt .pr i{font-style:normal;color:var(--text-3)}
-.dbt .n{font-weight:700;font-size:14px;padding:1px 6px;border-radius:7px;min-width:22px;display:inline-block;border:0;background:none;cursor:pointer;color:var(--text)}
-.dbt .n.ok{color:var(--c-done)}.dbt .n.no{color:var(--c-overdue)}.dbt .n.st{color:var(--text)}
-.dbt .n.z{cursor:default;font-weight:500;opacity:.45}
-.dbt button.n:hover{background:var(--surface);box-shadow:0 0 0 1px var(--line-2)}
-.dbt em{display:block;font-style:normal;font-size:11.5px;color:var(--text-2);margin-top:1px}
-.okc{color:var(--c-done)}.noc{color:var(--c-overdue)}
-#t-stages th{white-space:normal;line-height:1.2;max-width:104px;min-width:76px;vertical-align:bottom}
-#t-stages td.dc{min-width:76px}
-#t-stages th:first-child,#t-stages td:first-child{min-width:220px;max-width:280px}
-
 /* ---- editor of tasks ---- */
 .ed-filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
 .ed-filters input[type=search]{flex:1 1 240px;min-width:200px}
@@ -564,53 +535,9 @@ table.edt{min-width:880px}
 .ed-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;padding-top:12px;flex-wrap:wrap}
 .fld textarea{width:100%;font:inherit;color:inherit;background:var(--surface);border:1px solid var(--line-2);border-radius:10px;padding:10px 12px;resize:vertical;min-height:92px}
 
-/* ---- dashboard v2: KPI tiles, tabs, readable cells ---- */
-.dkpis{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
-.dk{position:relative;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:var(--r);padding:16px 20px 18px;box-shadow:var(--shadow-1);display:flex;flex-direction:column;gap:2px;overflow:hidden;transition:transform .2s var(--ease),box-shadow .2s}
-.dk:hover{transform:translateY(-2px);box-shadow:var(--shadow-2)}
-.dk .l{font-size:13px;color:var(--text-2);font-weight:500}.dk .v{font-size:38px;line-height:1.1;letter-spacing:-.03em}.dk small{color:var(--text-3);font-size:12.5px}
-.dk::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--text-3);opacity:.5}
-.dk.ok::before{background:var(--c-done);opacity:1}.dk.ok .v{color:var(--c-done)}.dk.no::before{background:var(--c-overdue);opacity:1}.dk.no .v{color:var(--c-overdue)}
-.dk .bar,.c3 .bar{display:block;height:5px;border-radius:5px;background:color-mix(in srgb,var(--c-overdue) 22%,transparent);overflow:hidden;margin-top:8px}
-.dk .bar u,.c3 .bar u{display:block;height:100%;background:var(--c-done);border-radius:5px;text-decoration:none}
-.dboard{padding-top:12px}
-.dtabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin:0 -4px 12px;padding:0 4px}
-.dtab{display:inline-flex;align-items:center;gap:7px;padding:10px 14px;border:0;background:none;color:var(--text-2);font-weight:600;border-bottom:3px solid transparent;margin-bottom:-1px;cursor:pointer;border-radius:8px 8px 0 0}
-.dtab .ic{width:16px;height:16px}.dtab:hover{color:var(--text);background:var(--surface-2)}.dtab.on{color:var(--brand);border-bottom-color:var(--brand)}
-.dtools{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:8px}.dtools input[type=search]{flex:1 1 220px;max-width:320px}
-.dhelp{margin:4px 0 10px;color:var(--text-2);font-size:13.5px;background:var(--surface-2);border-radius:10px;padding:9px 12px}
-.dnote{margin:12px 0 0}
-.dbt th small{display:block;font-size:10.5px;font-weight:600;color:var(--brand);text-transform:uppercase;letter-spacing:.04em}
-.dbt tr.grp th{border-bottom:0;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;padding:4px 8px 0}
-.dbt tr.grp th.g0{color:var(--c-month)}.dbt tr.grp th.g1{color:var(--c-overdue)}.dbt tr.grp th.g2{color:var(--text-3)}
-.dbt tr.grp+tr th{padding-top:2px}
-.dbt th.sumc,.dbt td.sumc{border-left:2px solid var(--line-2)}
-.dbt .rt{margin-left:auto;padding-left:8px;color:var(--text-3);font-size:11.5px;white-space:nowrap}
-.dbt .c3{display:flex;flex-direction:column;align-items:center;gap:3px;padding:2px 4px}
-.dbt .c3 .bar{width:100%;max-width:92px;margin-top:2px}
-.dbt .pc{font-size:17px;letter-spacing:-.01em}
-.dbt .pc.good{color:var(--c-done)}.dbt .pc.mid{color:color-mix(in srgb,var(--c-done) 55%,var(--c-week))}.dbt .pc.warn{color:var(--c-week)}.dbt .pc.bad{color:var(--c-overdue)}
-.dbt .cnt{display:inline-flex;gap:4px}
-.dbt .cnt .n{font-size:12px;font-weight:600;padding:1px 7px;border-radius:99px;min-width:0;border:1px solid transparent}
-.dbt .cnt .n.ok{background:color-mix(in srgb,var(--c-done) 14%,transparent)}.dbt .cnt .n.no{background:color-mix(in srgb,var(--c-overdue) 12%,transparent)}
-.dbt .cnt .n.z{background:none;opacity:.4}
-.dbt .sp{font-size:11.5px;color:var(--text-3)}
-.dbt td.dc{background:none !important;min-width:104px}
-.dbt td.dc.sc{background:none !important}
-.dbt td.dc.sc .n.st{font-size:16px;background:color-mix(in srgb,var(--c-month) 14%,transparent);border-radius:8px;padding:2px 10px}
-.dbt td.st-info .n.st,.dbt td.st-returned .n.st{background:color-mix(in srgb,var(--c-overdue) 16%,transparent);color:var(--c-overdue)}
-.dbt td.st-unchecked .n.st,.dbt td.st-other .n.st{background:var(--surface-2);color:var(--text-2)}
-.dbt .dash{color:var(--text-3);opacity:.5}
-.dbt tr.r:hover td{background:var(--surface-2) !important}
-.dbt tr.r:hover td:first-child{background:var(--surface-2)}
-@media (max-width:760px){.dkpis{grid-template-columns:1fr}.dk .v{font-size:30px}.dtab{padding:9px 10px;font-size:13px}}
-
 /* the menu has up to eight items (administrator): it narrows before it can reach the account button */
 @media (max-width:1560px){.tabs a{padding:9px 9px;gap:5px;font-size:14px}}
 @media (max-width:1380px){.tabs a .ic{display:none}.tabs a{padding:9px 8px}}
-/* the stages table is wide: tighter columns so that «Не выполнено» is visible */
-#d-table.v-stages td.dc{min-width:80px}#d-table.v-stages th{white-space:normal;line-height:1.2;max-width:96px;vertical-align:bottom}
-#d-table.v-stages th:first-child,#d-table.v-stages td:first-child{min-width:215px;max-width:260px}
 @media (max-width:1240px){.tabs a{padding:9px 7px;font-size:13px;gap:0}.me-t{display:none}}
 @media (max-width:1010px){.tabs a{font-size:12px;padding:9px 5px}.top{gap:8px}}
 @media (max-width:900px){
@@ -620,3 +547,42 @@ table.edt{min-width:880px}
   .bottom a{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--text-3);font-size:11px;font-weight:500;padding:6px 2px;border-radius:10px;transition:color .2s,transform .2s}
   .bottom a.on{color:var(--brand)}.bottom a:active{transform:scale(.92)}
 }
+
+/* ---- dashboard: minimal. Text on the page, hairlines, no boxes; only the numbers carry colour (green done, red not done) ---- */
+.dkpis{display:flex;margin:0 0 20px;border-bottom:1px solid var(--line)}
+.dk{flex:1;text-align:left;border:0;background:none;padding:4px 0 16px;cursor:pointer;display:flex;flex-direction:column;gap:2px;color:inherit}
+.dk+.dk{padding-left:28px;border-left:1px solid var(--line)}
+.dk .l{font-size:12.5px;color:var(--text-3)}.dk .v{font-size:34px;line-height:1.1;font-weight:600;letter-spacing:-.02em}.dk small{font-size:12.5px;color:var(--text-3)}
+.dk.ok .v{color:var(--c-done)}.dk.no .v{color:var(--c-overdue)}.dk:hover .v{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:6px}
+section.dboard.card{box-shadow:none;border:0;background:none;padding:0}
+.dtabs{display:flex;gap:22px;border-bottom:1px solid var(--line);margin-bottom:14px}
+.dtab{display:inline-flex;align-items:center;gap:7px;padding:8px 0 10px;border:0;background:none;color:var(--text-3);font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer}
+.dtab .ic{width:15px;height:15px}.dtab:hover{color:var(--text)}.dtab.on{color:var(--text);border-bottom-color:var(--text);font-weight:600}
+.dtools{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:6px}.dtools input[type=search]{flex:0 1 240px}
+.dtools .switchrow{font-size:13px;color:var(--text-2)}
+.dhelp{margin:4px 0 12px;color:var(--text-3);font-size:13px}.dnote{margin:12px 0 0}
+table.dbt{width:100%;border-collapse:collapse;font-size:14px;min-width:720px}
+.dbt th{font-weight:500;font-size:12px;color:var(--text-3);text-align:center;padding:8px 10px;white-space:normal;line-height:1.25;vertical-align:bottom;border-bottom:1px solid var(--line-2);background:var(--bg);position:sticky;top:0}
+.dbt th small{display:inline;margin-left:5px;font-size:10.5px;color:var(--text-3);font-weight:500}
+.dbt th.now{color:var(--text);font-weight:700;border-bottom:2px solid var(--text)}
+.dbt td{padding:9px 10px;text-align:center;border-bottom:1px solid var(--line);vertical-align:middle;background:var(--bg)}
+.dbt th:first-child,.dbt td:first-child{text-align:left;position:sticky;left:0;z-index:2;min-width:230px;max-width:320px}
+.dbt th:first-child{z-index:3}
+.dbt tr.mgmt td:first-child{font-weight:600}.dbt tr.kid td:first-child{padding-left:26px;color:var(--text-2)}
+.dbt tr.total td{font-weight:600;border-top:1px solid var(--text-3);border-bottom:1px solid var(--line-2)}
+.dbt tr.r:hover td{background:var(--surface-2)}
+.dbt th.sumc,.dbt td.sumc{border-left:1px solid var(--line-2)}
+.dbt .rt{margin-left:auto;padding-left:8px;color:var(--text-3);font-size:12px;white-space:nowrap;font-weight:400}
+.dbt td.dc{min-width:88px;line-height:1.25}
+.dbt .pc{display:block;font-size:15px;font-weight:600}
+.dbt .cnt{display:block;font-size:12.5px;color:var(--text-3)}
+.dbt .n{border:0;background:none;padding:0 2px;font:inherit;font-weight:600;cursor:pointer;border-radius:3px;color:inherit}
+.dbt .n.ok{color:var(--c-done)}.dbt .n.no{color:var(--c-overdue)}.dbt .n.z{cursor:default;font-weight:400;color:var(--text-3)}
+.dbt button.n:hover{text-decoration:underline;text-underline-offset:3px}
+.dbt .dash{color:var(--line-2)}
+.dbt tr.grp th{border-bottom:0;font-size:11px;text-transform:uppercase;letter-spacing:.06em;padding:2px 10px 0}
+.dbt tr.grp+tr th{padding-top:0}
+.dbt td.sc .n.st{font-size:15px;color:var(--text)}.dbt td.st-info .n.st,.dbt td.st-returned .n.st{color:var(--c-overdue)}
+.dbt td.sc .sp{display:block;font-size:12px;color:var(--text-3)}
+.okc{color:var(--c-done)}.noc{color:var(--c-overdue)}
+@media (max-width:760px){.dkpis{flex-direction:column}.dk+.dk{padding-left:0;border-left:0;border-top:1px solid var(--line);padding-top:12px}.dk .v{font-size:28px}.dtabs{gap:14px;overflow-x:auto}}

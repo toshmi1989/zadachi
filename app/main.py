@@ -632,19 +632,19 @@ def import_files(datas: list[bytes], filename: str, user_id: int, dry: bool, due
     except importer.ImportError_ as e:
         bad(str(e))
     gone: list[dict] = []
-    open_total = 0
+    total = 0
     if replace and not status:
         with tx() as c:
             present |= {r["code"] for r in rows}
-            gone = importer.absent_open(c, present)
-            open_total = c.execute("SELECT COUNT(*) FROM tasks WHERE status IN ('todo','progress')").fetchone()[0]
-        limit = max(10, open_total // 4)
+            gone = importer.absent_tasks(c, present)
+            total = c.execute("SELECT COUNT(*) FROM tasks WHERE status != 'gone' AND manual=0").fetchone()[0]
+        limit = max(10, total // 4)
         if not dry and len(gone) > limit and not confirm:
-            bad(f"Из базы уйдёт {len(gone)} из {open_total} открытых задач (больше четверти): проверьте файлы (загружены ли все разделы?) и подтвердите снятие")
+            bad(f"Из базы уйдёт {len(gone)} из {total} задач (больше четверти): проверьте файлы (загружены ли все разделы?) и подтвердите снятие")
     with tx() as c:
         summary = importer.apply(c, rows, warnings, filename or "export.xlsx", user_id, dry, mode="status" if status else "base", overwrite=overwrite)
     if replace and not status:
-        summary["absent_tasks"] = {"count": len(gone), "open": open_total, "needs_confirm": len(gone) > max(10, open_total // 4), "sample": gone[:50]}
+        summary["absent_tasks"] = {"count": len(gone), "total": total, "done": sum(g["status"] == "done" for g in gone), "needs_confirm": len(gone) > max(10, total // 4), "sample": gone[:50]}
         if not dry and gone:
             with tx() as c:
                 summary["absent_tasks"]["taken_off"] = ijro.archive(c, [g["id"] for g in gone])
