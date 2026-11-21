@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.4.0
+// @version      1.5.0
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.4.0";
+  const VERSION = "1.5.0";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -237,7 +237,7 @@
     const plan = await server("GET", "/api/sync/export-plan");
     if (!recipientDb) throw new SessionError("Не удалось узнать вашу организацию: откройте на сайте раздел «Топшириқлар» и повторите.");
     const jobs = []; plan.sections.forEach(sec => plan.tabs.forEach(tab => jobs.push({ sec, tab })));
-    const sum = { expected: jobs.length, files: 0, rows: 0, created: 0, updated: 0, unchanged: 0, unmapped: new Set(), closing: null, errors: [], stopped: "" };
+    const sum = { expected: jobs.length, files: 0, rows: 0, missing: 0, mode: "", created: 0, updated: 0, unchanged: 0, unmapped: new Set(), closing: null, errors: [], stopped: "" };
     for (let i = 0; i < jobs.length; i++) {
       if (shouldStop && shouldStop()) { sum.stopped = "Остановлено вами"; break; }
       const { sec, tab } = jobs[i];
@@ -245,7 +245,7 @@
       try {
         const buf = await fetchExport(client, plan, recipientDb, sec, tab, pageFetch);
         const r = await upload("/api/sync/export?source=" + encodeURIComponent(sec.id + "-" + tab.id) + (i === jobs.length - 1 ? "&last=1" : "") + (run ? "&run=" + run : ""), buf);
-        sum.files++; sum.rows += r.rows; sum.created += r.created; sum.updated += r.updated; sum.unchanged += r.unchanged; (r.unmapped || []).forEach(x => sum.unmapped.add(x)); if (r.closing) sum.closing = r.closing;
+        sum.files++; sum.rows += r.rows; sum.created += r.created; sum.updated += r.updated; sum.missing += r.missing || 0; sum.mode = r.mode || sum.mode; sum.unchanged += r.unchanged; (r.unmapped || []).forEach(x => sum.unmapped.add(x)); if (r.closing) sum.closing = r.closing;
       } catch (e) {
         if (e instanceof SessionError || e instanceof RateError) { sum.stopped = e.message; break; }
         sum.errors.push(sec.id + "/" + tab.id + ": " + (e.message || e));   // one list failing does not lose the others
@@ -413,7 +413,7 @@
       .box.on{display:block}.row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.bar{height:8px;background:#eef1f8;border-radius:8px;overflow:hidden;margin:10px 0}.bar i{display:block;height:100%;width:0;background:#4f46e5;transition:width .3s}
       .log{max-height:150px;overflow:auto;font-size:12.5px;color:#56607a;white-space:pre-wrap}b{font-weight:600}</style>
       <div class="box" id="box"><b>Синхронизация с «Задачи»</b>
-        <div class="log" id="hint">Скачиваю выгрузки «Hisobot» (новые задачи), затем читаю статусы открытых задач и передаю в платформу. На ijro ничего не меняется.</div>
+        <div class="log" id="hint">Скачиваю списки «Hisobot» (что именно и что с ним делать, задаёт платформа: «Настройки» → «Импорт и синхронизация»), затем читаю историю этапов нужных задач и передаю в платформу. На ijro ничего не меняется.</div>
         <div class="bar"><i id="bar"></i></div><div class="log" id="log"></div>
         <div class="row"><button class="pri" id="go">Синхронизировать</button><button id="stop" disabled>Стоп</button><button id="diag">Диагностика</button><button id="key">Ключ…</button><button id="exp">Выгрузки: вкл</button><button id="close">Закрыть</button></div></div>
       <button class="fab" id="fab">⇄ Задачи</button>`;
@@ -440,7 +440,7 @@
         $("bar").style.width = "0";
       }
       let finLine = "";
-      const expLine = () => !exp ? "" : `\nВыгрузки: файлов ${exp.files}, новых задач ${exp.created}, обновлено ${exp.updated}${exp.unmapped.size ? ", отделов без сопоставления " + exp.unmapped.size + " (откройте импорт в платформе)" : ""}${exp.errors.length ? "\nНе удалось: " + exp.errors.join("; ") : ""}`;
+      const expLine = () => !exp ? "" : `\nСписок: файлов ${exp.files}${exp.mode === "status" ? `, статусов обновлено ${exp.updated}, нет в базе ${exp.missing}${exp.missing ? " (добавьте через «Импорт базы задач»)" : ""}` : `, новых задач ${exp.created}, обновлено ${exp.updated}`}${exp.unmapped.size ? ", отделов без сопоставления " + exp.unmapped.size + " (откройте импорт в платформе)" : ""}${exp.errors.length ? "\nНе удалось: " + exp.errors.join("; ") : ""}`;
       try {
         const r = await runSync({ server, client: client(), sleep, resume, shouldStop: () => stop, onProgress: p => { $("bar").style.width = Math.round(100 * p.done / Math.max(1, p.total)) + "%"; log(`Проверено ${p.done} из ${p.total} · найдено на сайте ${p.found}${p.failed ? " · пропущено (сайт не ответил) " + p.failed : ""}`); } });
         let fin = null;

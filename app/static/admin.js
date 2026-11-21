@@ -77,11 +77,25 @@ routes.users.title = "Пользователи";
 routes.import = async function (page) {
   if (!isAdmin()) throw new Error("Раздел доступен только администратору");
   const hist = (await api("/api/import/history")).items;
-  page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Импорт из Excel</h1><p>Загрузите выгрузку — задачи появятся в списке и на дашборде. Повторная загрузка обновляет задачи по коду и не затирает ваши правки.</p></div></div>
+  const cfg = Object.fromEntries((await api("/api/settings")).sync.fields.map(f => [f.key, f.value]));      // the window of terms for the base load comes from Settings
+  const total = (await api("/api/tasks?size=1")).total;
+  let mode = total ? "status" : "base";                                        // an empty base can only be loaded: the first thing is the base
+  page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Импорт из Excel</h1><p>Сначала один раз загрузите базу задач, дальше загружайте обычные выгрузки: они только обновляют статусы. Ваши правки не затираются.</p></div></div>
+    <div id="modebar" class="card rise" style="--i:1;margin-bottom:16px"></div>
     <div id="stage" class="rise" style="--i:1"></div>
-    <div class="card rise" style="--i:2;margin-top:16px"><div class="card-head"><h2>Последние загрузки</h2></div>${hist.length ? `<table class="plain"><thead><tr><th>Когда</th><th>Файл</th><th>Кто</th><th>Новых</th><th>Обновлено</th></tr></thead><tbody>${hist.map(h => `<tr><td>${esc(h.created_at.slice(0, 16))}</td><td>${esc(h.filename)}</td><td>${esc(h.by || "")}</td><td class="num">${h.summary.created}</td><td class="num">${h.summary.updated}</td></tr>`).join("")}</tbody></table>` : '<p class="hint">Загрузок ещё не было.</p>'}</div>`;
+    <div class="card rise" style="--i:2;margin-top:16px"><div class="card-head"><h2>Последние загрузки</h2></div>${hist.length ? `<table class="plain"><thead><tr><th>Когда</th><th>Файл</th><th>Кто</th><th>Вид</th><th>Новых</th><th>Обновлено</th></tr></thead><tbody>${hist.map(h => `<tr><td>${esc(h.created_at.slice(0, 16))}</td><td>${esc(h.filename)}</td><td>${esc(h.by || "")}</td><td>${h.summary.mode === "status" ? "статусы" : "база"}</td><td class="num">${h.summary.created}</td><td class="num">${h.summary.updated}</td></tr>`).join("")}</tbody></table>` : '<p class="hint">Загрузок ещё не было.</p>'}</div>`;
   const stage = $("#stage", page);
-  const dropHtml = (err) => `<label class="drop" id="drop" for="file"><div class="big">${icon("upload")}</div><b>Перетащите файл Excel сюда</b><p class="hint" style="margin:4px 0 0">или нажмите, чтобы выбрать · .xlsx, до 15 МБ</p>${err ? `<p class="err" style="margin-top:10px">${esc(err)}</p>` : ""}<input type="file" id="file" accept=".xlsx" hidden></label>`;
+  const MODE_TXT = {
+    status: "Обновляет статусы задач, которые УЖЕ есть в базе (по коду). Новые задачи не добавляются, тексты, сроки и ответственные не меняются, ваши правки не затираются. Строки, которых нет в базе, только считаются.",
+    base: "Загрузка и пополнение базы: добавляет новые задачи наших отделов (в окне сроков), у существующих обновляет тексты и сроки, предлагает даты закрытия. Потом пользуйтесь обычным импортом: он только обновляет статусы." };
+  const modeBar = $("#modebar", page);
+  function paintMode() {
+    modeBar.innerHTML = `<div class="inl" style="gap:12px;flex-wrap:wrap"><b>Что делает загрузка:</b><span id="mode-seg"></span></div><p class="hint" style="margin:8px 0 0">${esc(MODE_TXT[mode])}</p>
+      ${!total ? `<div class="warn" style="margin-top:10px">${icon("info")}<span>В базе пока нет задач: начните с «Импорта базы задач». Обычный импорт ничего не добавит.</span></div>` : ""}
+      <p class="hint" style="margin:8px 0 0">Те же правила работают и при синхронизации скриптом. Их можно изменить в «Настройках» → «Импорт и синхронизация».</p>`;
+    $("#mode-seg", modeBar).appendChild(seg([["status", "Обычный импорт: статусы"], ["base", "Импорт базы задач"]], mode, v => { mode = v; paintMode(); showDrop(); }));
+  }
+  const dropHtml = (err) => `<label class="drop" id="drop" for="file"><div class="big">${icon("upload")}</div><b>Перетащите файл Excel сюда</b><p class="hint" style="margin:4px 0 0">или нажмите, чтобы выбрать · .xlsx, до 40 МБ</p>${err ? `<p class="err" style="margin-top:10px">${esc(err)}</p>` : ""}<input type="file" id="file" accept=".xlsx" hidden></label>`;
   function showDrop(err) {
     stage.innerHTML = dropHtml(err);
     const drop = $("#drop", stage), inp = $("#file", stage);
@@ -93,10 +107,11 @@ routes.import = async function (page) {
   const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const presets = { soon: () => { const t = new Date(); return [iso(new Date(t.getFullYear(), t.getMonth(), t.getDate() - 30)), iso(new Date(t.getFullYear(), t.getMonth(), t.getDate() + 60))]; },
     next: () => { const t = new Date(); return [iso(new Date(t.getFullYear(), t.getMonth() + 1, 1)), iso(new Date(t.getFullYear(), t.getMonth() + 2, 0))]; }, all: () => ["2000-01-01", "2099-12-31"] };
-  let win = presets.soon(), useAi = true;   // by default: the terms of the last 30 days (still open) and of the next 60
+  const fromCfg = () => { const t = new Date(), d = n => iso(new Date(t.getFullYear(), t.getMonth(), t.getDate() + n)); return [/^\d+$/.test(cfg.base_back) ? d(-cfg.base_back) : "2000-01-01", /^\d+$/.test(cfg.base_fwd) ? d(+cfg.base_fwd) : "2099-12-31"]; };
+  let win = fromCfg(), useAi = true;   // the window of terms for the base load: from Settings (by default the last 30 days and the next 60)
   async function send(file, dry) {
     const f = new FormData(); f.append("file", file);
-    return api(`/api/import?dry=${dry}&due_from=${win[0]}&due_to=${win[1]}&ai=${useAi ? 1 : 0}`, { method: "POST", form: f });
+    return api(`/api/import?dry=${dry}&due_from=${win[0]}&due_to=${win[1]}&ai=${useAi ? 1 : 0}&mode=${mode}`, { method: "POST", form: f });
   }
   /* the raw export of the site: only our departments, a window of terms, the closing dates are proposed */
   function siteBlock(s, file) {
@@ -105,16 +120,16 @@ routes.import = async function (page) {
     const how = d => d.how === "confirmed" ? "подтверждено вами" : d.how === "auto" ? "найден по названию" : d.how === "people" ? "предложено по сотрудникам" : d.suggest ? "похоже на" : "";
     const dep = r.departments.filter(d => d.unit_id || d.suggest || d.rows >= 5);
     return `<div class="sec-t" style="margin-top:0">Выгрузка с сайта ijro</div>
-      <div class="inl" style="gap:12px;flex-wrap:wrap;margin-bottom:10px"><label class="hint">Сроки с <input type="date" id="w-from" value="${win[0]}"></label><label class="hint">по <input type="date" id="w-to" value="${win[1]}"></label><button class="btn sm" id="w-go">Пересчитать</button>
-        <span class="hint">Быстро: <a href="#" class="w-pre" data-p="soon">−30 / +60 дней</a> · <a href="#" class="w-pre" data-p="next">следующий месяц</a> · <a href="#" class="w-pre" data-p="all">все сроки</a>. Берутся задачи наших отделов со сроком в окне.</span></div>
-      <div class="stats">${[[r.file_tasks, "задач в файле"], [r.tasks, "наших в этом окне"], [r.skipped.not_ours, "строк чужих отделов"], [r.skipped.window, "строк вне окна сроков"], ...(r.skipped.coexec ? [[r.skipped.coexec, "строк соисполнителей (не берём)"]] : []), ...(r.skipped.executor ? [[r.skipped.executor, "строк другого исполнителя, не Соғлиқни сақлаш вазирлиги (не берём)"]] : []), ...(r.skipped.doc_type ? [[r.skipped.doc_type, "строк прочих видов документов Кабинета министров (не берём)"]] : [])].map(([n, l]) => `<div class="stat"><b class="num">${n}</b><span>${l}</span></div>`).join("")}</div>
+      ${mode === "base" ? `<div class="inl" style="gap:12px;flex-wrap:wrap;margin-bottom:10px"><label class="hint">Сроки с <input type="date" id="w-from" value="${win[0]}"></label><label class="hint">по <input type="date" id="w-to" value="${win[1]}"></label><button class="btn sm" id="w-go">Пересчитать</button>
+        <span class="hint">Быстро: <a href="#" class="w-pre" data-p="soon">−30 / +60 дней</a> · <a href="#" class="w-pre" data-p="next">следующий месяц</a> · <a href="#" class="w-pre" data-p="all">все сроки</a>. Берутся задачи наших отделов со сроком в окне.</span></div>` : ""}
+      <div class="stats">${[[r.file_tasks, "задач в файле"], [r.tasks, mode === "base" ? "наших в этом окне" : "наших строк"], [r.skipped.not_ours, "строк чужих отделов"], ...(mode === "base" ? [[r.skipped.window, "строк вне окна сроков"]] : []), ...(r.skipped.coexec ? [[r.skipped.coexec, "строк соисполнителей (не берём)"]] : []), ...(r.skipped.executor ? [[r.skipped.executor, "строк другого исполнителя, не Соғлиқни сақлаш вазирлиги (не берём)"]] : []), ...(r.skipped.doc_type ? [[r.skipped.doc_type, "строк прочих видов документов Кабинета министров (не берём)"]] : [])].map(([n, l]) => `<div class="stat"><b class="num">${n}</b><span>${l}</span></div>`).join("")}</div>
       <details ${dep.some(d => !d.unit_id) ? "open" : ""} style="margin:10px 0"><summary><b>Отделы в выгрузке и соответствие нашей структуре</b> <span class="hint">(${dep.filter(d => d.unit_id).length} наших)</span></summary>
         <div class="scroll-x"><table class="plain"><thead><tr><th>Отдел в выгрузке</th><th>Строк</th><th>Наш отдел</th><th></th></tr></thead><tbody>${dep.map(d => `<tr><td>${esc(d.name)}<div class="hint">${esc(d.people.join(", "))}</div></td><td class="num">${d.rows}</td>
           <td><select class="dep-map" data-key="${esc(d.key)}" data-init="${d.unit_id || ""}">${unitOpts(d.unit_id || null)}</select></td><td class="hint">${how(d)}${!d.unit_id && d.suggest ? `<div>Предложение: ${esc(d.suggest_name.length > 36 ? d.suggest_name.slice(0, 34) + "…" : d.suggest_name)} <a href="#" class="dep-sg" data-unit="${d.suggest}">выбрать</a></div>` : ""}</td></tr>`).join("")}</tbody></table></div>
         <div class="inl" style="margin-top:8px"><button class="btn sm pri" id="dep-save">Запомнить соответствие и пересчитать</button><span class="hint">Запоминается только то, что вы изменили, и действует на следующие выгрузки. Строки сотрудников, которые у нас уже есть, берутся и без этого.</span></div></details>
       ${r.people_moves && r.people_moves.length ? `<details open style="margin:10px 0"><summary><b>Сотрудники в другом отделе, чем в выгрузке: ${r.people_moves.length}</b></summary><div class="scroll-x"><table class="plain"><thead><tr><th></th><th>Сотрудник</th><th>У нас сейчас</th><th>По выгрузке</th><th>Задач</th></tr></thead><tbody>${r.people_moves.map(m => `<tr><td><input type="checkbox" class="pm-one" data-u="${m.user_id}" data-w="${m.wanted_id}"></td><td>${esc(m.name)}</td><td>${esc(m.now)}</td><td>${esc(m.wanted)}</td><td class="num">${m.tasks}</td></tr>`).join("")}</tbody></table></div><div class="inl" style="margin-top:8px"><button class="btn sm pri" id="pm-save">Перевести отмеченных</button><span class="hint">Меняется только отдел сотрудника у нас; его задачи не затрагиваются.</span></div></details>` : ""}
       ${r.absent && r.absent.length ? `<details style="margin:10px 0"><summary><b>Есть у нас, но нет в выгрузке: ${r.absent.length}</b> <span class="hint">— возможно, уже выполнены на сайте (ничего не меняется)</span></summary><p class="hint" style="margin:6px 0">${r.absent.slice(0, 40).map(a => esc(a.code)).join(", ")}${r.absent.length > 40 ? "…" : ""}</p></details>` : ""}
-      <label class="switchrow"><input type="checkbox" id="use-ai" ${useAi ? "checked" : ""}><span><b>Подобрать даты закрытия автоматически</b> — по тому, как вы ставили даты раньше (и с помощью ИИ, если он подключён в «Настройках»). Предложенные даты помечаются, их можно подтвердить или поправить.</span></label>`;
+      ${mode === "base" ? `<label class="switchrow"><input type="checkbox" id="use-ai" ${useAi ? "checked" : ""}><span><b>Подобрать даты закрытия автоматически</b> — по тому, как вы ставили даты раньше (и с помощью ИИ, если он подключён в «Настройках»). Предложенные даты помечаются, их можно подтвердить или поправить.</span></label>` : ""}`;
   }
   function bindSite(file) {
     const g = id => $(id, stage); if (!g("#w-go") && !g("#use-ai")) return;
@@ -140,11 +155,14 @@ routes.import = async function (page) {
     try { s = await send(file, 1); } catch (e) { return showDrop(e.message); }
     const stat = (n, l, k) => `<div class="stat ${k || ""}"><b class="num">${n}</b><span>${l}</span></div>`;
     stage.innerHTML = `<div class="card"><h2>${icon("file")}${esc(file.name)}</h2><p class="sub">Проверка без записи: пока ничего не изменено.</p>
-      <div class="stats">${stat(s.rows, "строк с задачами")}${stat(s.created, "новых задач", "k-done")}${stat(s.updated, "будет обновлено")}${stat(s.unchanged, "без изменений")}${stat(s.kept_manual, "с вашими правками (не тронем)")}</div>
+      <div class="stats">${mode === "status"
+        ? stat(s.rows, "наших строк в файле") + stat(s.updated, "статусов изменится", "k-done") + stat(s.unchanged, "без изменений") + stat(s.kept_manual, "с вашими правками (не тронем)") + stat(s.missing, "нет в базе: не добавим", s.missing ? "k-overdue" : "")
+        : stat(s.rows, "строк с задачами") + stat(s.created, "новых задач", "k-done") + stat(s.updated, "будет обновлено") + stat(s.unchanged, "без изменений") + stat(s.kept_manual, "с вашими правками (не тронем)")}</div>
+      ${mode === "status" && s.missing ? `<div class="warn" style="margin-bottom:10px">${icon("info")}<span>В файле ${s.missing} ${plural(s.missing, "задача", "задачи", "задач")}, которых нет в базе. Обычный импорт их не добавляет: чтобы добавить, переключитесь на «Импорт базы задач».</span></div>` : ""}
       ${siteBlock(s, file)}
       ${s.new_people.length ? `<div class="sec-t" style="margin-top:0">Новые сотрудники (${s.new_people.length}) — будут созданы без пароля</div><p>${s.new_people.map(p => `<span class="chip" style="margin:2px">${esc(p.name)}</span>`).join("")}</p>` : ""}
       ${s.warnings.length ? `<div class="sec-t">Проверьте после загрузки (${s.warnings.length})</div><ul class="warns">${s.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
-      <div style="display:flex;gap:10px;margin-top:18px"><button class="btn pri" id="go">Загрузить</button><button class="btn" id="back">Выбрать другой файл</button></div></div>`;
+      <div style="display:flex;gap:10px;margin-top:18px"><button class="btn pri" id="go">${mode === "status" ? "Обновить статусы" : "Загрузить базу"}</button><button class="btn" id="back">Выбрать другой файл</button></div></div>`;
     bindSite(file);
     $("#back", stage).onclick = () => showDrop();
     $("#go", stage).onclick = async ev => {
@@ -155,7 +173,8 @@ routes.import = async function (page) {
   function done(r) {
     Z.meta = null;
     stage.innerHTML = `<div class="card" style="text-align:center;padding:36px"><div class="okmark"><svg viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg></div><h2 style="justify-content:center;font-size:20px">Готово</h2>
-      <p>Новых задач: <b>${r.created}</b> · обновлено: <b>${r.updated}</b>${r.new_people.length ? ` · создано сотрудников: <b>${r.new_people.length}</b>` : ""}</p>
+      ${r.mode === "status" ? `<p>Статусов обновлено: <b>${r.updated}</b> · без изменений: <b>${r.unchanged}</b>${r.missing ? ` · нет в базе (не добавлены): <b>${r.missing}</b>` : ""}</p>`
+        : `<p>Новых задач: <b>${r.created}</b> · обновлено: <b>${r.updated}</b>${r.new_people.length ? ` · создано сотрудников: <b>${r.new_people.length}</b>` : ""}</p>`}
       ${r.new_people.length ? `<p class="hint">Чтобы сотрудники могли войти, выдайте им пароли на странице «Пользователи».</p>` : ""}
       ${r.closing ? `<div class="card" style="text-align:left;margin:14px auto;max-width:560px"><b>Даты закрытия</b><p style="margin:6px 0">Предложено: <b>${r.closing.proposed}</b>${r.closing.proposed ? ` (по прежним решениям: ${r.closing.by_history}, ИИ: ${r.closing.by_ai})` : ""}.</p>
         ${r.closing.errors.length ? `<div class="warn">${icon("alert")}<span>${r.closing.errors.map(esc).join("<br>")}</span></div>` : ""}
@@ -164,6 +183,7 @@ routes.import = async function (page) {
     $("#again", stage).onclick = () => route();
     const ca = $("#conf-all", stage); if (ca) ca.onclick = async () => { try { const x = await api("/api/closing/confirm", { method: "POST", json: {} }); toast("Подтверждено: " + x.confirmed); ca.disabled = true; } catch (e) { toast(e.message, "error"); } };
   }
+  paintMode();
   showDrop();
 };
 routes.import.title = "Импорт";
@@ -179,6 +199,7 @@ routes.settings = async function (page) {
     <div class="card rise" style="--i:1;max-width:760px"><div class="card-head"><div><h2>Что видит пользователь</h2><p class="sub">Администратор всегда видит и редактирует всё.</p></div></div><div class="opts" id="opts">${opts.map(o => `<button class="opt${s.users_tasks === o[0] ? " on" : ""}" data-v="${o[0]}"><span class="rd" style="margin-top:2px"></span><div><b>${o[1]}</b><span>${o[2]}</span></div></button>`).join("")}</div></div>
     <div class="card rise" style="--i:2;max-width:760px;margin-top:16px"><div class="card-head"><div><h2>${icon("users")}Страница входа</h2><p class="sub">Можно выбрать себя из списка и ввести только пароль.</p></div></div>
       <div class="row" style="padding-top:0"><div class="lb"><b>Показывать список сотрудников</b><span>Имена видны любому, кто откроет страницу входа. Администраторы в список не попадают, они вводят логин. Выключите, если имена сотрудников не должны быть видны посторонним.</span></div><label class="sw"><input type="checkbox" id="ll"${s.login_list ? " checked" : ""}><span class="trk"><i></i></span></label></div></div>
+    <div class="card rise" style="--i:3;max-width:760px;margin-top:16px" id="sync-card"></div>
     <div class="card rise" style="--i:3;max-width:760px;margin-top:16px" id="units-card"></div>
     <div class="card rise" style="--i:3;max-width:760px;margin-top:16px" id="ai-card"></div>
     <div class="card rise" style="--i:4;max-width:760px;margin-top:16px"><div class="card-head"><div><h2>${icon("db")}Резервные копии</h2><p class="sub">Автоматически каждые 6 часов, хранятся 14 последних — на этом же сервере.</p></div><button class="btn" id="bk">Сделать копию сейчас</button></div>
@@ -188,6 +209,31 @@ routes.settings = async function (page) {
     const o = e.target.closest(".opt"); if (!o || o.classList.contains("on")) return;
     try { await api("/api/settings", { method: "PUT", json: { users_tasks: o.dataset.v } }); $$(".opt", page).forEach(x => x.classList.toggle("on", x === o)); toast("Сохранено"); } catch (er) { toast(er.message, "error"); }
   };
+  /* how tasks and their statuses come in: every choice says what it does */
+  const sc = $("#sync-card", page);
+  function paintSync() {
+    const S = s.sync;
+    sc.innerHTML = `<div class="card-head"><div><h2>${icon("sync")}Импорт и синхронизация</h2><p class="sub">Как платформа получает задачи и их статусы с сайта ijro и из Excel. У каждого пункта написано, что он делает. Изменения действуют со следующей загрузки или синхронизации.</p></div></div>`
+      + S.fields.map(f => f.kind === "choice"
+        ? `<div class="sec-t" style="margin-top:16px">${esc(f.title)}</div><div class="opts" data-key="${f.key}">${f.options.map(o => `<button class="opt${f.value === o.value ? " on" : ""}" data-v="${esc(o.value)}"><span class="rd" style="margin-top:2px"></span><div><b>${esc(o.label)}</b><span>${esc(o.help)}</span></div></button>`).join("")}</div>`
+        : `<div class="row" style="align-items:flex-start;gap:16px"><div class="lb"><b>${esc(f.title)}</b><span>${esc(f.help)}</span></div><input type="number" min="0" max="3660" class="sync-days" data-key="${f.key}" value="${esc(f.value)}" placeholder="без ограничения" style="width:130px;flex:none"></div>`).join("")
+      + `<div class="sec-t" style="margin-top:16px">После синхронизации</div>
+        <div class="row" style="padding-top:0"><div class="lb"><b>Применять изменения автоматически</b><span>Очевидное применяется само: задача выполнена на сайте, ответ дан и идёт согласование. Статус автоматически не понижается. Выключите, если хотите видеть каждое изменение на экране «Синхронизация» и применять его кнопкой.</span></div><label class="sw"><input type="checkbox" class="sync-sw" data-key="auto_apply"${S.auto_apply ? " checked" : ""}><span class="trk"><i></i></span></label></div>
+        <div class="row" style="padding-top:0"><div class="lb"><b>Убирать с дашборда задачи, которых больше нет на сайте</b><span>После полной синхронизации задачи, которых сайт больше не относит к нашим (другой вид документа, не наш отдел, соисполнитель), получают статус «Нет на сайте». Автоматически снимается не больше четверти открытых задач, остальное ждёт вашего решения. Ничего не удаляется. Не срабатывает, если синхронизация неполная.</span></div><label class="sw"><input type="checkbox" class="sync-sw" data-key="auto_archive"${S.auto_archive ? " checked" : ""}><span class="trk"><i></i></span></label></div>`;
+  }
+  paintSync();
+  sc.addEventListener("click", async e => {
+    const o = e.target.closest(".opt"); if (!o || o.classList.contains("on")) return;
+    const key = o.closest(".opts").dataset.key;
+    try { await api("/api/settings", { method: "PUT", json: { sync: { [key]: o.dataset.v } } }); s.sync.fields.find(f => f.key === key).value = o.dataset.v; paintSync(); toast("Сохранено"); } catch (er) { toast(er.message, "error"); }
+  });
+  sc.addEventListener("change", async e => {
+    const d = e.target.closest(".sync-days"), w = e.target.closest(".sync-sw");
+    try {
+      if (d) { await api("/api/settings", { method: "PUT", json: { sync: { [d.dataset.key]: d.value.trim() } } }); s.sync.fields.find(f => f.key === d.dataset.key).value = d.value.trim(); toast("Сохранено"); }
+      else if (w) { await api("/api/sync/settings", { method: "PUT", json: { [w.dataset.key]: w.checked } }); s.sync[w.dataset.key] = w.checked; toast("Сохранено"); }
+    } catch (er) { toast(er.message, "error"); if (d) paintSync(); if (w) w.checked = !w.checked; }
+  });
   /* the language model for the closing dates */
   const ac = $("#ai-card", page);
   async function paintAi() {

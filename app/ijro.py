@@ -224,16 +224,112 @@ def check_key(c, header: str | None):
 RESUME_HOURS = 6
 
 
+# ---------------------------------------------------------------- the settings of the import and the synchronisation (shown with explanations on the Settings page)
+
+SYNC_FIELDS = [
+    {"key": "sync_source", "title": "Что скачивает скрипт синхронизации", "kind": "choice", "options": [
+        ("lists", "Три общих списка (по умолчанию)",
+         "По одному списку на раздел: Президент, Администрация Президента, Кабинет Министров (только «Қарор (Янги)»). В каждом сразу все статусы (Бажарилмоқда, Бажарилган, "
+         "Муддати ўтган): статус задачи берётся из колонки «Топшириқ ҳолати», вкладки не нужны. 3 файла вместо девяти: быстрее и меньше шансов на обрыв. "
+         "Файлы крупнее, потому что в них и выполненные задачи, сайт может готовить их до минуты."),
+        ("tabs", "По разделам и вкладкам: 9 файлов",
+         "Прежний способ: три раздела × три вкладки («в работе», «просрочено», «выполнено»). Каждый файл меньше. Выберите его, если общие списки не скачиваются или обрываются.")]},
+    {"key": "sync_apply", "title": "Что делает скачанный список", "kind": "choice", "options": [
+        ("status", "Только обновляет статусы (по умолчанию)",
+         "Обновляются статусы задач, которые УЖЕ есть в базе. Новые задачи не создаются, тексты, сроки и ответственные не меняются, задачи с вашими правками не трогаются. "
+         "Строки, которых нет в базе, только считаются (в итоге синхронизации и на странице «Импорт»). Новые задачи добавляйте через «Импорт базы задач»."),
+        ("base", "Обновляет статусы и добавляет новые задачи",
+         "Как «Импорт базы задач»: новые задачи создаются (с сотрудниками без пароля), у существующих обновляются тексты, документ и срок. Берутся сроки в окне ниже. "
+         "Удобно, если задачи приходят постоянно и вы не хотите загружать базу вручную.")]},
+    {"key": "base_back", "title": "Окно сроков для новых задач: дней назад", "kind": "days",
+     "help": "Действует, когда список добавляет новые задачи (режим «Обновляет статусы и добавляет новые задачи»). Задача берётся, если её срок не раньше, чем столько дней назад. "
+             "Пусто — без ограничения. По умолчанию 30. При ручном «Импорте базы» то же окно подставляется в поля дат, там его можно изменить."},
+    {"key": "base_fwd", "title": "Окно сроков для новых задач: дней вперёд", "kind": "days",
+     "help": "Задача берётся, если её срок не позже, чем через столько дней. Пусто — без ограничения. По умолчанию 60."},
+    {"key": "history_scope", "title": "У каких задач читать историю этапов", "kind": "choice", "options": [
+        ("month", "Срок в текущем месяце (по умолчанию)",
+         "История (ответы Адлии, Кабинета, Счётной палаты) читается только у задач, срок которых приходится на текущий месяц. Старые месяцы не нужны, проверка короче. "
+         "Задачи без срока в этот режим не попадают."),
+        ("month_overdue", "Текущий месяц и просроченные прошлых",
+         "Текущий месяц плюс все ещё не выполненные задачи с более ранним сроком: чтобы не потерять давно просроченное, пока оно не закрыто."),
+        ("month_next", "Текущий и следующий месяц", "Удобно в конце месяца: следующий уже в работе, а этапы нужны заранее."),
+        ("all", "Все невыполненные задачи", "Прежнее поведение: проверяются все. Дольше: примерно 250 задач за несколько минут, и чем больше база, тем дольше.")]},
+    {"key": "history_date", "title": "Какой срок решает, в каком месяце задача", "kind": "choice", "options": [
+        ("close", "Дата закрытия, иначе официальный срок (по умолчанию)", "Как на дашборде по умолчанию: ваша внутренняя дата закрытия, а если её нет, то официальный срок."),
+        ("due", "Официальный срок, иначе дата закрытия", "Срок из поручения («Топшириқ муддати»); дата закрытия подставляется, только если срока нет.")]},
+    {"key": "history_statuses", "title": "Статусы задач, у которых читать историю", "kind": "choice", "options": [
+        ("open", "Только невыполненные (по умолчанию)",
+         "У задач «Выполнено» и «К сведению» история не читается: их статус берётся из выгрузки, этапы им не нужны. Самое быстрое."),
+        ("all", "И у выполненных", "Читать историю и у завершённых задач. Нужно редко (например, чтобы увидеть, кто и когда снял с контроля), но проверка заметно дольше.")]},
+]
+SYNC_KEYS = {f["key"]: f for f in SYNC_FIELDS}
+
+
+def sync_settings_view() -> list[dict]:
+    """The fields of the Settings block with their current values and the explanations."""
+    out = []
+    for f in SYNC_FIELDS:
+        d = {"key": f["key"], "title": f["title"], "kind": f["kind"], "value": setting(f["key"])}
+        if f["kind"] == "choice":
+            d["options"] = [{"value": v, "label": lbl, "help": h} for v, lbl, h in f["options"]]
+        else:
+            d["help"] = f["help"]
+        out.append(d)
+    return out
+
+
+def check_sync_settings(values: dict) -> dict:
+    """Validates {key: value} of the block; returns what to store. ValueError with a message for the person otherwise."""
+    clean = {}
+    for k, v in values.items():
+        f = SYNC_KEYS.get(k)
+        if not f:
+            raise ValueError("Неизвестная настройка: " + str(k))
+        if f["kind"] == "choice":
+            if v not in [o[0] for o in f["options"]]:
+                raise ValueError(f"«{f['title']}»: допустимо " + ", ".join(o[0] for o in f["options"]))
+            clean[k] = v
+        else:
+            v = "" if v is None else str(v).strip()
+            if v != "" and not (v.isdigit() and int(v) <= 3660):
+                raise ValueError(f"«{f['title']}»: число дней от 0 до 3660 или пусто (без ограничения)")
+            clean[k] = v
+    return clean
+
+
+def history_filter() -> tuple[str, list]:
+    """The part of the query that says WHOSE history (answers, stages) is read, by the settings: which statuses of ours, and which month of the term.
+    A task without any term is outside every month scope (there is nothing to put it in)."""
+    sts = ("todo", "progress", "done", "info") if setting("history_statuses") == "all" else ("todo", "progress")
+    sql, args = f" AND t.status IN ({','.join('?' * len(sts))})", list(sts)
+    scope = setting("history_scope")
+    if scope in ("month", "month_next", "month_overdue"):
+        eff = tasks.eff_sql("due" if setting("history_date") == "due" else "close")
+        ym = today().isoformat()[:7]
+        if scope == "month":
+            sql += f" AND substr({eff}, 1, 7) = ?"
+            args.append(ym)
+        elif scope == "month_next":
+            nxt = f"{int(ym[:4]) + (ym[5:] == '12')}-{(int(ym[5:]) % 12) + 1:02d}"
+            sql += f" AND substr({eff}, 1, 7) IN (?, ?)"
+            args += [ym, nxt]
+        else:     # this month and everything earlier that is still open
+            sql += f" AND ({eff} IS NOT NULL AND substr({eff}, 1, 7) <= ?)"
+            args.append(ym)
+    return sql, args
+
+
 def job(c, key_id: int, resume: bool = False) -> dict:
-    """The tasks the collector must look up: everything still open. The section order for each follows the document kind.
+    """The tasks the collector must look up. Which ones is a setting (history_scope / history_statuses / history_date): by default the open tasks whose
+    term is in the current month. The section order for each follows the document kind.
     With resume, what was checked in the last hours is skipped: the run goes on where an interrupted one stopped."""
-    sql = "SELECT id, code, kind FROM tasks WHERE status IN ('todo','progress')"
-    args: list = []
+    cond, args = history_filter()
+    sql = "SELECT t.id, t.code, t.kind FROM tasks t WHERE 1=1" + cond
     if resume:
         from datetime import timedelta
-        sql += " AND id NOT IN (SELECT task_id FROM ijro_snapshots WHERE checked_at >= ?)"
+        sql += " AND t.id NOT IN (SELECT task_id FROM ijro_snapshots WHERE checked_at >= ?)"
         args.append((datetime.now(TZ) - timedelta(hours=RESUME_HOURS)).strftime("%Y-%m-%d %H:%M:%S"))
-    rows = c.execute(sql + " ORDER BY seq, id", args).fetchall()
+    rows = c.execute(sql + " ORDER BY t.seq, t.id", args).fetchall()
     by_kind = {k: s["id"] for s in SECTIONS["sections"] for k in s["kinds"]}
     cur = c.execute("INSERT INTO sync_runs(key_id, started_at, expected) VALUES (?,?,?)", (key_id, now(), len(rows)))
     return {"run_id": cur.lastrowid, "api_tasks": SECTIONS["api_tasks"], "sections": SECTIONS["sections"],
@@ -413,7 +509,23 @@ def ingest(c, key_row, body: dict) -> dict:
 # ---------------------------------------------------------------- tasks the site no longer lists as ours
 
 SITE_OPEN_STATUSES = {st for t in EXPORT_TABS if t["open"] for st in t["statuses"]}      # the states in which a task counts as open on the site
-EXPORT_FILES = len(SECTIONS["sections"]) * len(EXPORT_TABS)
+EXPORT_FILES = len(SECTIONS["sections"]) * len(EXPORT_TABS)      # the files of a run in the "tabs" mode (3 lists x 3 tabs)
+
+
+def export_plan() -> dict:
+    """What the collector downloads, by the setting «sync_source»:
+    lists - THREE files: one common list per section (president, president's administration, cabinet), each with every status at once (the site's
+            «Barcha topshiriqlar» tab). The status of a task is in the file («Топшириқ ҳолати»), so the tabs are not needed;
+    tabs  - nine files: three lists x three tabs («в работе», «просрочено», «выполнено»), the earlier way."""
+    sections = [{"id": x["id"], "type_ids": EXPORT_TYPES_ONLY.get(x["id"], x["type_ids"])} for x in SECTIONS["sections"]]
+    if setting("sync_source") == "tabs":
+        return {"mode": "tabs", "sections": sections, "tabs": EXPORT_TABS}
+    return {"mode": "lists", "sections": sections, "tabs": [{"id": "all", "statuses": []}]}
+
+
+def export_files() -> int:
+    p = export_plan()
+    return len(p["sections"]) * len(p["tabs"])
 
 
 def record_export(c, run: str, codes) -> None:
@@ -433,8 +545,8 @@ def finish_run(c, run: str, complete: bool) -> dict:
     r = c.execute("SELECT files, created_at FROM export_runs WHERE run=?", (run,)).fetchone()
     if not r:
         return {"judged": False, "why": "Файлы выгрузок этого запуска не получены"}
-    if r["files"] < EXPORT_FILES or not complete:
-        return {"judged": False, "why": f"Запуск неполный (файлов {r['files']} из {EXPORT_FILES}{'' if complete else ', проверка статусов не завершена'}): задачи не трогаю"}
+    if r["files"] < export_files() or not complete:
+        return {"judged": False, "why": f"Запуск неполный (файлов {r['files']} из {export_files()}{'' if complete else ', проверка статусов не завершена'}): задачи не трогаю"}
     rows = c.execute("""SELECT t.id, t.code, s.site_status, s.found, s.checked_at FROM tasks t LEFT JOIN ijro_snapshots s ON s.task_id=t.id
                         WHERE t.status IN ('todo','progress') AND t.code NOT IN (SELECT code FROM export_seen WHERE run=?)""", (run,)).fetchall()
     stale, unsure = [], 0

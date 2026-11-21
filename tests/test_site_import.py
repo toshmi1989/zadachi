@@ -6,7 +6,7 @@ import openpyxl
 import pytest
 from fastapi.testclient import TestClient
 
-from app import site_import
+from app import ijro, site_import
 from app.main import app
 
 HEAD = ["№", "Ҳужжат тури", "Ҳужжат рақами ва санаси", "Топшириқ мазмуни", "Механизм", "Топшириқ муддати", "Ижро учун масъул вазирлик, идора, ташкилот ва муассасалар", "Масъул ижрочи",
@@ -51,8 +51,13 @@ def admin():
         d.close()
 
 
-def post(admin, rows, dry=1, window=("2026-12-01", "2026-12-31"), ai=0):
-    return admin.post(f"/api/import?dry={dry}&due_from={window[0]}&due_to={window[1]}&ai={ai}", files={"file": ("e.xlsx", export(rows))})
+def post(admin, rows, dry=1, window=("2026-12-01", "2026-12-31"), ai=0, mode="base"):
+    return admin.post(f"/api/import?dry={dry}&due_from={window[0]}&due_to={window[1]}&ai={ai}&mode={mode}", files={"file": ("e.xlsx", export(rows))})
+
+
+def sync_settings(admin, **kw):
+    r = admin.put("/api/settings", json={"sync": kw})
+    assert r.status_code == 200, r.text
 
 
 def test_names_in_latin_and_cyrillic_are_compared():
@@ -179,6 +184,7 @@ def test_the_collector_sends_the_export_and_it_is_imported_at_once(admin):
     d0 = connect(); d0.execute("DELETE FROM unit_aliases"); d0.commit(); d0.close()                # earlier tests may have remembered a department as "not ours"
     k = admin.post("/api/sync/keys", json={"name": "export-test"}).json()["key"]
     h = {"authorization": "Bearer " + k, "content-type": "application/octet-stream"}
+    sync_settings(admin, sync_apply="base")                                                           # this test is about adding tasks: the setting is "also add new tasks"
     data = export([row("SX0040", PRIMARY, "Sitea Primary", due), row("SX0041", FOREIGN, "Sitec Foreign", due), row("SX0042", PRIMARY, "Sitea Primary", due, role="Ҳамижрочи")])
     assert admin.post("/api/sync/export?source=pa", content=data).status_code in (401, 403)        # no key: refused (a cookie alone does not open this door)
     assert admin.post("/api/sync/export", content=b"not an excel", headers=h).status_code == 400
@@ -191,6 +197,7 @@ def test_the_collector_sends_the_export_and_it_is_imported_at_once(admin):
     assert r2["created"] == 0 and r2["unchanged"] == 1                                                 # a second run changes nothing
     d = admin.get("/api/sync/keys").json()["items"][0]
     admin.delete(f"/api/sync/keys/{d['id']}")
+    sync_settings(admin, sync_apply="status")
 
 
 def test_of_the_cabinet_list_only_the_new_resolution_kind_is_kept(admin):
@@ -318,3 +325,80 @@ def test_departments_of_other_executors_are_not_asked_about(admin):
     names = [d["name"] for d in r["site"]["departments"]]
     assert PRIMARY in names and FOREIGN not in names                       # the department of a foreign executor is not offered for mapping
     assert r["site"]["file_tasks"] == 2 and r["site"]["skipped"]["executor"] == 1
+
+
+def test_the_ordinary_import_only_updates_statuses_of_tasks_in_the_base(admin):
+    far = ("2000-01-01", "2099-12-31")
+    base = [row("SX0100", PRIMARY, "Sitea Primary", "25.12.2028"), row("SX0101", PRIMARY, "Sitea Primary", "25.12.2026")]
+    r = post(admin, base, dry=0, window=far).json()                                              # the base load: new tasks are created
+    assert r["created"] == 2 and r["mode"] == "base"
+    t = admin.get("/api/tasks?q=SX0101").json()["items"][0]
+    assert admin.patch(f"/api/tasks/{t['id']}", json={"status": "progress"}).status_code == 200      # a manual edit: the file must not overwrite it
+    new = [row("SX0100", PRIMARY, "Sitea Primary", "25.12.2028", state="Бажарилган", text="1-банд\nДругой текст"),   # done on the site; the text differs but is not ours to change
+           row("SX0101", PRIMARY, "Sitea Primary", "25.12.2026", state="Бажарилган"),
+           row("SX0102", PRIMARY, "Sitea Primary", "25.12.2026")]                                   # not in the base
+    pre = post(admin, new, dry=1, mode="status").json()
+    assert pre["created"] == 0 and pre["updated"] == 1 and pre["kept_manual"] == 1 and pre["missing"] == 1 and pre["new_people"] == []
+    assert admin.get("/api/tasks?q=SX0100").json()["items"][0]["status"] != "done"                    # a preview writes nothing
+    r = post(admin, new, dry=0, mode="status").json()                                               # no window: a term in 2028 is updated all the same
+    assert r["mode"] == "status" and r["updated"] == 1 and r["created"] == 0 and r["missing"] == 1
+    a = admin.get("/api/tasks?q=SX0100").json()["items"][0]
+    assert a["status"] == "done" and a["text"].startswith("Иш режаси тайёрлансин")                   # the status followed, the text did not
+    assert admin.get("/api/tasks?q=SX0101").json()["items"][0]["status"] == "progress"             # the manual edit stays
+    assert admin.get("/api/tasks?q=SX0102").json()["total"] == 0                                    # never created by an ordinary import
+    again = post(admin, new, dry=0, mode="status").json()
+    assert again["updated"] == 0 and again["unchanged"] == 1
+    assert post(admin, new, mode="bogus").status_code == 400
+
+
+def test_the_collector_follows_the_setting_for_what_a_list_does(admin):
+    from datetime import timedelta
+    from app.db import connect, today
+    d0 = connect(); d0.execute("DELETE FROM unit_aliases"); d0.commit(); d0.close()
+    due = (today() + timedelta(days=20)).strftime("%d.%m.%Y")
+    k = admin.post("/api/sync/keys", json={"name": "mode-test"}).json()["key"]
+    h = {"authorization": "Bearer " + k, "content-type": "application/octet-stream"}
+    data = export([row("SX0110", PRIMARY, "Sitea Primary", due)])
+    sync_settings(admin, sync_apply="status")
+    r = admin.post("/api/sync/export?source=a", content=data, headers=h).json()
+    assert r["mode"] == "status" and r["created"] == 0 and r["missing"] == 1                         # only statuses: the new task is counted, not created
+    assert admin.get("/api/tasks?q=SX0110").json()["total"] == 0
+    sync_settings(admin, sync_apply="base")
+    r = admin.post("/api/sync/export?source=b", content=data, headers=h).json()
+    assert r["mode"] == "base" and r["created"] == 1
+    sync_settings(admin, sync_apply="base", base_back="", base_fwd="0")                              # a window: from "no limit" back to "today" forward
+    far = export([row("SX0111", PRIMARY, "Sitea Primary", (today() + timedelta(days=20)).strftime("%d.%m.%Y"))])
+    assert admin.post("/api/sync/export?source=c", content=far, headers=h).json()["created"] == 0   # 20 days ahead is outside "0 days ahead"
+    sync_settings(admin, sync_apply="status", base_back="30", base_fwd="60")
+    admin.delete(f"/api/sync/keys/{admin.get('/api/sync/keys').json()['items'][0]['id']}")
+
+
+def test_the_download_plan_follows_the_setting(admin):
+    sync_settings(admin, sync_source="lists")
+    k = admin.post("/api/sync/keys", json={"name": "plan"}).json()["key"]
+    head = {"authorization": "Bearer " + k}
+    plan = admin.get("/api/sync/export-plan", headers=head).json()
+    assert plan["mode"] == "lists" and [x["id"] for x in plan["sections"]] == ["president", "government", "president_admin"]     # one list per section ...
+    assert plan["tabs"] == [{"id": "all", "statuses": []}] and ijro.export_files() == 3                                              # ... every status at once: three files
+    assert [x for x in plan["sections"] if x["id"] == "government"][0]["type_ids"] == ["68d805f2c8d2f3123184e0f4"]                   # the cabinet: only the kind that is kept
+    sync_settings(admin, sync_source="tabs")
+    plan = admin.get("/api/sync/export-plan", headers=head).json()
+    assert plan["mode"] == "tabs" and len(plan["sections"]) == 3 and len(plan["tabs"]) == 3 and ijro.export_files() == ijro.EXPORT_FILES == 9
+    sync_settings(admin, sync_source="lists")
+    admin.delete(f"/api/sync/keys/{admin.get('/api/sync/keys').json()['items'][0]['id']}")
+
+
+def test_the_settings_of_the_import_are_explained_and_validated(admin):
+    s = admin.get("/api/settings").json()["sync"]
+    fields = {f["key"]: f for f in s["fields"]}
+    assert set(fields) == {"sync_source", "sync_apply", "base_back", "base_fwd", "history_scope", "history_date", "history_statuses"}
+    assert all(o["help"] for f in s["fields"] if f["kind"] == "choice" for o in f["options"])        # every choice says what it does
+    assert fields["sync_source"]["value"] == "lists" and fields["sync_apply"]["value"] == "status" and fields["history_scope"]["value"] == "month"   # the defaults
+    assert fields["history_statuses"]["value"] == "open" and fields["history_date"]["value"] == "close"
+    for bad in ({"sync_source": "nope"}, {"history_scope": ""}, {"base_back": "-5"}, {"base_fwd": "abc"}, {"base_back": "99999"}, {"unknown": "1"}):
+        assert admin.put("/api/settings", json={"sync": bad}).status_code == 400, bad
+    assert admin.put("/api/settings", json={"sync": {}}).status_code == 400
+    assert admin.put("/api/settings", json={"sync": {"base_back": "", "history_scope": "all"}}).status_code == 200
+    got = {f["key"]: f["value"] for f in admin.get("/api/settings").json()["sync"]["fields"]}
+    assert got["base_back"] == "" and got["history_scope"] == "all"
+    sync_settings(admin, base_back="30", history_scope="month")

@@ -130,7 +130,47 @@ def _same_words(a, b) -> bool:
     return flat(a) == flat(b)
 
 
-def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int | None, dry: bool) -> dict:
+def apply_status(c, rows: list[dict], warnings: list[str], filename: str, user_id: int | None, dry: bool) -> dict:
+    """The ordinary import: ONLY the statuses of tasks that are already in the base. A task that is not in the base is counted, never created;
+    texts, terms, responsible people are not touched; what the administrator edited by hand stays as it is."""
+    existing = {r["code"]: r for r in c.execute("SELECT id, code, status, edited FROM tasks")}
+    updated = same = kept = missing = 0
+    t = now()
+    for r in rows:
+        cur = existing.get(r["code"])
+        if cur is None:
+            missing += 1
+            continue
+        raw = "unit_id" in r                     # a raw export of the site (its "in progress" never lowers our status)
+        if cur["status"] == "gone" and raw:      # the site lists it as ours again: back on the dashboard
+            new = r["status"]
+        elif cur["edited"]:
+            kept += 1
+            continue
+        elif raw and r["status"] == "todo" and cur["status"] in ("todo", "progress"):
+            same += 1
+            continue
+        else:
+            new = r["status"]
+        if new == cur["status"]:
+            same += 1
+            continue
+        updated += 1
+        if not dry:
+            c.execute("UPDATE tasks SET status=?, done_at=?, updated_at=? WHERE id=?", (new, t if new == "done" else None, t, cur["id"]))
+    summary = {"rows": len(rows), "created": 0, "updated": updated, "unchanged": same, "kept_manual": kept, "missing": missing,
+               "new_people": [], "warnings": warnings, "dry": dry, "mode": "status"}
+    if not dry:
+        import json
+        c.execute("INSERT INTO imports(user_id, filename, summary, created_at) VALUES (?,?,?,?)", (user_id, filename[:200], json.dumps(summary, ensure_ascii=False), t))
+        audit(c, "import.status", "tasks", None, {"file": filename[:200], "updated": updated, "missing": missing})
+    return summary
+
+
+def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int | None, dry: bool, mode: str = "base") -> dict:
+    """mode "base": the base load (new tasks are created, fields are updated). mode "status": the ordinary import, see apply_status."""
+    if mode == "status":
+        return apply_status(c, rows, warnings, filename, user_id, dry)
     users = {}
     for u in c.execute("SELECT id, name, excel_name FROM users"):
         users[auth.norm_name(u["name"])] = u["id"]
@@ -191,7 +231,7 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
             diff["updated_at"] = t
             c.execute(f"UPDATE tasks SET {', '.join(k + '=?' for k in diff)} WHERE id=?", (*diff.values(), cur_row["id"]))
     summary = {"rows": len(rows), "created": created, "updated": updated, "unchanged": same, "kept_manual": kept,
-               "new_people": new_people, "warnings": warnings, "dry": dry}
+               "new_people": new_people, "warnings": warnings, "dry": dry, "mode": "base"}
     if not dry:
         import json
         c.execute("INSERT INTO imports(user_id, filename, summary, created_at) VALUES (?,?,?,?)",

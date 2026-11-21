@@ -90,6 +90,7 @@ const fake = http.createServer((req, res) => {
   const mk = () => core.makeClient({ pageFetch: fetch, getSession: () => session, apiBase, sleep: async () => {} });
   const noSleep = async () => {};
 
+  ok((await admin("PUT", "/api/settings", { sync: { sync_source: "tabs", history_scope: "all" } })).ok, "settings: the nine-file way and every open task (this test is about both)");
   const job = await server("GET", "/api/sync/job");
   ok(job.items.length === 8 && !job.items.some(i => i.code === "DON0001"), "the job lists the 8 open tasks, not the done one");
   ok(job.items.find(i => i.code === "VMK3541").section === "government" && job.items.find(i => i.code === "OJN6944").section === "president_admin", "each task is first looked up in the section of its kind");

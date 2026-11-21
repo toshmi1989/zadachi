@@ -17,7 +17,7 @@ from .db import STATUSES, audit, connect, init_db, now, setting, today, tx
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(BASE, "static")
-MAX_UPLOAD = 15 * 1024 * 1024
+MAX_UPLOAD = 40 * 1024 * 1024      # the one common list of the site (all statuses) is much larger than a list of one tab
 
 
 @asynccontextmanager
@@ -555,41 +555,49 @@ def ai_on() -> bool:
     return setting("ai_enabled") == "1"
 
 
-def import_file(data: bytes, filename: str, user_id: int, dry: bool, due_from: str | None, due_to: str | None, ai: bool, suggest: bool = True, ours_out: set | None = None) -> dict:
-    """One import, shared by the screen (a file picked by the administrator) and the collector (the export the site's own button makes)."""
+def import_file(data: bytes, filename: str, user_id: int, dry: bool, due_from: str | None, due_to: str | None, ai: bool, suggest: bool = True, ours_out: set | None = None,
+                mode: str = "base") -> dict:
+    """One import, shared by the screen (a file picked by the administrator) and the collector (the export the site's own button makes).
+    mode "base": the base load (new tasks are created, fields updated, a window of terms applies). mode "status": the ordinary import: only the
+    statuses of tasks that are already in the base are updated (no window: a status of a task is needed whatever its term is)."""
+    status = mode == "status"
     site = site_import.is_site_export(data)
     report = None
     try:
         if site:
             with tx() as c:
-                rows, warnings, report = site_import.read(c, data, due_from, due_to, ours_out)
-                report["absent"] = site_import.absent(c, {r["code"] for r in site_import._read_rows(data)}, due_from, due_to)[:200]
+                rows, warnings, report = site_import.read(c, data, None if status else due_from, None if status else due_to, ours_out)
+                if not status:
+                    report["absent"] = site_import.absent(c, {r["code"] for r in site_import._read_rows(data)}, due_from, due_to)[:200]
         else:
             rows, warnings = importer.read(data)
     except importer.ImportError_ as e:
         bad(str(e))
     with tx() as c:
-        summary = importer.apply(c, rows, warnings, filename or "export.xlsx", user_id, dry)
+        summary = importer.apply(c, rows, warnings, filename or "export.xlsx", user_id, dry, mode="status" if status else "base")
     if report is not None:
         summary["site"] = report
-    if site and not dry and ai and suggest:
+    if site and not dry and ai and suggest and not status:
         summary["closing"] = closing.suggest()
     return summary
 
 
 @app.post("/api/import")
-async def api_import(request: Request, file: UploadFile = File(...), dry: int = 1, due_from: str = "", due_to: str = "", ai: int = 1):
-    """The old processed list, or the raw export of the site (then: only our departments, a window of terms, and the closing dates are proposed)."""
+async def api_import(request: Request, file: UploadFile = File(...), dry: int = 1, due_from: str = "", due_to: str = "", ai: int = 1, mode: str = "base"):
+    """The old processed list, or the raw export of the site. mode=base: the base load (only our departments, a window of terms, new tasks, the closing dates are
+    proposed). mode=status: the ordinary import, only the statuses of tasks that are already in the base."""
+    if mode not in ("base", "status"):
+        bad("mode: base или status")
     data = await file.read(MAX_UPLOAD + 1)
     if len(data) > MAX_UPLOAD:
-        bad("Файл больше 15 МБ")
-    return import_file(data, file.filename or "export.xlsx", me(request)["id"], bool(dry), due_from or None, due_to or None, bool(ai))
+        bad(f"Файл больше {MAX_UPLOAD // (1024 * 1024)} МБ")
+    return import_file(data, file.filename or "export.xlsx", me(request)["id"], bool(dry), due_from or None, due_to or None, bool(ai), mode=mode)
 
 
 @app.get("/api/sync/export-plan")
 def api_sync_export_plan():
     """What the collector downloads with the site's «Hisobot» button: for each of the three lists the open and the overdue tasks (the two tabs of the site)."""
-    return {"sections": [{"id": x["id"], "type_ids": ijro.EXPORT_TYPES_ONLY.get(x["id"], x["type_ids"])} for x in ijro.SECTIONS["sections"]], "tabs": ijro.EXPORT_TABS,
+    return {**ijro.export_plan(),
             "urls": {"export": ijro.SECTIONS["api_tasks"] + "/report/list-by-recipient-export", "presigned": ijro.EDO_API + "/v2/files/presigned-url/download"}}
 
 
@@ -601,19 +609,21 @@ async def api_sync_export(request: Request, source: str = "", last: int = 0, run
     then the closing dates are proposed for the new tasks (once per run, not once per file)."""
     data = await request.body()
     if len(data) > MAX_UPLOAD:
-        bad("Файл больше 15 МБ", 413)
+        bad(f"Файл больше {MAX_UPLOAD // (1024 * 1024)} МБ", 413)
     if not data or not site_import.is_site_export(data):
         bad("Это не выгрузка «Топшириқлар кесимида» сайта")
     from datetime import timedelta
     t = today()
     ours: set = set()
-    out = import_file(data, f"sync:{source or 'export'}.xlsx", request.state.key["created_by"], False, (t - timedelta(days=30)).isoformat(), (t + timedelta(days=60)).isoformat(),
-                      ai_on(), suggest=bool(last), ours_out=ours)
+    mode = "base" if setting("sync_apply") == "base" else "status"        # Settings: only the statuses of tasks in the base, or new tasks as well
+    day = lambda key, sign: (t + timedelta(days=sign * int(setting(key)))).isoformat() if setting(key).strip().isdigit() else None    # empty = no limit
+    out = import_file(data, f"sync:{source or 'export'}.xlsx", request.state.key["created_by"], False, day("base_back", -1), day("base_fwd", 1),
+                      ai_on(), suggest=bool(last) and mode == "base", ours_out=ours, mode=mode)
     if re.fullmatch(r"[0-9a-fA-F-]{8,64}", run or ""):
         with tx() as c:
             ijro.record_export(c, run, ours)
     site = out.get("site", {})
-    return {"source": source, "rows": out["rows"], "created": out["created"], "updated": out["updated"], "unchanged": out["unchanged"],
+    return {"source": source, "mode": mode, "rows": out["rows"], "created": out["created"], "updated": out["updated"], "unchanged": out["unchanged"], "missing": out.get("missing", 0),
             "unmapped": [d["name"] for d in site.get("departments", []) if not d.get("unit_id") and d.get("how") != "confirmed"][:30], "skipped": site.get("skipped", {}),
             "closing": out.get("closing")}
 
@@ -717,6 +727,7 @@ def api_import_history():
 @app.get("/api/settings")
 def api_settings():
     return {"users_tasks": setting("users_tasks"), "login_list": setting("login_list") == "1",
+            "sync": {"fields": ijro.sync_settings_view(), "auto_apply": setting("ijro_auto_apply") == "1", "auto_archive": setting("ijro_auto_archive") == "1"},
             "backup": {"files": len(backup._files()), "latest": backup.verify_latest()}}
 
 
@@ -730,6 +741,13 @@ async def api_settings_put(request: Request):
         values["users_tasks"] = b["users_tasks"]
     if "login_list" in b:
         values["login_list"] = "1" if b["login_list"] else "0"
+    if "sync" in b:
+        if not isinstance(b["sync"], dict) or not b["sync"]:
+            bad("sync: объект {настройка: значение}")
+        try:
+            values.update(ijro.check_sync_settings(b["sync"]))
+        except ValueError as e:
+            bad(str(e))
     if not values:
         bad("Нечего менять")
     with tx() as c:

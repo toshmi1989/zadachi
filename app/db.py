@@ -221,6 +221,13 @@ DEFAULT_SETTINGS = {
     "ai_base_url": "",
     "ijro_auto_archive": "1",     # take tasks the site no longer lists as ours off the dashboard after a complete synchronisation (up to a quarter of the open ones; more waits for a confirmation)
     "ijro_auto_apply": "1",       # apply clear changes from the site automatically after each synchronisation
+    "sync_source": "lists",       # what the collector downloads: lists (3 files: one list per section with every status) | tabs (3 lists x 3 tabs = 9 files)
+    "sync_apply": "status",       # what a downloaded list does: status (only updates the statuses of tasks already in the base) | base (also adds new tasks and updates the fields)
+    "base_back": "30",            # a list that adds tasks takes terms from this many days back (empty = no limit) ...
+    "base_fwd": "60",             # ... to this many days ahead (empty = no limit)
+    "history_scope": "month",     # whose answers (the stage history) are read: month | month_overdue | month_next | all
+    "history_date": "close",      # the term that decides the month of a task for that: close (closing date, else official) | due (official, else closing)
+    "history_statuses": "open",   # open (only not-done tasks) | all (done ones too)
     "ijro_card_tpl": "",          # address of a task card on edo.ijro.uz: {section_path} and {id} are substituted
 }
 MIGRATIONS = [

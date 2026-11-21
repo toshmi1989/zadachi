@@ -176,6 +176,7 @@ def test_detection_refuses_bad_input(admin):
 
 
 def test_resume_skips_what_was_just_checked(admin, key):
+    assert admin.put("/api/settings", json={"sync": {"history_scope": "all"}}).status_code == 200        # this test is about resuming: every open task is in the job
     anon = TestClient(app)
     full = {i["code"] for i in anon.get("/api/sync/job", headers=bearer(key)).json()["items"]}
     assert {"SY0001", "SY0002"} <= full
@@ -230,3 +231,31 @@ def test_employee_gets_nothing_about_other_peoples_tasks(admin, key):
         assert all("site" not in t for t in emp.get("/api/tasks?size=200").json()["items"] if not t["can_edit"])
     finally:
         admin.put("/api/settings", json={"users_tasks": "own"})
+
+
+def test_the_job_reads_history_only_where_the_settings_say(admin, key):
+    """Default: the open tasks whose term is in the current month (the tests' "today" is 2026-11-16). The tasks that are done are never searched."""
+    from app.db import connect, now
+    c = connect()
+    rows = [("HJ0001", "2026-10-20", "2026-10-25", "todo"), ("HJ0002", "2026-11-03", None, "todo"), ("HJ0003", "2026-11-28", "2026-12-05", "progress"),
+            ("HJ0004", "2026-12-10", None, "todo"), ("HJ0005", "2026-11-12", None, "done"), ("HJ0006", None, None, "todo"), ("HJ0007", "2026-12-20", "2026-11-30", "todo")]
+    for code, due, close, st in rows:
+        c.execute("INSERT INTO tasks(code, kind, text, due, close_date, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)", (code, "Қарор", "t", due, close, st, now(), now()))
+    c.commit(); c.close()
+    anon = TestClient(app)
+    codes = lambda: {i["code"] for i in anon.get("/api/sync/job", headers=bearer(key)).json()["items"] if i["code"].startswith("HJ")}
+    put = lambda **kw: admin.put("/api/settings", json={"sync": kw}).status_code
+    assert put(history_scope="month", history_date="close", history_statuses="open") == 200
+    assert codes() == {"HJ0002", "HJ0007"}                       # by the closing date (else the official one): HJ0007 closes on 30 Nov; HJ0003 closes in December; done and dateless are not read
+    assert put(history_date="due") == 200
+    assert codes() == {"HJ0002", "HJ0003"}                       # by the official term: HJ0003 is due on 28 Nov, HJ0007 on 20 Dec
+    assert put(history_date="close", history_scope="month_next") == 200
+    assert codes() == {"HJ0002", "HJ0003", "HJ0004", "HJ0007"}   # this month and the next one (by the closing date)
+    assert put(history_scope="month_overdue") == 200
+    assert codes() == {"HJ0001", "HJ0002", "HJ0007"}             # this month and the earlier open ones
+    assert put(history_scope="all") == 200
+    assert codes() == {"HJ0001", "HJ0002", "HJ0003", "HJ0004", "HJ0006", "HJ0007"}    # every open task, the done one is not there
+    assert put(history_statuses="all") == 200
+    assert "HJ0005" in codes()                                   # the done ones too, when asked
+    assert put(history_scope="month", history_date="close", history_statuses="open") == 200
+    d = connect(); d.execute("DELETE FROM tasks WHERE code LIKE 'HJ%'"); d.commit(); d.close()
