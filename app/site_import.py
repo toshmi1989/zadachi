@@ -131,17 +131,21 @@ def suggest_unit(c, name: str, units=None) -> tuple[int | None, float]:
     return (best[1], best[0])
 
 
-def read(c, data: bytes, due_from: str | None, due_to: str | None, ours_out: set | None = None, strict: bool = True) -> tuple[list[dict], list[str], dict]:
+def read(c, data: bytes, due_from: str | None, due_to: str | None, ours_out: set | None = None, by_dept: bool = True, by_exec: bool = True, by_kind: bool = True) -> tuple[list[dict], list[str], dict]:
     """(rows in the shape of importer.apply, warnings, report). due_from/due_to: only the terms of this window are taken (ISO dates, both ends included)."""
-    return read_rows(c, _read_rows(data), due_from, due_to, ours_out, strict)
+    return read_rows(c, _read_rows(data), due_from, due_to, ours_out, by_dept, by_exec, by_kind)
 
 
-def read_rows(c, raw_all: list[dict], due_from: str | None, due_to: str | None, ours_out: set | None = None, strict: bool = True) -> tuple[list[dict], list[str], dict]:
+def read_rows(c, raw_all: list[dict], due_from: str | None, due_to: str | None, ours_out: set | None = None, by_dept: bool = True, by_exec: bool = True,
+              by_kind: bool = True) -> tuple[list[dict], list[str], dict]:
     """The same for rows that are already read: the rows of SEVERAL files (one list per section) are one base, so they are judged together.
-    strict=True (a raw list of the site): only OUR rows are taken (department of the structure, the executor of the ministry, no co-executors, of the cabinet's list only
-    the kept kind). strict=False (the files are already selected by the person): every row is taken, the departments are still matched to the structure to put the
-    people in them, and the one that is not in the structure leaves the task in «Без отдела»."""
-    raw = [r for r in raw_all if not strict or executor_ok(r["exec"])]       # the main executor is another body: not ours, whatever the department says (and its department is not asked about)
+    Which rows are taken is chosen by three independent filters (each can be switched off when the person has already selected the rows):
+      by_dept - only the departments that are in the structure (or were matched to it by the person); a row of an employee we already know is taken as well;
+      by_exec - only the rows whose main executor is the ministry («Масъул ижрочи»);
+      by_kind - no co-executors, and of the cabinet's list only the kept kind.
+    The departments are matched to the structure in any case (it puts people into their departments); a department that is not in the structure leaves its tasks
+    in «Без отдела» when by_dept is off. due_from/due_to: only the terms of this window are taken (None = no window)."""
+    raw = [r for r in raw_all if not by_exec or executor_ok(r["exec"])]       # the main executor is another body: not ours, whatever the department says (and its department is not asked about)
     aliases = load_aliases(c)
     units = c.execute("SELECT id, name FROM units WHERE active=1").fetchall()
     unit_name = {u["id"]: u["name"] for u in units}
@@ -188,15 +192,15 @@ def read_rows(c, raw_all: list[dict], due_from: str | None, due_to: str | None, 
     owner = {r["code"]: r["assignee_raw"] for r in c.execute("SELECT code, assignee_raw FROM tasks WHERE assignee_raw != ''")}
     cand: dict[str, list[dict]] = {}
     for r in raw:
-        if strict and not_kept_kind(r["kind"]):                                # a kind of document of the Cabinet's list that is not kept
+        if by_kind and not_kept_kind(r["kind"]):                                # a kind of document of the Cabinet's list that is not kept
             skipped["doc_type"] = skipped.get("doc_type", 0) + 1
             continue
-        if strict and r["role"].strip().casefold().startswith("ҳамижрочи"):     # a co-executor's task: deliberately not taken (the department does not keep them)
+        if by_kind and r["role"].strip().casefold().startswith("ҳамижрочи"):     # a co-executor's task: deliberately not taken (the department does not keep them)
             skipped["coexec"] += 1
             continue
         d = depts[skeleton(r["dept"])]
         uid = d["unit_id"] or (known.get(auth.norm_name(r["who"])) if r["who"] else None)
-        if uid is None and strict:
+        if uid is None and by_dept:
             skipped["not_ours"] += 1
             continue
         if ours_out is not None:

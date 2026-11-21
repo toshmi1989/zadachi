@@ -221,7 +221,10 @@ DEFAULT_SETTINGS = {
     "ai_base_url": "",
     "ijro_auto_archive": "1",     # take tasks the site no longer lists as ours off the dashboard after a complete synchronisation (up to a quarter of the open ones; more waits for a confirmation)
     "ijro_auto_apply": "1",       # apply clear changes from the site automatically after each synchronisation
-    "base_filter": "none",        # which rows of a loaded file are taken: none (all of them: the files are selected by the person) | ours (the platform selects: our departments, the executor of the ministry ...)
+    "base_f_dept": "1",           # a loaded file: take only the departments that are in the structure (the person decides on the import page which are ours)
+    "base_f_exec": "0",           # ... only the rows whose main executor is the ministry
+    "base_f_kind": "0",           # ... no co-executors, of the cabinet's list only the kept kind
+    "base_f_window": "0",         # ... only the terms inside the window (base_back / base_fwd)
     "base_manual": "overwrite",   # the loaded base vs what the administrator edited by hand: overwrite (the file wins) | keep (hand edits stay)
     "base_absent": "gone",        # open tasks that are not in the loaded base: gone (taken off the dashboard, «Нет на сайте») | keep (stay as they are)
     "sync_source": "lists",       # what the collector downloads: lists (3 files: one list per section with every status) | tabs (3 lists x 3 tabs = 9 files)

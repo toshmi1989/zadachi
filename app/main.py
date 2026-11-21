@@ -556,7 +556,7 @@ def ai_on() -> bool:
 
 
 def import_files(datas: list[bytes], filename: str, user_id: int, dry: bool, due_from: str | None, due_to: str | None, ai: bool, suggest: bool = True,
-                 ours_out: set | None = None, mode: str = "base", overwrite: bool = False, replace: bool = False, confirm: bool = False, strict: bool = True) -> dict:
+                 ours_out: set | None = None, mode: str = "base", overwrite: bool = False, replace: bool = False, confirm: bool = False, by_dept: bool = True, by_exec: bool = True, by_kind: bool = True, by_window: bool = True) -> dict:
     """One import, shared by the screen (files picked by the administrator) and the collector (the list the site's own button makes).
     The files are ONE base (a list per section): they are read together and judged together.
     mode "base": the base load (new tasks are created, fields updated, a window of terms applies). mode "status": only the statuses of tasks already in the
@@ -564,8 +564,8 @@ def import_files(datas: list[bytes], filename: str, user_id: int, dry: bool, due
     overwrite: the file wins over what the administrator edited by hand. replace: the open tasks that are NOT in the loaded base are taken off the dashboard
     («Нет на сайте»; nothing is deleted, they come back if a later base has them). More than a quarter of the open tasks needs `confirm`."""
     status = mode == "status"
-    if not strict:
-        due_from = due_to = None                       # the files are selected by the person: no window of terms either
+    if not by_window:
+        due_from = due_to = None                       # no window of terms: the files are selected by the person
     sites = [site_import.is_site_export(d) for d in datas]
     if any(sites) and not all(sites):
         bad("Нельзя загружать вместе выгрузки с сайта и обработанный список: загрузите их по отдельности")
@@ -576,7 +576,7 @@ def import_files(datas: list[bytes], filename: str, user_id: int, dry: bool, due
         if site:
             raw_all = [r for d in datas for r in site_import._read_rows(d)]
             with tx() as c:
-                rows, warnings, report = site_import.read_rows(c, raw_all, None if status else due_from, None if status else due_to, present, strict)
+                rows, warnings, report = site_import.read_rows(c, raw_all, None if status else due_from, None if status else due_to, present, by_dept, by_exec, by_kind)
                 if not status:
                     report["absent"] = site_import.absent(c, {r["code"] for r in raw_all}, due_from, due_to)[:200]
         else:
@@ -618,14 +618,12 @@ def import_file(data: bytes, filename: str, user_id: int, dry: bool, due_from: s
 
 @app.post("/api/import")
 async def api_import(request: Request, file: list[UploadFile] = File(...), dry: int = 1, due_from: str = "", due_to: str = "", ai: int = 1, mode: str = "base",
-                     overwrite: int = 0, replace: int = 0, confirm: int = 0, select: str = "ours"):
+                     overwrite: int = 0, replace: int = 0, confirm: int = 0, f_dept: int = 1, f_exec: int = 1, f_kind: int = 1, f_window: int = 1):
     """The base load: the lists of the site (one per section, they are read together) or the old processed list. Only our departments, a window of terms,
     the closing dates are proposed. overwrite=1: the file wins over hand edits. replace=1: open tasks that are not in the loaded base leave the dashboard.
     mode=status: only the statuses of tasks that are already in the base."""
     if mode not in ("base", "status"):
         bad("mode: base или status")
-    if select not in ("ours", "none"):
-        bad("select: ours или none")
     if not file or len(file) > 10:
         bad("Нужно от 1 до 10 файлов")
     datas, total = [], 0
@@ -637,7 +635,7 @@ async def api_import(request: Request, file: list[UploadFile] = File(...), dry: 
         datas.append(d)
     name = ", ".join((f.filename or "export.xlsx") for f in file)[:200]
     return import_files(datas, name, me(request)["id"], bool(dry), due_from or None, due_to or None, bool(ai), mode=mode, overwrite=bool(overwrite), replace=bool(replace),
-                        confirm=bool(confirm), strict=select == "ours")
+                        confirm=bool(confirm), by_dept=bool(f_dept), by_exec=bool(f_exec), by_kind=bool(f_kind), by_window=bool(f_window))
 
 
 @app.get("/api/sync/export-plan")

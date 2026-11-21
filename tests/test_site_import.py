@@ -396,8 +396,9 @@ def test_the_download_plan_follows_the_setting(admin):
 def test_the_settings_of_the_import_are_explained_and_validated(admin):
     s = admin.get("/api/settings").json()["sync"]
     fields = {f["key"]: f for f in s["fields"]}
-    assert set(fields) == {"base_filter", "base_manual", "base_absent", "sync_source", "sync_apply", "base_back", "base_fwd", "history_scope", "history_date", "history_statuses"}
-    assert fields["base_filter"]["value"] == "none"                                                               # the files are selected by the person: every row is taken
+    assert set(fields) == {"base_f_dept", "base_f_exec", "base_f_kind", "base_f_window", "base_manual", "base_absent", "sync_source", "sync_apply", "base_back", "base_fwd", "history_scope", "history_date", "history_statuses"}
+    assert [fields[k]["value"] for k in ("base_f_dept", "base_f_exec", "base_f_kind", "base_f_window")] == ["1", "0", "0", "0"]     # departments are filtered; the files are already selected otherwise
+    assert all(fields[k]["kind"] == "switch" and fields[k]["help"] for k in ("base_f_dept", "base_f_exec", "base_f_kind", "base_f_window"))
     assert fields["base_manual"]["value"] == "overwrite" and fields["base_absent"]["value"] == "gone"                  # the base overwrites; what is not in it leaves the dashboard
     groups = {g["id"] for g in admin.get("/api/settings").json()["sync"]["groups"]}
     assert groups == {"base", "history", "lists"} and {f["group"] for f in s["fields"]} == groups
@@ -478,20 +479,29 @@ def test_several_files_are_one_base(admin):
     assert admin.post(url, files=[("file", ("a.xlsx", export(one)))] * 11).status_code == 400       # at most ten files
 
 
-def test_files_selected_by_the_person_are_taken_whole(admin):
-    far = ("2000-01-01", "2099-12-31")
+def test_the_filters_of_a_loaded_file_are_independent(admin):
     rows = [row("SX0300", PRIMARY, "Sitea Primary", "25.12.2026"),                                              # ours
             row("SX0301", FOREIGN, "Sitec Foreign", "25.12.2026"),                                              # a department that is not in the structure
             row("SX0302", PRIMARY, "Sitea Primary", "25.12.2026", executor="Таълим ва илм-фан вазирлиги"),     # another executor
             row("SX0303", PRIMARY, "Sitea Primary", "25.12.2026", role="Ҳамижрочи"),                          # a co-executor
-            row("SX0304", PRIMARY, "Sitea Primary", "25.12.2026", kind="Бош вазир топшириқлари"),               # a kind of the cabinet's list that the platform would drop
+            row("SX0304", PRIMARY, "Sitea Primary", "25.12.2026", kind="Бош вазир топшириқлари"),               # a kind of the cabinet's list that is not kept
             row("SX0305", PRIMARY, "Sitea Primary", "25.12.2031")]                                              # far outside any window
-    strict = post(admin, rows, dry=1, window=("2026-12-01", "2026-12-31")).json()                              # the platform selects (the API default)
-    assert strict["rows"] == 1 and strict["site"]["skipped"]["not_ours"] == 1 and strict["site"]["skipped"]["executor"] == 1
-    whole = post(admin, rows, dry=1, window=("2026-12-01", "2026-12-31"), extra="&select=none").json()          # the person selected the rows: all of them, no window
-    assert whole["rows"] == 6 and whole["created"] == 6 and whole["site"]["skipped"] == {"window": 0, "not_ours": 0, "coexec": 0, "executor": 0}
-    assert post(admin, rows, dry=1, extra="&select=bogus").status_code == 400
-    r = post(admin, rows, dry=0, extra="&select=none").json()
+    win = ("2026-12-01", "2026-12-31")
+    flags = lambda d, e, k, w: f"&f_dept={d}&f_exec={e}&f_kind={k}&f_window={w}"
+    allon = post(admin, rows, dry=1, window=win, extra=flags(1, 1, 1, 1)).json()                              # every filter: the old strict selection
+    assert allon["rows"] == 1 and allon["site"]["skipped"]["not_ours"] == 1 and allon["site"]["skipped"]["executor"] == 1
+    assert post(admin, rows, dry=1, window=win).json()["rows"] == 1                                            # the API default is every filter on
+    dept = post(admin, rows, dry=1, window=win, extra=flags(1, 0, 0, 0)).json()                               # the default of the settings: only the departments are filtered
+    assert dept["rows"] == 5 and dept["site"]["skipped"]["not_ours"] == 1 and dept["site"]["skipped"]["executor"] == 0 and dept["site"]["skipped"]["window"] == 0
+    none = post(admin, rows, dry=1, window=win, extra=flags(0, 0, 0, 0)).json()                               # no filter: every row
+    assert none["rows"] == 6 and none["site"]["skipped"] == {"window": 0, "not_ours": 0, "coexec": 0, "executor": 0}
+    ex = post(admin, rows, dry=1, window=win, extra=flags(0, 1, 0, 0)).json()
+    assert ex["rows"] == 5 and ex["site"]["skipped"]["executor"] == 1
+    kd = post(admin, rows, dry=1, window=win, extra=flags(0, 0, 1, 0)).json()
+    assert kd["rows"] == 4 and kd["site"]["skipped"]["coexec"] == 1 and kd["site"]["skipped"]["doc_type"] == 1
+    wd = post(admin, rows, dry=1, window=win, extra=flags(0, 0, 0, 1)).json()
+    assert wd["rows"] == 5 and wd["site"]["skipped"]["window"] == 1
+    r = post(admin, rows, dry=0, extra=flags(0, 0, 0, 0)).json()
     assert r["created"] == 6
     got = {c: admin.get(f"/api/tasks?q={c}").json()["items"][0] for c in ("SX0301", "SX0305")}
     assert got["SX0301"]["unit"] in ("", None) and got["SX0305"]["eff"] is not None                          # the foreign department's task is «Без отдела»; a far term is kept
@@ -510,7 +520,7 @@ def test_the_departments_of_a_file_can_be_added_to_the_structure(admin):
     assert after == before + 2 and set(added) == set(names[:2])
     for bad in ({"names": []}, {"names": ["x"] * 101}, {"names": [1]}, {"names": ["  "]}, {}):
         assert admin.post("/api/import/add-units", json=bad).status_code == 400, bad
-    d = post(admin, [row("SX0310", "Moliya-iqtisod departamenti", "Sited Finance", "25.12.2026")], dry=0, extra="&select=none").json()
+    d = post(admin, [row("SX0310", "Moliya-iqtisod departamenti", "Sited Finance", "25.12.2026")], dry=0, extra="&f_dept=0&f_exec=0&f_kind=0&f_window=0").json()
     assert d["created"] == 1 and admin.get("/api/tasks?q=SX0310").json()["items"][0]["unit"].startswith("Moliya")      # now the task goes to its department
     c = connect()                                                                                             # put the structure back: the other modules share this database
     ids = "SELECT id FROM units WHERE name LIKE 'Moliya%' OR name LIKE 'Tibbiyot ta%'"
