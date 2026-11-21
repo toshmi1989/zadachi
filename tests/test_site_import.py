@@ -45,7 +45,7 @@ def admin():
         from app.db import connect                                   # the database is shared with the other test modules: leave nothing behind
         d = connect()
         d.execute("DELETE FROM tasks WHERE code LIKE 'SX%' OR code='OLD0001'")
-        d.execute("DELETE FROM users WHERE name IN ('Sitea Primary','Siteb Ambulance','Sitec Foreign','Old Person')")
+        d.execute("DELETE FROM users WHERE name IN ('Sitea Primary','Siteb Ambulance','Sitec Foreign','Old Person','Sited Finance')")
         d.execute("DELETE FROM unit_aliases")
         d.commit()
         d.close()
@@ -396,7 +396,8 @@ def test_the_download_plan_follows_the_setting(admin):
 def test_the_settings_of_the_import_are_explained_and_validated(admin):
     s = admin.get("/api/settings").json()["sync"]
     fields = {f["key"]: f for f in s["fields"]}
-    assert set(fields) == {"base_manual", "base_absent", "sync_source", "sync_apply", "base_back", "base_fwd", "history_scope", "history_date", "history_statuses"}
+    assert set(fields) == {"base_filter", "base_manual", "base_absent", "sync_source", "sync_apply", "base_back", "base_fwd", "history_scope", "history_date", "history_statuses"}
+    assert fields["base_filter"]["value"] == "none"                                                               # the files are selected by the person: every row is taken
     assert fields["base_manual"]["value"] == "overwrite" and fields["base_absent"]["value"] == "gone"                  # the base overwrites; what is not in it leaves the dashboard
     groups = {g["id"] for g in admin.get("/api/settings").json()["sync"]["groups"]}
     assert groups == {"base", "history", "lists"} and {f["group"] for f in s["fields"]} == groups
@@ -475,3 +476,44 @@ def test_several_files_are_one_base(admin):
     mixed = admin.post(url, files=[("file", ("a.xlsx", export(one))), ("file", ("old.xlsx", xlsx_old()))])
     assert mixed.status_code == 400
     assert admin.post(url, files=[("file", ("a.xlsx", export(one)))] * 11).status_code == 400       # at most ten files
+
+
+def test_files_selected_by_the_person_are_taken_whole(admin):
+    far = ("2000-01-01", "2099-12-31")
+    rows = [row("SX0300", PRIMARY, "Sitea Primary", "25.12.2026"),                                              # ours
+            row("SX0301", FOREIGN, "Sitec Foreign", "25.12.2026"),                                              # a department that is not in the structure
+            row("SX0302", PRIMARY, "Sitea Primary", "25.12.2026", executor="Таълим ва илм-фан вазирлиги"),     # another executor
+            row("SX0303", PRIMARY, "Sitea Primary", "25.12.2026", role="Ҳамижрочи"),                          # a co-executor
+            row("SX0304", PRIMARY, "Sitea Primary", "25.12.2026", kind="Бош вазир топшириқлари"),               # a kind of the cabinet's list that the platform would drop
+            row("SX0305", PRIMARY, "Sitea Primary", "25.12.2031")]                                              # far outside any window
+    strict = post(admin, rows, dry=1, window=("2026-12-01", "2026-12-31")).json()                              # the platform selects (the API default)
+    assert strict["rows"] == 1 and strict["site"]["skipped"]["not_ours"] == 1 and strict["site"]["skipped"]["executor"] == 1
+    whole = post(admin, rows, dry=1, window=("2026-12-01", "2026-12-31"), extra="&select=none").json()          # the person selected the rows: all of them, no window
+    assert whole["rows"] == 6 and whole["created"] == 6 and whole["site"]["skipped"] == {"window": 0, "not_ours": 0, "coexec": 0, "executor": 0}
+    assert post(admin, rows, dry=1, extra="&select=bogus").status_code == 400
+    r = post(admin, rows, dry=0, extra="&select=none").json()
+    assert r["created"] == 6
+    got = {c: admin.get(f"/api/tasks?q={c}").json()["items"][0] for c in ("SX0301", "SX0305")}
+    assert got["SX0301"]["unit"] in ("", None) and got["SX0305"]["eff"] is not None                          # the foreign department's task is «Без отдела»; a far term is kept
+
+
+def test_the_departments_of_a_file_can_be_added_to_the_structure(admin):
+    from app.db import connect
+    c = connect(); before = c.execute("SELECT COUNT(*) FROM units").fetchone()[0]; c.close()
+    names = ["Tibbiyot taʼlimi va ilm-fan departamenti", "Moliya-iqtisod departamenti", PRIMARY]                  # the last one is the structure's own department (written in Latin)
+    r = admin.post("/api/import/add-units", json={"names": names}).json()
+    assert r == {"created": 2, "skipped": 1}                                                                  # a name that already matches the structure is not added again
+    assert admin.post("/api/import/add-units", json={"names": names}).json() == {"created": 0, "skipped": 3}   # and nothing is added twice
+    c = connect(); after = c.execute("SELECT COUNT(*) FROM units").fetchone()[0]
+    added = [x["name"] for x in c.execute("SELECT name, num, parent_id FROM units ORDER BY id DESC LIMIT 2")]
+    c.close()
+    assert after == before + 2 and set(added) == set(names[:2])
+    for bad in ({"names": []}, {"names": ["x"] * 101}, {"names": [1]}, {"names": ["  "]}, {}):
+        assert admin.post("/api/import/add-units", json=bad).status_code == 400, bad
+    d = post(admin, [row("SX0310", "Moliya-iqtisod departamenti", "Sited Finance", "25.12.2026")], dry=0, extra="&select=none").json()
+    assert d["created"] == 1 and admin.get("/api/tasks?q=SX0310").json()["items"][0]["unit"].startswith("Moliya")      # now the task goes to its department
+    c = connect()                                                                                             # put the structure back: the other modules share this database
+    ids = "SELECT id FROM units WHERE name LIKE 'Moliya%' OR name LIKE 'Tibbiyot ta%'"
+    c.execute(f"UPDATE users SET unit_id = NULL WHERE unit_id IN ({ids})")
+    c.execute(f"DELETE FROM units WHERE id IN ({ids})")
+    c.commit(); c.close()

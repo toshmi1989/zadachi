@@ -80,6 +80,7 @@ routes.import = async function (page) {
   const cfg = Object.fromEntries((await api("/api/settings")).sync.fields.map(f => [f.key, f.value]));      // the window of terms for the base load comes from Settings
   const mode = "base";       // every load is the base: it overwrites what is on the server (the stages come from the «Синхронизировать» button of the script)
   const overwrite = cfg.base_manual !== "keep", replace = cfg.base_absent !== "keep";      // Settings: what the base does with hand edits and with tasks that are not in it
+  const select = cfg.base_filter === "ours" ? "ours" : "none";      // Settings: all rows of the files (selected by the person) or the platform selects (our departments, the executor, the window of terms)
   let confirmed = false;
   page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Импорт базы задач</h1><p>Каждая загрузка — это база: файлы Excel с сайта перезаписывают задачи на сервере. Этапы к ним записывает кнопка «Синхронизировать» в скрипте.</p></div></div>
     <div id="modebar" class="card rise" style="--i:1;margin-bottom:16px"></div>
@@ -89,6 +90,7 @@ routes.import = async function (page) {
   const modeBar = $("#modebar", page);
   modeBar.innerHTML = `<b>Как загрузка обращается с тем, что уже есть на сервере</b>
     <ul class="hint" style="margin:8px 0 0;padding-left:18px">
+      <li><b>Какие строки берутся:</b> ${select === "none" ? "<b>все строки файлов</b> (вы отобрали их сами: платформа ничего не отбрасывает, окна сроков нет)" : "отбирает платформа: наши отделы, исполнитель «Соғлиқни сақлаш вазирлиги», сроки в окне"}.</li>
       <li><b>Задачи из файла</b> добавляются, а у существующих обновляются тексты, документ, срок, статус и ответственный.</li>
       <li><b>Ваши ручные правки:</b> ${overwrite ? "<b>перезаписываются</b> значениями из файла (перед загрузкой покажем сколько)" : "сохраняются"}.</li>
       <li><b>Задачи, которых нет в загруженных файлах:</b> ${replace ? "<b>открытые снимаются с дашборда</b> («Нет на сайте»; ничего не удаляется, при следующей загрузке вернутся)" : "остаются как есть"}.</li>
@@ -110,19 +112,21 @@ routes.import = async function (page) {
   let win = fromCfg(), useAi = true;   // the window of terms for the base load: from Settings (by default the last 30 days and the next 60)
   async function send(files, dry) {
     const f = new FormData(); files.forEach(x => f.append("file", x));
-    return api(`/api/import?dry=${dry}&due_from=${win[0]}&due_to=${win[1]}&ai=${useAi ? 1 : 0}&mode=${mode}&overwrite=${overwrite ? 1 : 0}&replace=${replace ? 1 : 0}&confirm=${confirmed ? 1 : 0}`, { method: "POST", form: f });
+    return api(`/api/import?dry=${dry}&due_from=${win[0]}&due_to=${win[1]}&ai=${useAi ? 1 : 0}&mode=${mode}&overwrite=${overwrite ? 1 : 0}&replace=${replace ? 1 : 0}&confirm=${confirmed ? 1 : 0}&select=${select}`, { method: "POST", form: f });
   }
   /* the raw export of the site: only our departments, a window of terms, the closing dates are proposed */
   function siteBlock(s, files) {
     const r = s.site; if (!r) return "";
     const unitOpts = (sel) => `<option value="">— не наш отдел —</option>` + r.units.map(u => `<option value="${u.id}" ${u.id === sel ? "selected" : ""}>${esc(u.name.length > 60 ? u.name.slice(0, 58) + "…" : u.name)}</option>`).join("");
     const how = d => d.how === "confirmed" ? "подтверждено вами" : d.how === "auto" ? "найден по названию" : d.how === "people" ? "предложено по сотрудникам" : d.suggest ? "похоже на" : "";
-    const dep = r.departments.filter(d => d.unit_id || d.suggest || d.rows >= 5);
+    const dep = select === "none" ? r.departments : r.departments.filter(d => d.unit_id || d.suggest || d.rows >= 5);
+    const missing = r.departments.filter(d => !d.unit_id);
     return `<div class="sec-t" style="margin-top:0">Выгрузка с сайта ijro</div>
-      <div class="inl" style="gap:12px;flex-wrap:wrap;margin-bottom:10px"><label class="hint">Сроки с <input type="date" id="w-from" value="${win[0]}"></label><label class="hint">по <input type="date" id="w-to" value="${win[1]}"></label><button class="btn sm" id="w-go">Пересчитать</button>
-        <span class="hint">Быстро: <a href="#" class="w-pre" data-p="soon">−30 / +60 дней</a> · <a href="#" class="w-pre" data-p="next">следующий месяц</a> · <a href="#" class="w-pre" data-p="all">все сроки</a>. Берутся задачи наших отделов со сроком в окне.</span></div>
-      <div class="stats">${[[r.file_tasks, "задач в файле"], [r.tasks, "наших в этом окне"], [r.skipped.not_ours, "строк чужих отделов"], [r.skipped.window, "строк вне окна сроков"], ...(r.skipped.coexec ? [[r.skipped.coexec, "строк соисполнителей (не берём)"]] : []), ...(r.skipped.executor ? [[r.skipped.executor, "строк другого исполнителя, не Соғлиқни сақлаш вазирлиги (не берём)"]] : []), ...(r.skipped.doc_type ? [[r.skipped.doc_type, "строк прочих видов документов Кабинета министров (не берём)"]] : [])].map(([n, l]) => `<div class="stat"><b class="num">${n}</b><span>${l}</span></div>`).join("")}</div>
-      <details ${dep.some(d => !d.unit_id) ? "open" : ""} style="margin:10px 0"><summary><b>Отделы в выгрузке и соответствие нашей структуре</b> <span class="hint">(${dep.filter(d => d.unit_id).length} наших)</span></summary>
+      ${select === "ours" ? `<div class="inl" style="gap:12px;flex-wrap:wrap;margin-bottom:10px"><label class="hint">Сроки с <input type="date" id="w-from" value="${win[0]}"></label><label class="hint">по <input type="date" id="w-to" value="${win[1]}"></label><button class="btn sm" id="w-go">Пересчитать</button>
+        <span class="hint">Быстро: <a href="#" class="w-pre" data-p="soon">−30 / +60 дней</a> · <a href="#" class="w-pre" data-p="next">следующий месяц</a> · <a href="#" class="w-pre" data-p="all">все сроки</a>. Берутся задачи наших отделов со сроком в окне.</span></div>` : ""}
+      <div class="stats">${[[r.file_tasks, "задач в файле"], [r.tasks, select === "ours" ? "наших в этом окне" : "попадёт в базу"], ...(select === "ours" ? [[r.skipped.not_ours, "строк чужих отделов"], [r.skipped.window, "строк вне окна сроков"]] : []), ...(r.skipped.coexec ? [[r.skipped.coexec, "строк соисполнителей (не берём)"]] : []), ...(r.skipped.executor ? [[r.skipped.executor, "строк другого исполнителя, не Соғлиқни сақлаш вазирлиги (не берём)"]] : []), ...(r.skipped.doc_type ? [[r.skipped.doc_type, "строк прочих видов документов Кабинета министров (не берём)"]] : [])].map(([n, l]) => `<div class="stat"><b class="num">${n}</b><span>${l}</span></div>`).join("")}</div>
+      <details ${dep.some(d => !d.unit_id) ? "open" : ""} style="margin:10px 0"><summary><b>Отделы в выгрузке и соответствие нашей структуре</b> <span class="hint">(${r.departments.filter(d => d.unit_id).length} из ${r.departments.length} есть в структуре)</span></summary>
+        ${missing.length ? `<div class="warn" style="margin:8px 0">${icon("info")}<span>Отделов из файлов нет в структуре департамента: <b>${missing.length}</b>. ${select === "none" ? "Их задачи попадут в строку «Без отдела»" : "Их строки не берутся"}. Чтобы задачи легли по отделам, добавьте их в структуру (потом их можно переименовать, перенести в управление или скрыть в «Настройках») или сопоставьте с существующим отделом ниже.</span><button type="button" class="btn sm pri" id="dep-add" data-names="${esc(JSON.stringify(missing.map(d => d.name)))}" style="margin-left:auto;white-space:nowrap">Добавить в структуру (${missing.length})</button></div>` : ""}
         <div class="scroll-x"><table class="plain"><thead><tr><th>Отдел в выгрузке</th><th>Строк</th><th>Наш отдел</th><th></th></tr></thead><tbody>${dep.map(d => `<tr><td>${esc(d.name)}<div class="hint">${esc(d.people.join(", "))}</div></td><td class="num">${d.rows}</td>
           <td><select class="dep-map" data-key="${esc(d.key)}" data-init="${d.unit_id || ""}">${unitOpts(d.unit_id || null)}</select></td><td class="hint">${how(d)}${!d.unit_id && d.suggest ? `<div>Предложение: ${esc(d.suggest_name.length > 36 ? d.suggest_name.slice(0, 34) + "…" : d.suggest_name)} <a href="#" class="dep-sg" data-unit="${d.suggest}">выбрать</a></div>` : ""}</td></tr>`).join("")}</tbody></table></div>
         <div class="inl" style="margin-top:8px"><button class="btn sm pri" id="dep-save">Запомнить соответствие и пересчитать</button><span class="hint">Запоминается только то, что вы изменили, и действует на следующие выгрузки. Строки сотрудников, которые у нас уже есть, берутся и без этого.</span></div></details>
@@ -132,7 +136,7 @@ routes.import = async function (page) {
   }
   function bindSite(files) {
     const g = id => $(id, stage); if (!g("#w-go") && !g("#use-ai")) return;
-    const re = async () => { win = [g("#w-from").value || win[0], g("#w-to").value || win[1]]; await preview(files); };
+    const re = async () => { if (g("#w-from") && g("#w-to")) win = [g("#w-from").value || win[0], g("#w-to").value || win[1]]; await preview(files); };      // the window row exists only when the platform selects the rows
     if (g("#w-go")) g("#w-go").onclick = re;
     $$(".w-pre", stage).forEach(a => a.onclick = async e => { e.preventDefault(); win = presets[a.dataset.p](); await preview(files); });
     if (g("#pm-save")) g("#pm-save").onclick = async () => {
@@ -142,6 +146,11 @@ routes.import = async function (page) {
     };
     if (g("#use-ai")) g("#use-ai").onchange = e => { useAi = e.target.checked; };
     $$(".dep-sg", stage).forEach(a => a.onclick = e => { e.preventDefault(); a.closest("tr").querySelector(".dep-map").value = a.dataset.unit; });
+    if (g("#dep-add")) g("#dep-add").onclick = async e => {
+      e.target.disabled = true;
+      try { const x = await api("/api/import/add-units", { method: "POST", json: { names: JSON.parse(e.target.dataset.names) } }); Z.meta = null; toast("Добавлено отделов: " + x.created); await re(); }
+      catch (er) { toast(er.message, "error"); e.target.disabled = false; }
+    };
     if (g("#dep-save")) g("#dep-save").onclick = async () => {
       const map = {}; $$(".dep-map", stage).forEach(sel => { if (sel.value !== sel.dataset.init) map[sel.dataset.key] = sel.value ? +sel.value : null; });   // only what the person changed or chose
       if (!Object.keys(map).length) { toast("Ничего не изменено"); return; }

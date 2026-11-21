@@ -556,7 +556,7 @@ def ai_on() -> bool:
 
 
 def import_files(datas: list[bytes], filename: str, user_id: int, dry: bool, due_from: str | None, due_to: str | None, ai: bool, suggest: bool = True,
-                 ours_out: set | None = None, mode: str = "base", overwrite: bool = False, replace: bool = False, confirm: bool = False) -> dict:
+                 ours_out: set | None = None, mode: str = "base", overwrite: bool = False, replace: bool = False, confirm: bool = False, strict: bool = True) -> dict:
     """One import, shared by the screen (files picked by the administrator) and the collector (the list the site's own button makes).
     The files are ONE base (a list per section): they are read together and judged together.
     mode "base": the base load (new tasks are created, fields updated, a window of terms applies). mode "status": only the statuses of tasks already in the
@@ -564,6 +564,8 @@ def import_files(datas: list[bytes], filename: str, user_id: int, dry: bool, due
     overwrite: the file wins over what the administrator edited by hand. replace: the open tasks that are NOT in the loaded base are taken off the dashboard
     («Нет на сайте»; nothing is deleted, they come back if a later base has them). More than a quarter of the open tasks needs `confirm`."""
     status = mode == "status"
+    if not strict:
+        due_from = due_to = None                       # the files are selected by the person: no window of terms either
     sites = [site_import.is_site_export(d) for d in datas]
     if any(sites) and not all(sites):
         bad("Нельзя загружать вместе выгрузки с сайта и обработанный список: загрузите их по отдельности")
@@ -574,7 +576,7 @@ def import_files(datas: list[bytes], filename: str, user_id: int, dry: bool, due
         if site:
             raw_all = [r for d in datas for r in site_import._read_rows(d)]
             with tx() as c:
-                rows, warnings, report = site_import.read_rows(c, raw_all, None if status else due_from, None if status else due_to, present)
+                rows, warnings, report = site_import.read_rows(c, raw_all, None if status else due_from, None if status else due_to, present, strict)
                 if not status:
                     report["absent"] = site_import.absent(c, {r["code"] for r in raw_all}, due_from, due_to)[:200]
         else:
@@ -616,12 +618,14 @@ def import_file(data: bytes, filename: str, user_id: int, dry: bool, due_from: s
 
 @app.post("/api/import")
 async def api_import(request: Request, file: list[UploadFile] = File(...), dry: int = 1, due_from: str = "", due_to: str = "", ai: int = 1, mode: str = "base",
-                     overwrite: int = 0, replace: int = 0, confirm: int = 0):
+                     overwrite: int = 0, replace: int = 0, confirm: int = 0, select: str = "ours"):
     """The base load: the lists of the site (one per section, they are read together) or the old processed list. Only our departments, a window of terms,
     the closing dates are proposed. overwrite=1: the file wins over hand edits. replace=1: open tasks that are not in the loaded base leave the dashboard.
     mode=status: only the statuses of tasks that are already in the base."""
     if mode not in ("base", "status"):
         bad("mode: base или status")
+    if select not in ("ours", "none"):
+        bad("select: ours или none")
     if not file or len(file) > 10:
         bad("Нужно от 1 до 10 файлов")
     datas, total = [], 0
@@ -633,7 +637,7 @@ async def api_import(request: Request, file: list[UploadFile] = File(...), dry: 
         datas.append(d)
     name = ", ".join((f.filename or "export.xlsx") for f in file)[:200]
     return import_files(datas, name, me(request)["id"], bool(dry), due_from or None, due_to or None, bool(ai), mode=mode, overwrite=bool(overwrite), replace=bool(replace),
-                        confirm=bool(confirm))
+                        confirm=bool(confirm), strict=select == "ours")
 
 
 @app.get("/api/sync/export-plan")
@@ -689,6 +693,30 @@ async def api_import_aliases(request: Request):
         n = site_import.save_aliases(c, clean)
         audit(c, "import.aliases", "units", None, {"count": n})
     return {"saved": n}
+
+
+@app.post("/api/import/add-units")
+async def api_import_add_units(request: Request):
+    """Adds the departments of a loaded file that are not in the structure of the department (the names are taken as they are written in the file; they go to the end of the
+    top level without a number and can be renamed, moved into a management or hidden on the Settings page). A name that already matches a unit of the structure is skipped."""
+    b = await _json(request)
+    names = b.get("names")
+    if not isinstance(names, list) or not names or len(names) > 100 or not all(isinstance(n, str) and n.strip() for n in names):
+        bad("names: от 1 до 100 названий отделов")
+    made = []
+    with tx() as c:
+        units = c.execute("SELECT id, name FROM units WHERE active=1").fetchall()
+        for raw in names:
+            name = re.sub(r"\s+", " ", raw).strip()[:300]
+            if site_import.suggest_unit(c, name, units)[1] >= site_import.AUTO_MATCH or any(site_import.skeleton(u["name"]) == site_import.skeleton(name) for u in units):
+                continue
+            last = c.execute("SELECT MAX(sort) FROM units").fetchone()[0]
+            cur = c.execute("INSERT INTO units(num, name, parent_id, sort) VALUES ('', ?, NULL, ?)", (name, (last or 0) + 1))
+            units = list(units) + [{"id": cur.lastrowid, "name": name}]
+            made.append(name)
+        if made:
+            audit(c, "unit.create_from_import", "unit", None, {"count": len(made)})
+    return {"created": len(made), "skipped": len(names) - len(made)}
 
 
 @app.put("/api/import/people-units")
