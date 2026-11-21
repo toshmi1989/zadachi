@@ -291,6 +291,7 @@ table.t{width:100%;border-collapse:collapse;min-width:900px}
 .tl .ev{position:relative;padding:0 0 14px;font-size:13.5px;animation:rise .4s var(--ease) both}
 .tl .ev::before{content:"";position:absolute;left:-27px;top:5px;width:10px;height:10px;border-radius:50%;background:var(--brand);box-shadow:0 0 0 3px var(--surface)}
 .tl small{color:var(--text-3)}
+.tl .who{display:inline-block;margin-left:8px;padding:0 8px;border-radius:99px;background:var(--surface-2);color:var(--text-2);font-size:12px;font-weight:500;vertical-align:1px}
 .sec-t{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);font-weight:600;margin:20px 0 10px}
 .modal{position:fixed;left:50%;top:50%;z-index:51;width:min(480px,calc(100vw - 24px));max-height:calc(100vh - 24px);overflow:auto;background:var(--surface);border-radius:18px;box-shadow:var(--shadow-3);padding:24px;transform:translate(-50%,-46%) scale(.94);opacity:0;transition:transform .35s var(--ease-spring),opacity .25s}
 .modal.on{transform:translate(-50%,-50%);opacity:1}

@@ -113,7 +113,7 @@ const fake = http.createServer((req, res) => {
   const sec = await admin("GET", "/api/tasks/" + id("SEC0001"));
   ok(sec.site.secret && sec.site.answers.every(a => a.text === "") && !JSON.stringify(sec).includes("СЕКРЕТНЫЙ"), "a secret task: no answer text reaches the platform");
   const ojn = await admin("GET", "/api/tasks/" + id("OJN6944"));
-  ok(ojn.site.answers.map(a => a.sender_type).join() === "10,25,35,45", "the whole answer chain 10 → 25 → 35 → 45 is kept in order");
+  ok(ojn.site.answers.map(a => a.sender_type).join() === "45,35,25,10", "the whole answer chain 10 → 25 → 35 → 45 is kept and shown newest first");
   ok(ojn.site.link.includes("president-adminstration-assignments") && !ojn.site.exact_link, "without a card template the link leads to the section list");
   const tpl = await admin("PUT", "/api/sync/settings", { card_tpl: "https://edo.ijro.uz/assignments/{section_path}/current-user/main/tasks/all/{id}" });
   const ojn2 = await admin("GET", "/api/tasks/" + id("OJN6944"));
@@ -161,6 +161,11 @@ const fake = http.createServer((req, res) => {
   const diag = await core.diagnose({ server, client: mk() });
   ok(diag.found && diag.matched_by === "server_filter" && diag.item.status !== undefined && diag.card.ok && !JSON.stringify(diag).includes("Ответ исполнителя"), "diagnostics: found by the server filter, card read, no text leaked");
 
+  // who gave an answer (the body, never the person) and the term of the period the answer belongs to
+  ok(core.orgOf({ send_org: { id: "x", name: " Ҳисоб   палатаси " }, send_user: { full_name: "Some Person" } }) === "Ҳисоб палатаси", "the organisation of an answer is read from send_org, spaces tidied, the person is not taken");
+  ok(core.orgOf({ sender_user_json: { full_name: "Some Person", organization: { name_uz: "Адлия вазирлиги" } } }) === "Адлия вазирлиги" && core.orgOf({ send_user: { full_name: "Some Person" } }) === "", "fallback: the organisation of the sender; nothing is invented from a person's name");
+  const snOrg = core.snapshotOf("XPG5469", "president", { id: "a".repeat(24), task_id: "b".repeat(24), status: 2 }, [{ sender_type: 25, created_at_ms: "1795910400000", send_org: { name: "Вазирлар Маҳкамаси" }, period: { due_date: "1795996800000" }, contents: "x" }], true);
+  ok(snOrg.answers[0].org === "Вазирлар Маҳкамаси" && snOrg.answers[0].pd === 1795996800000, "the snapshot carries the organisation and the term of the period of every answer");
   const snapRef = core.snapshotOf("XPG5469", "president", { id: "a".repeat(24), task_id: "b".repeat(24), status: 0 }, [], false);
   ok(snapRef.recipient_id === "a".repeat(24) && snapRef.task_ref === "b".repeat(24), "the id of the task on the site is sent too (needed to recognise a card address)");
   // the site's list does not carry the code: a single hit for the code is the task; loose filters and wrong codes are handled

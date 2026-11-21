@@ -29,6 +29,7 @@ EXPORT_TABS = [{"id": "in_progress", "statuses": [-1, 1, 0, 2, 3, 4], "open": Tr
 MAX_ITEMS = 200
 MAX_TEXT = 600
 MAX_ANSWERS = 30
+MAX_ORG = 120          # the name of the body that gave an answer
 
 # what the answers on the site mean (sender_type): the site's own table paTaskSenderType. The tens are the level: 1x executor, 2x Ministry of
 # Justice, 3x Cabinet of Ministers, 4x Chamber of Accounts (the level is a reading of the pattern, the names are the site's).
@@ -79,9 +80,20 @@ def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
     base = {"steps": [{"code": c, "label": l, "hint": h} for c, l, h in STAGE_STEPS], "new_due": None, "attention": False}
     if not snap["found"]:
         return base | {"code": "not_found", "n": None, "label": "Не найдена на сайте", "hint": ""}
-    if snap["repeatable"] and json.loads(snap["periods"] or "[]"):
-        return base | {"code": "periodic", "n": None, "label": "Периодическая задача", "hint": "Этапы считаются по каждому периоду отдельно"}
+    periods = json.loads(snap["periods"] or "[]")
+    periodic = bool(snap["repeatable"] and periods)
     answers = json.loads(snap["answers"] or "[]")
+    if periodic:
+        # A periodic task has one list of answers for all its periods; each answer carries the term of its period ("pd"). The stage is read from the answers of
+        # the period that our deadline stands for. A period that is done is simply done (the site's own status of the period says so).
+        if classify(snap, due, dates=False)["status"] == "done":
+            return base | {"code": "removed", "n": 4, "label": "Назоратдан ечилди", "hint": "Период выполнен, снят с контроля"}
+        want = _day((current_period(periods, due) or {}).get("due_ms"))
+        if want is None or not any(a.get("pd") for a in answers):
+            # the answers do not say which period they belong to (read by an older collector): no stage is claimed, none is guessed
+            return base | {"code": "period_unknown", "n": -1, "label": "Этап периода уточняется",
+                           "hint": "Периодическая задача: этап берётся из ответов именно этого периода. Он появится после обновления скрипта и новой проверки задачи"}
+        answers = [a for a in answers if a.get("pd") and _day(a["pd"]) == want]
     cur = current_answer(answers)
     t = cur["sender_type"] if cur else None
     reviewing = bool(cur) and any(a.get("sender_type") in NEUTRAL and (a.get("at_ms") or 0) >= (cur.get("at_ms") or 0) for a in answers)
@@ -92,7 +104,7 @@ def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
     if t in T_DONE:   # the answer of removal is there, the status on the site has not followed yet
         return base | {"code": "removed_wait", "n": 4, "label": "Назоратдан ечилди", "hint": "Ответ о снятии получен, статус задачи на сайте ещё не обновился"}
     if t in T_INFO:
-        nd = _day(snap["due_ms"])
+        nd = None if periodic else _day(snap["due_ms"])
         accepted = any(w in (cur.get("text") or "").lower() for w in ACCEPTED_WORDS)
         return base | {"code": "info", "n": 3, "label": "Маълумот учун қабул қилинди" if accepted else "Қўшимча маълумот сўрови",
                        "hint": "Счётная палата вернула задачу" + (": ответ принят к сведению" if accepted else " с запросом информации") + ". Задача НЕ выполнена, срок изменён." + extra,
@@ -108,7 +120,7 @@ def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
         return base | {"code": "moj", "n": 1, "label": "Адлия вазирлигида", "hint": "Ответ введён, идёт согласование в Минюсте"}
     if t is not None:   # a type we do not know: shown, not guessed
         return base | {"code": "chamber_other", "n": 3, "label": f"Ответ типа {t}", "hint": "Тип ответа не распознан: уточните на сайте", "attention": True}
-    if snap["site_status"] == 2:
+    if snap["site_status"] == 2 and not periodic:           # for a periodic task the general status says nothing about this period
         return base | {"code": "answered", "n": 0, "label": "Киритилди", "hint": "Ответ введён; этап уточнится при следующей проверке (нет данных об ответах)"}
     return base | {"code": "none", "n": -1, "label": "Ответ не введён", "hint": "Исполнитель ещё не ответил"}
 
@@ -301,11 +313,13 @@ def _ts(ms) -> str:
 
 
 def answers_out(snap) -> list[dict]:
+    """The answers as the card shows them: the NEWEST first, each with the body that gave it (Ҳисоб палатаси, Вазирлар Маҳкамаси, Адлия вазирлиги, the executor ...)."""
     out = []
     for a in json.loads(snap["answers"] or "[]"):
         out.append({"type": ANSWER_TYPES.get(a.get("sender_type"), f"Тип {a.get('sender_type')}"), "sender_type": a.get("sender_type"),
                     "state": a.get("state"), "at": _ts(a.get("at_ms")), "text": "" if snap["is_secret"] else a.get("text", ""),
-                    "active": bool(a.get("active"))})
+                    "active": bool(a.get("active")), "org": "" if snap["is_secret"] else (a.get("org") or "")})
+    out.reverse()          # stored oldest -> newest (the collector sorts by time; the order of the site is kept for equal times)
     return out
 
 
@@ -362,8 +376,10 @@ def ingest(c, key_row, body: dict) -> dict:
         for a in ((it.get("answers") or []) if is_found else [])[-MAX_ANSWERS:]:
             if isinstance(a, dict) and _int(a.get("sender_type")) is not None:   # an answer without a type means nothing: skipped
                 text = a.get("text") if isinstance(a.get("text"), str) else ""
+                org = a.get("org") if isinstance(a.get("org"), str) else ""
                 answers.append({"sender_type": _int(a.get("sender_type")), "state": _int(a.get("state")), "at_ms": _int(a.get("at_ms")),
-                                "active": bool(a.get("active")), "text": "" if secret else text[:MAX_TEXT]})
+                                "active": bool(a.get("active")), "text": "" if secret else text[:MAX_TEXT],
+                                "org": "" if secret else " ".join(org.split())[:MAX_ORG], "pd": _int(a.get("pd"))})
         rid = it.get("recipient_id")
         rid = str(rid)[:64] if isinstance(rid, (str, int)) and not isinstance(rid, bool) else ""
         ref = it.get("task_ref")

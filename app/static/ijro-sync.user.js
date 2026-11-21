@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.3.0
+// @version      1.4.0
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.3.0";
+  const VERSION = "1.4.0";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -115,6 +115,13 @@
     if (v == null) return null;
     if (typeof v === "string" && /^\d{10,20}(\.\d+)?$/.test(v)) { let n = Number(v); if (n >= 1e17) n /= 1e6; else if (n >= 1e14) n /= 1e3; v = n; }   // ms, seconds, microseconds or nanoseconds
     if (typeof v === "number") return v < 1e11 ? Math.round(v * 1000) : Math.round(v); if (v instanceof Date) return v.getTime(); const t = Date.parse(v); return isNaN(t) ? null : t; };
+  /* the body that gave an answer, as the site shows it next to the answer (Ҳисоб палатаси, Вазирлар Маҳкамаси, Адлия вазирлиги ...): the name only, no person */
+  const orgOf = a => {
+    const so = a && a.send_org && typeof a.send_org === "object" ? a.send_org.name : null;
+    const uo = a && a.sender_user_json && a.sender_user_json.organization;
+    const v = so || (uo && (uo.name_uz || uo.name_ru || uo.name_uz_lat)) || "";
+    return typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, 120) : "";
+  };
   const pick = (o, keys) => { for (const k of keys) if (o && o[k] !== undefined && o[k] !== null) return o[k]; return undefined; };
   const listOf = r => {
     if (Array.isArray(r)) return r;
@@ -204,6 +211,7 @@
       overdue: (() => { const v = pick(it, ["overdue", "is_overdue", "expired"]); return v === undefined ? null : !!v; })(),
       repeatable: !!(it.repeatable) || periods.length > 0, due_ms: toMs(pick(it, ["task_due_date_ms", "due_date"])), done_ms: toMs(it.done_at), periods, is_secret: !!it.is_secret, answers_loaded: !!loaded,
       answers: (answerList || []).map(a => ({ a, t: toMs(pick(a, ["created_at_ms", "created_at", "date_row_ms", "date", "sent_at", "updated_at"])) })).sort((x, y) => (x.t || 0) - (y.t || 0)).slice(-30).map(({ a, t }) => ({ sender_type: num(a.sender_type), state: num(a.state), active: !!a.active,
+        org: orgOf(a), pd: toMs(a.period && a.period.due_date),
         at_ms: t, text: String(pick(a, ["contents", "comment", "text", "description", "content", "message", "note"]) ?? "").slice(0, 600) })),
     };
   }
@@ -341,7 +349,7 @@
   }
   const newRun = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Array.from({ length: 32 }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join(""));
 
-  const core = { encode, decode, makeClient, runSync, finishRun, newRun, runExports, fetchExport, exportBody, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
+  const core = { orgOf, encode, decode, makeClient, runSync, finishRun, newRun, runExports, fetchExport, exportBody, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
   if (typeof module !== "undefined" && module.exports) { module.exports = core; return; }
   if (typeof GM_xmlhttpRequest === "undefined" || typeof document === "undefined") return;
 

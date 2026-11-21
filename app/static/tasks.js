@@ -6,7 +6,7 @@ const STAGE_NAME = { none: "Ответ не введён", moj: "Адлия ва
 /* where the task is on its way (the answer goes Justice -> Cabinet -> Chamber of Accounts) */
 function stageChip(t) {
   const g = t.site && t.site.stage;
-  if (!g || !["todo", "progress"].includes(t.status) || ["periodic", "not_found", "removed"].includes(g.code)) return "";
+  if (!g || !["todo", "progress"].includes(t.status) || ["period_unknown", "not_found", "removed"].includes(g.code)) return "";
   const dots = [1, 2, 3].map(i => `<i class="${g.n >= i ? "on" : ""}"></i>`).join("");
   return `<div style="margin-top:4px"><span class="stg ${g.attention ? "att" : ""} stg-${g.code}" data-tip="${esc(g.attention ? "Требует внимания" : "Этап согласования")}">${g.code === "none" ? "" : `<span class="stgd">${dots}</span>`}${esc(g.label)}</span></div>`;
 }
@@ -243,7 +243,7 @@ async function openTask(id, onChange) {
 /* the steps: entered -> Justice -> Cabinet -> Chamber of Accounts -> removed from control */
 function stageBlock(t, admin) {
   const g = t.site && t.site.stage;
-  if (!g || ["periodic", "not_found"].includes(g.code)) return "";
+  if (!g || g.code === "not_found") return "";      // periodic tasks have the same staged view (the stage of the period that our deadline stands for)
   const steps = g.steps.map((x, i) => `<div class="step ${g.n > i || g.code === "removed" ? "past" : ""} ${g.n === i && g.code !== "removed" ? "now" : ""} ${g.code === "info" && i === 3 ? "warnstep" : ""}"><span class="sd">${g.n > i || g.code === "removed" ? "✓" : i + 1}</span><b>${esc(x.label)}</b><small>${esc(x.hint)}</small></div>`).join("");
   const nd = g.new_due ? g.new_due.split("-").reverse().join(".") : "";
   return `<div class="sec-t" style="margin-top:12px">Этап согласования</div><div class="stepper">${steps}</div>
@@ -263,5 +263,5 @@ function siteBlock(t, admin) {
       ${s.diff ? `<div class="warn" style="margin-top:10px">${icon("info")}<span>На сайте: <b>${esc(s.proposed_label)}</b>, ${admin ? "у нас" : "у вас"}: <b>${esc(ST[t.status])}</b>.</span>${admin ? '<button class="btn sm pri" id="site-apply" style="margin-left:auto">Применить</button>' : ""}</div>` : ""}
       ${s.site_open_we_done ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>${admin ? "У нас" : "У вас"} задача отмечена выполненной, а на сайте ещё нет: возможно, ответ не отправлен или не принят.</span></div>` : ""}
       ${s.secret ? '<p class="hint" style="margin:8px 0 0">Задача помечена секретной: тексты ответов не копируются в платформу.</p>' : ""}
-      ${s.answers.length ? `<div class="sec-t" style="margin-top:14px">Ответы на сайте (${s.answers.length})</div><div class="tl">${s.answers.map(a => `<div class="ev"><b>${esc(a.type)}</b>${a.state === -1 ? ' <span class="chip overdue" style="padding:0 7px">отклонён</span>' : ""}<br>${a.text ? `<span>${esc(a.text.length > 280 ? a.text.slice(0, 278) + "…" : a.text)}</span><br>` : ""}<small>${esc(a.at)}</small></div>`).join("")}</div>` : ""}</div>`;
+      ${s.answers.length ? `<div class="sec-t" style="margin-top:14px">Ответы на сайте (${s.answers.length}) · сначала новые</div><div class="tl">${s.answers.map(a => `<div class="ev"><b>${esc(a.type)}</b>${a.org ? `<span class="who" data-tip="Кто дал ответ на сайте">${esc(a.org)}</span>` : ""}${a.state === -1 ? ' <span class="chip overdue" style="padding:0 7px">отклонён</span>' : ""}<br>${a.text ? `<span>${esc(a.text.length > 280 ? a.text.slice(0, 278) + "…" : a.text)}</span><br>` : ""}<small>${esc(a.at)}</small></div>`).join("")}</div>` : ""}</div>`;
 }

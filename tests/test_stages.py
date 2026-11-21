@@ -40,7 +40,46 @@ def test_stage_of_every_step():
     assert S(snap([10, 25, 35, 99], 2))["code"] == "chamber_other" and S(snap([10, 25, 35, 99], 2))["attention"]
     assert S(snap([10, 29], 2))["code"] == "returned" and S(snap([10, 25, 18], 2))["code"] == "returned"
     assert S(snap(found=0))["code"] == "not_found"
-    assert S(snap(repeatable=1, periods=json.dumps([{"order": 1, "recipient_status": 0, "due_ms": ms(2026, 12, 1)}])))["code"] == "periodic"
+    assert S(snap(repeatable=1, periods=json.dumps([{"order": 1, "recipient_status": 0, "due_ms": ms(2026, 12, 1)}])))["code"] == "period_unknown"      # answers without the period: no stage is claimed
+
+
+def periodic(answers, periods, due="2026-12-01", **kw):
+    """A periodic task: the answers carry the term of their period (pd); our deadline decides which period the task stands for."""
+    return snap(repeatable=1, periods=json.dumps(periods), answers=json.dumps(answers), **kw), due
+
+
+def test_a_periodic_task_has_the_same_stages_as_any_other():
+    P = [{"order": 1, "recipient_status": 20, "due_ms": ms(2026, 11, 1)}, {"order": 2, "recipient_status": 0, "due_ms": ms(2026, 12, 1)}]
+    a = lambda t, pd, at: {"sender_type": t, "at_ms": at, "state": 1, "active": 1, "text": "", "pd": pd}
+    # the first period went all the way to removal; the second (our deadline) has only the executor's answer: the stage is read from ITS answers
+    s, due = periodic([a(10, ms(2026, 11, 1), 1), a(25, ms(2026, 11, 1), 2), a(35, ms(2026, 11, 1), 3), a(45, ms(2026, 11, 1), 4), a(10, ms(2026, 12, 1), 5)], P, site_status=2)
+    r = ijro.stage_of(s, due)
+    assert r["code"] == "moj" and r["n"] == 1
+    s, due = periodic([a(10, ms(2026, 11, 1), 1), a(45, ms(2026, 11, 1), 2), a(10, ms(2026, 12, 1), 3), a(25, ms(2026, 12, 1), 4)], P, site_status=2)
+    assert ijro.stage_of(s, due)["code"] == "cab"
+    s, due = periodic([a(10, ms(2026, 11, 1), 1), a(45, ms(2026, 11, 1), 2)], P, site_status=2)        # nothing yet for our period: not "answered", not the first period's removal
+    assert ijro.stage_of(s, due)["code"] == "none"
+    # a period that is done is done: the last step, whatever the answers say
+    Pd = [{"order": 1, "recipient_status": 20, "due_ms": ms(2026, 11, 1)}, {"order": 2, "recipient_status": 20, "due_ms": ms(2026, 12, 1)}]
+    s, due = periodic([a(10, ms(2026, 12, 1), 1)], Pd, site_status=2)
+    assert ijro.stage_of(s, due)["code"] == "removed" and ijro.stage_of(s, due)["n"] == 4
+    # the Chamber's return in a period never moves our term (the general term of the task is not the term of the period)
+    s, due = periodic([a(10, ms(2026, 12, 1), 1), a(25, ms(2026, 12, 1), 2), a(35, ms(2026, 12, 1), 3), a(49, ms(2026, 12, 1), 4)], P, site_status=2, due_ms=ms(2027, 3, 1))
+    r = ijro.stage_of(s, due)
+    assert r["code"] == "info" and r["new_due"] is None
+
+
+def test_answers_are_shown_newest_first_with_the_body_that_gave_them():
+    s = snap([10, 25, 35], 2)
+    a = json.loads(s["answers"])
+    for x, org in zip(a, ["Соғлиқни сақлаш вазирлиги", "Адлия вазирлиги", "Вазирлар Маҳкамаси"]):
+        x["org"] = org
+    s["answers"] = json.dumps(a)
+    out = ijro.answers_out(s)
+    assert [x["sender_type"] for x in out] == [35, 25, 10]                                  # newest first
+    assert [x["org"] for x in out] == ["Вазирлар Маҳкамаси", "Адлия вазирлиги", "Соғлиқни сақлаш вазирлиги"]
+    sec = ijro.answers_out(dict(s, is_secret=1))
+    assert all(x["org"] == "" and x["text"] == "" for x in sec)                              # a secret task: neither the text nor who wrote it is shown
 
 
 def test_comment_of_the_chamber_names_the_case():
