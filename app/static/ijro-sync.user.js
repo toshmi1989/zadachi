@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.6.0
+// @version      1.6.1
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.6.0";
+  const VERSION = "1.6.1";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -299,7 +299,7 @@
       }
     } catch (e) { stopped = e.message || String(e); if (!(e instanceof SessionError || e instanceof RateError)) { await flush().catch(() => {}); throw e; } }
     await flush();
-    return { done, total, found, sent, stopped, failed, run_id: job.run_id };
+    return { done, total, found, sent, stopped, failed, outside: job.outside_scope || 0, run_id: job.run_id };
   }
 
   /* what the answers look like, without any values that could be personal: names of fields and their types */
@@ -447,7 +447,7 @@
         if (exp) { try { fin = await finishRun({ server, run, exp, sync: r }); } catch (e) { fin = { judged: false, why: e.message }; } }
         finLine = !fin ? "" : !fin.judged ? "\nСнятие лишних задач: пропущено (" + fin.why + ")" : `\nСнятие лишних задач: не относятся к нашим выгрузкам ${fin.stale}${fin.archived ? ", убрано с дашборда " + fin.archived : ""}${fin.waiting ? ", ждут вашего решения в платформе (раздел «Синхронизация»)" : ""}${fin.unsure ? "; не проверялись или закрыты: " + fin.unsure : ""}`;
         resume = !!(r.stopped || r.failed.length);   // after an interrupted run the same button continues where it stopped
-        log(`${r.stopped ? r.stopped + "\n" : ""}Проверено ${r.done} из ${r.total}, найдено ${r.found}, передано ${r.sent}.${r.failed.length ? "\nНе удалось проверить " + r.failed.length + " (сайт не отвечал): " + r.failed.slice(0, 8).join(", ") + (r.failed.length > 8 ? "…" : "") + ". Нажмите «Продолжить»." : ""}\nОткройте в платформе раздел «Синхронизация»: там список изменений.${expLine()}${finLine}`);
+        log(`${r.stopped ? r.stopped + "\n" : ""}Проверено ${r.done} из ${r.total}, найдено ${r.found}, передано ${r.sent}.${r.outside ? "\nНе проверялись " + r.outside + " невыполненных: вне периода, выбранного в «Настройках» («У каких задач читать историю этапов»)." : ""}${r.failed.length ? "\nНе удалось проверить " + r.failed.length + " (сайт не отвечал): " + r.failed.slice(0, 8).join(", ") + (r.failed.length > 8 ? "…" : "") + ". Нажмите «Продолжить»." : ""}\nОткройте в платформе раздел «Синхронизация»: там список изменений.${expLine()}${finLine}`);
       } catch (e) { resume = true; log("Ошибка: " + e.message + "\nНажмите «Продолжить»: уже проверенное повторно не читается."); }
       running = false; $("go").disabled = false; $("stop").disabled = true; $("go").textContent = resume ? "Продолжить" : "Синхронизировать";
     };

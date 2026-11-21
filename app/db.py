@@ -231,7 +231,7 @@ DEFAULT_SETTINGS = {
     "sync_apply": "status",       # what a downloaded list does: status (only updates the statuses of tasks already in the base) | base (also adds new tasks and updates the fields)
     "base_back": "30",            # a list that adds tasks takes terms from this many days back (empty = no limit) ...
     "base_fwd": "60",             # ... to this many days ahead (empty = no limit)
-    "history_scope": "month",     # whose answers (the stage history) are read: month | month_overdue | month_next | all
+    "history_scope": "all",       # whose answers (the stage history) are read: all (every not-done task of the base) | month | month_overdue | month_next
     "history_date": "close",      # the term that decides the month of a task for that: close (closing date, else official) | due (official, else closing)
     "history_statuses": "open",   # open (only not-done tasks) | all (done ones too)
     "ijro_card_tpl": "",          # address of a task card on edo.ijro.uz: {section_path} and {id} are substituted

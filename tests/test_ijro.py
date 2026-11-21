@@ -257,5 +257,25 @@ def test_the_job_reads_history_only_where_the_settings_say(admin, key):
     assert codes() == {"HJ0001", "HJ0002", "HJ0003", "HJ0004", "HJ0006", "HJ0007"}    # every open task, the done one is not there
     assert put(history_statuses="all") == 200
     assert "HJ0005" in codes()                                   # the done ones too, when asked
-    assert put(history_scope="month", history_date="close", history_statuses="open") == 200
+    assert put(history_scope="all", history_date="close", history_statuses="open") == 200
     d = connect(); d.execute("DELETE FROM tasks WHERE code LIKE 'HJ%'"); d.commit(); d.close()
+
+
+def test_by_default_every_not_done_task_is_read_and_the_job_says_what_is_left_out(admin, key):
+    """The base is loaded afresh and holds only the period that is needed, so by default the history of every open task is read. A narrower choice is allowed,
+    but the collector is told how many open tasks it leaves out (the person must not wonder why 147 of 249 are read)."""
+    from app.db import connect, now
+    c = connect()
+    for code, due in (("HK0001", "2026-11-05"), ("HK0002", "2026-12-05"), ("HK0003", "2026-12-20")):
+        c.execute("INSERT INTO tasks(code, kind, text, due, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)", (code, "Қарор", "t", due, "todo", now(), now()))
+    c.commit(); c.execute("DELETE FROM settings WHERE key='history_scope'"); c.commit(); c.close()
+    anon = TestClient(app)
+    job = lambda: anon.get("/api/sync/job", headers=bearer(key)).json()
+    j = job()
+    assert j["scope"] == "all" and j["outside_scope"] == 0 and {"HK0001", "HK0002", "HK0003"} <= {i["code"] for i in j["items"]}          # the default: all of them
+    assert admin.put("/api/settings", json={"sync": {"history_scope": "month"}}).status_code == 200
+    j = job()                                                                                                                        # "today" is 2026-11-16: only November is read
+    assert j["scope"] == "month" and "HK0001" in {i["code"] for i in j["items"]} and not {"HK0002", "HK0003"} & {i["code"] for i in j["items"]}
+    assert j["outside_scope"] >= 2                                                                                                   # and the collector can say that it leaves tasks out
+    assert admin.put("/api/settings", json={"sync": {"history_scope": "all"}}).status_code == 200
+    d = connect(); d.execute("DELETE FROM tasks WHERE code LIKE 'HK%'"); d.commit(); d.close()

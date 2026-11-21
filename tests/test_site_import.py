@@ -403,7 +403,7 @@ def test_the_settings_of_the_import_are_explained_and_validated(admin):
     groups = {g["id"] for g in admin.get("/api/settings").json()["sync"]["groups"]}
     assert groups == {"base", "history", "lists"} and {f["group"] for f in s["fields"]} == groups
     assert all(o["help"] for f in s["fields"] if f["kind"] == "choice" for o in f["options"])        # every choice says what it does
-    assert fields["sync_source"]["value"] == "lists" and fields["sync_apply"]["value"] == "status" and fields["history_scope"]["value"] == "month"   # the defaults
+    assert fields["sync_source"]["value"] == "lists" and fields["sync_apply"]["value"] == "status" and fields["history_scope"]["value"] == "all"   # the defaults
     assert fields["history_statuses"]["value"] == "open" and fields["history_date"]["value"] == "close"
     for bad in ({"sync_source": "nope"}, {"history_scope": ""}, {"base_back": "-5"}, {"base_fwd": "abc"}, {"base_back": "99999"}, {"unknown": "1"}):
         assert admin.put("/api/settings", json={"sync": bad}).status_code == 400, bad
@@ -411,7 +411,7 @@ def test_the_settings_of_the_import_are_explained_and_validated(admin):
     assert admin.put("/api/settings", json={"sync": {"base_back": "", "history_scope": "all"}}).status_code == 200
     got = {f["key"]: f["value"] for f in admin.get("/api/settings").json()["sync"]["fields"]}
     assert got["base_back"] == "" and got["history_scope"] == "all"
-    sync_settings(admin, base_back="30", history_scope="month")
+    sync_settings(admin, base_back="30", history_scope="all")
 
 
 def _statuses():
