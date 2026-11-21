@@ -5,7 +5,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
 (async () => {
   const b = await chromium.launch(); const errs = [];
   const actx = await b.newContext({ viewport: { width: 1440, height: 900 } }); const a = await actx.newPage();
-  await a.goto(BASE + "/login"); await a.click("#to-manual").catch(() => {}); await a.fill("#login", "admin"); await a.fill("#pw2", "secret123"); await a.click("#s-manual button.btn"); await a.waitForSelector(".kpi");
+  await a.goto(BASE + "/login"); await a.click("#to-manual").catch(() => {}); await a.fill("#login", "admin"); await a.fill("#pw2", "secret123"); await a.click("#s-manual button.btn"); await a.waitForSelector(".dbt");
   const api = async (m, p, body) => (await (await a.request.fetch(BASE + p, { method: m, data: body })).json());
   const users = (await api("GET", "/api/users")).items, me = users.find(u => u.login === "test.p");
   const other = await api("POST", "/api/users", { login: "other.o", name: "Other Olga", role: "user", password: "other-pass-1" });
@@ -21,9 +21,8 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
 
   const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } }); const p = await ctx.newPage();
   p.on("pageerror", e => errs.push(e.message)); p.on("console", m => { if (m.type() === "error" && !/403|404/.test(m.text())) errs.push(m.text()); });
-  await p.goto(BASE + "/login"); await p.waitForSelector(".pitem"); await p.click(`.pitem:has-text("Test Person")`); await p.fill("#pw1", pw); await p.click("#s-pass button.btn"); await p.waitForSelector(".kpi"); await p.waitForTimeout(1200);
+  await p.goto(BASE + "/login"); await p.waitForSelector(".pitem"); await p.click(`.pitem:has-text("Test Person")`); await p.fill("#pw1", pw); await p.click("#s-pass button.btn"); await p.waitForSelector(".dbt"); await p.waitForTimeout(1200);
   ok((await p.textContent('#tabs a[data-r="tasks"]')).includes("Мои задачи"), "the menu says 'Мои задачи'");
-  ok(/ваши/.test(await p.textContent("#hint")), "the dashboard explains that the list shows their own tasks");
   await p.goto(BASE + "/#/tasks"); await p.waitForSelector("#rows tr[data-id]"); await p.waitForTimeout(900);
   const codes = await p.$$eval("#rows tr[data-id] .code", t => t.map(x => x.textContent));
   ok(codes.length === 7, "the list has only their 7 tasks (9 minus the 2 given to somebody else): " + codes.length);
@@ -61,17 +60,16 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   await p.screenshot({ path: OUT + "/111-employee-card.png" });
   await p.keyboard.press("Escape"); await p.waitForTimeout(500);
   // the dashboard does not open other people's lists
-  await p.goto(BASE + "/#/dashboard"); await p.waitForSelector(".prow"); await p.waitForTimeout(1500);
-  await p.locator('.prow:has-text("Other") .pname').first().click(); await p.waitForTimeout(500);
-  ok(/доступны только ваши/.test(await p.textContent("#toasts")), "a click on somebody else's row says why nothing opens");
-  ok(p.url().includes("dashboard"), "and stays on the dashboard");
+  await p.goto(BASE + "/#/dashboard"); await p.waitForSelector(".dbt"); await p.waitForTimeout(1500);
+  await p.locator("#t-kinds tbody tr.total button.n.no").first().click(); await p.waitForSelector("#rows tr[data-id]"); await p.waitForTimeout(500);
+  ok(await p.locator("#rows tr[data-id]").count() >= 1 && !/assignee=/.test(p.url()), "a number of the dashboard opens the list limited to the person's own tasks (the server does it)");
   // API: the server says no too
   const t0 = givenCodes[0], gid = give[0];
   const r1 = await p.request.fetch(`${BASE}/api/tasks/${gid}`, { method: "PATCH", data: { status: "done" } }); ok(r1.status() === 404, "somebody else's task: 404 from the server (" + r1.status() + ")");
   const r2 = await p.request.fetch(`${BASE}/api/tasks/${rid}`, { method: "PATCH", data: { assignee_id: null } }); ok(r2.status() === 403, "own task, but another field: 403 (" + r2.status() + ")");
   // phone
   const m = await b.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); const mp = await m.newPage();
-  await mp.goto(BASE + "/login"); await mp.waitForSelector(".pitem"); await mp.click(`.pitem:has-text("Test Person")`); await mp.fill("#pw1", pw); await mp.click("#s-pass button.btn"); await mp.waitForSelector(".kpi");
+  await mp.goto(BASE + "/login"); await mp.waitForSelector(".pitem"); await mp.click(`.pitem:has-text("Test Person")`); await mp.fill("#pw1", pw); await mp.click("#s-pass button.btn"); await mp.waitForSelector(".dbt");
   await mp.goto(BASE + "/#/tasks"); await mp.waitForSelector("#rows tr[data-id]"); await mp.waitForTimeout(900);
   ok(await mp.locator("[data-quick]").first().isVisible(), "the quick button is visible on a phone");
   ok(!(await mp.evaluate(() => document.documentElement.scrollWidth > 392 || innerWidth > 392)), "no horizontal scroll on the phone");

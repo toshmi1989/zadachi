@@ -183,16 +183,18 @@ def funnel(c, month: str = "", by: str = "close") -> dict:
             "attention": counts["info"] + counts["returned"]}
 
 
-def stage_ids(c, key: str) -> list[int]:
-    """Ids of the open tasks at a stage of the funnel ('unchecked' = never read from the site)."""
-    out = []
+def stage_map(c) -> dict[int, str]:
+    """{id of an open task: its stage on the way of the answer}: one of the keys of FUNNEL, 'unchecked' (never read from the site) or 'other' (a stage that is not on the way:
+    not found on the site, not recognised ...). The dashboard counts by it, and the list filter ?stage= selects by it, so the two always agree."""
+    out: dict[int, str] = {}
     for r in _open_stage_rows(c):
-        if r["task_id"] is None:
-            if key == "unchecked":
-                out.append(r["tid"])
-        elif _FUNNEL_OF.get(stage_of(r, r["due"], dates=False)["code"]) == key:
-            out.append(r["tid"])
+        out[r["tid"]] = "unchecked" if r["task_id"] is None else (_FUNNEL_OF.get(stage_of(r, r["due"], dates=False)["code"]) or "other")
     return out
+
+
+def stage_ids(c, key: str) -> list[int]:
+    """Ids of the open tasks at a stage of the funnel ('unchecked' = never read from the site, 'other' = not on the way)."""
+    return [tid for tid, k in stage_map(c).items() if k == key]
 
 
 # ---------------------------------------------------------------- keys of this platform

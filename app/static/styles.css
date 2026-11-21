@@ -521,3 +521,32 @@ a.ext:hover{text-decoration:underline;text-underline-offset:3px}
 .prop.ai{background:color-mix(in srgb,#8a5cf6 18%,transparent);color:#7c4dff}
 
 .note-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--surface-2);border-radius:12px;padding:10px 14px;margin:0 0 12px;font-size:13px}.note-bar span{flex:1;min-width:240px}
+
+/* ---- dashboard: three tables of departments ---- */
+table.dbt{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px;min-width:760px}
+.dbt th{font-weight:500;color:var(--text-3);font-size:12px;text-align:center;padding:8px 8px;white-space:nowrap;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--surface)}
+.dbt th.now{color:var(--brand);box-shadow:inset 0 -2px 0 var(--brand);font-weight:700}
+.dbt th:first-child,.dbt td:first-child{text-align:left;position:sticky;left:0;z-index:2;background:var(--surface);min-width:250px;max-width:330px}
+.dbt th:first-child{z-index:3}
+.dbt td{padding:6px 6px;text-align:center;border-bottom:1px solid var(--line);vertical-align:middle}
+.dbt tr.mgmt td:first-child{font-weight:700;background:var(--surface-2)}
+.dbt tr.kid td:first-child{padding-left:22px}
+.dbt tr.total td{border-top:2px solid var(--line-2);font-weight:700}
+.dbt tr.total td:first-child{background:var(--surface-2)}
+.dbt tr.r:hover td{filter:brightness(.98)}
+.dbt td.dc{min-width:96px;line-height:1.2}
+.dbt td.dc:not(.z):not(.sc){background:linear-gradient(90deg,color-mix(in srgb,var(--c-done) 22%,transparent) var(--p,0%),color-mix(in srgb,var(--c-overdue) 14%,transparent) var(--p,0%))}
+.dbt td.dc.z{color:var(--text-3);background:none}
+.dbt td.dc.sc{background:color-mix(in srgb,var(--c-month) 10%,transparent)}
+.dbt td.dc.st-info,.dbt td.dc.st-returned{background:color-mix(in srgb,var(--c-overdue) 14%,transparent)}
+.dbt td.dc.st-unchecked,.dbt td.dc.st-other{background:var(--surface-2)}
+.dbt .pr{display:inline-flex;align-items:center;gap:3px}.dbt .pr i{font-style:normal;color:var(--text-3)}
+.dbt .n{font-weight:700;font-size:14px;padding:1px 6px;border-radius:7px;min-width:22px;display:inline-block;border:0;background:none;cursor:pointer;color:var(--text)}
+.dbt .n.ok{color:var(--c-done)}.dbt .n.no{color:var(--c-overdue)}.dbt .n.st{color:var(--text)}
+.dbt .n.z{cursor:default;font-weight:500;opacity:.45}
+.dbt button.n:hover{background:var(--surface);box-shadow:0 0 0 1px var(--line-2)}
+.dbt em{display:block;font-style:normal;font-size:11.5px;color:var(--text-2);margin-top:1px}
+.okc{color:var(--c-done)}.noc{color:var(--c-overdue)}
+#t-stages th{white-space:normal;line-height:1.2;max-width:104px;min-width:76px;vertical-align:bottom}
+#t-stages td.dc{min-width:76px}
+#t-stages th:first-child,#t-stages td:first-child{min-width:220px;max-width:280px}

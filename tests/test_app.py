@@ -65,39 +65,46 @@ def test_import_parses_and_reports(admin):
     assert t["AAA0005"]["assignee_id"] is None
 
 
-def test_buckets_and_dashboard(admin):
-    d = admin.get("/api/dashboard?by=close").json()
-    T = d["totals"]
-    assert (T["overdue"], T["week"], T["done"], T["info"], T["total"]) == (1, 1, 1, 1, 5)
-    assert T["later"] == 1  # the unassigned task has no closing date, so its official term 31.12 is used
-    assert sum(p["total"] for p in d["people"]) == 5
-    d2 = admin.get("/api/dashboard?by=due").json()["totals"]
-    assert d2["overdue"] == 0 and d2["later"] == 3  # by the official term nothing is overdue yet
-
-
-def test_the_dashboard_of_one_month_is_consistent_with_the_lists(admin):
-    """?month=YYYY-MM builds EVERY block from the tasks whose term falls in that month: the numbers agree with each other and with the list behind them."""
+def dashboard_matches_lists(admin, by="close"):
+    """Every number of the three tables of the dashboard is a button that opens a list: the list must have exactly that many tasks."""
     import calendar
-    full = admin.get("/api/dashboard?by=close").json()
-    assert full["month"] == "" and full["months"]
-    assert admin.get("/api/dashboard?month=bogus").json()["month"] == "" and admin.get("/api/dashboard?month=2026-13").json()["month"] == ""
-    assert admin.get("/api/dashboard?month=current").json()["month"] == "2026-11"                  # ZADACHI_TODAY of the tests
-    total_in_months = 0
-    for ym in full["months"]:
-        d = admin.get(f"/api/dashboard?by=close&month={ym}").json()
-        T = d["totals"]
-        assert d["month"] == ym and d["months"] == full["months"]                                    # the switch keeps listing every month
-        assert T["total"] == T["overdue"] + T["week"] + T["month"] + T["later"] + T["done"] + T["info"] and T["nodate"] == 0
-        assert sum(p["total"] for p in d["people"]) == T["total"] and sum(k["total"] for k in d["kinds"]) == T["total"]
-        assert d["units"]["total"]["sum"]["total"] == T["total"]
-        assert sum(x["count"] for x in d["stages"]["steps"]) + d["stages"]["unchecked"] + d["stages"]["other"] == T["open"]
-        assert all(m == ym for p in d["people"] for m in p["months"])                                # the table has nothing but this month
-        last = calendar.monthrange(int(ym[:4]), int(ym[5:7]))[1]
-        rng = f"date_from={ym}-01&date_to={ym}-{last:02d}&by=close"
-        n = lambda extra="": admin.get(f"/api/tasks?{rng}{extra}").json()["total"]
-        assert n() == T["total"] and n("&status=open") == T["open"] and n("&status=done") == T["done"] and n("&bucket=overdue") == T["overdue"]
-        total_in_months += T["total"]
-    assert total_in_months <= full["totals"]["total"]                                                # tasks without a date are in no month
+    from urllib.parse import quote
+    d = admin.get(f"/api/dashboard?by={by}").json()
+    n = lambda q: admin.get(f"/api/tasks?size=1&by={by}&{q}").json()["total"]
+    lines = d["rows"] + ([d["none"]] if d["none"] else []) + [dict(d["total"], id="")]
+    for r in lines:
+        u = "" if r["id"] == "" else f"unit={r['id']}&"
+        who = r.get("name") or "total"
+        for ym, v in r["months"].items():                                                              # table 1
+            last = calendar.monthrange(int(ym[:4]), int(ym[5:7]))[1]
+            rng = f"{u}date_from={ym}-01&date_to={ym}-{last:02d}"
+            assert (n(rng + "&status=done"), n(rng + "&status=open")) == (v["done"], v["open"]), (who, ym)
+        assert (n(u + "term=none&status=done"), n(u + "term=none&status=open")) == (r["nodate"]["done"], r["nodate"]["open"]), (who, "nodate")
+        assert (n(u + "status=done"), n(u + "status=open"), n(u + "status=info")) == (r["sum"]["done"], r["sum"]["open"], r["sum"]["info"]), (who, "sum")
+        assert sum(v["done"] + v["open"] for v in r["months"].values()) + sum(r["nodate"].values()) == r["sum"]["done"] + r["sum"]["open"], (who, "months add up")
+        for k, v in r["kinds"].items():                                                                 # table 2
+            assert (n(f"{u}kind={quote(k)}&status=done"), n(f"{u}kind={quote(k)}&status=open")) == (v["done"], v["open"]), (who, k)
+        assert sum(v["done"] + v["open"] for v in r["kinds"].values()) == r["sum"]["done"] + r["sum"]["open"], (who, "kinds add up")
+        for key, c in r["stages"].items():                                                              # table 3
+            assert n(f"{u}stage={key}&status=open") == c, (who, key)
+        assert sum(r["stages"].values()) == r["sum"]["open"], (who, "stages add up")
+    return d
+
+
+def test_the_three_tables_of_the_dashboard(admin):
+    d = dashboard_matches_lists(admin, "close")
+    T = d["totals"]
+    assert (T["done"], T["open"], T["info"], T["total"]) == (1, 3, 1, 5)
+    assert d["months"] == ["2026-11", "2026-12"]                               # by the closing date; the unassigned task has none, so its official term 31.12 is used
+    none = d["none"]                                                          # nobody here has a department
+    assert none["months"]["2026-11"] == {"done": 1, "open": 2} and none["months"]["2026-12"] == {"done": 0, "open": 1}
+    assert none["kinds"]["Қарор"] == {"done": 0, "open": 2} and none["kinds"]["ВМ"] == {"done": 1, "open": 0} and none["kinds"]["Фармон"] == {"done": 0, "open": 1}
+    assert d["kinds"][:5] == ["Фармон", "Қарор", "Баён", "ВМ", "ПА"]
+    assert none["sum"]["info"] == 1 and d["total"]["sum"] == none["sum"]       # «К сведению» is counted apart and is in no percent
+    assert sum(none["stages"].values()) == 3 and none["stages"]["unchecked"] == 3     # nothing has been read from the site yet
+    assert [s["key"] for s in d["stages"]][:6] == ["none", "moj", "cab", "chamber", "info", "returned"] and d["stages"][-1]["key"] == "unchecked"
+    due = dashboard_matches_lists(admin, "due")                                  # by the official term: all of them are due in December
+    assert due["months"] == ["2026-12"] and due["by"] == "due" and due["totals"] == T
 
 
 def test_filters(admin):

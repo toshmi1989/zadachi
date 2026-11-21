@@ -68,10 +68,10 @@ def test_user_cannot_ask_for_the_official_term(vera, admin):
 def test_user_dashboard_is_built_on_the_closing_date_only(admin, vera):
     a, u = admin.get("/api/dashboard?by=due").json(), vera.get("/api/dashboard?by=due").json()
     assert u["by"] == "strict" and a["by"] == "due"
-    assert u["totals"]["overdue"] >= 1
     s = vera.get("/api/dashboard?by=close").json()
-    assert s["totals"] == u["totals"]                                              # the same numbers whatever the parameter says
-    assert "2026-12-31" not in str(u["upcoming"])
+    assert s["rows"] == u["rows"] and s["total"] == u["total"] and s["months"] == u["months"]       # the same numbers whatever the parameter says
+    assert u["total"]["nodate"]["open"] >= 1                                       # a task with only an official term has no month for a user (the term is not shown to them)
+    assert a["by"] == "due" and "2026-12" in a["months"]                           # the administrator can place it by the official term
 
 
 def test_export_has_no_official_term_column_for_a_user(vera, admin):

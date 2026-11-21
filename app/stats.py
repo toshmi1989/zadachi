@@ -1,163 +1,101 @@
-"""Numbers for the dashboard: who has how many tasks, and how the terms are distributed."""
-import re
-from datetime import date, timedelta
+"""Numbers for the dashboard: three tables of departments (units).
 
-from . import auth
+  1. departments x months: how many tasks are done / not done in each month (the month of the term), and the percent done;
+  2. departments x kinds of documents (Фармон, Қарор, Баён, ВМ, ПА): done / not done and the percent;
+  3. departments x stages of the approval (Justice -> Cabinet -> Chamber of Accounts): where the open tasks are.
+
+A task belongs to the department of its responsible person (a task nobody is responsible for, or a person without a department: «Без отдела»).
+A management's numbers include its divisions. Tasks «К сведению» are counted apart: they are neither done nor open, so they are not in the percent.
+Every number is a button on the page that opens the list of exactly those tasks, so the filters of the list must be able to say the same thing."""
+from . import ijro
 from .db import OPEN, today
-from .tasks import BUCKETS, bucket_of, eff_value
+from .tasks import eff_value
 
-COLS = ("overdue", "week", "month", "later", "nodate")
-KIND_ORDER = ["Фармон", "Қарор", "Баён", "ВМ", "ПА"]   # columns of the department matrix: the kinds of documents, in this order
-NUM_KEYS = (*COLS, "done", "info", "total", "open")
-MONTHS = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
-
-
-def _fmt(d) -> str:
-    return f"{d.day} {MONTHS[d.month - 1]}"
+KIND_ORDER = ["Фармон", "Қарор", "Баён", "ВМ", "ПА"]      # the columns of the table of kinds, in this order (others seen in the data follow)
+STAGE_COLS = [(k, label, hint) for k, label, hint in ijro.FUNNEL] + [
+    ("other", "Другое", "Этап не распознан или задача не найдена на сайте"),
+    ("unchecked", "Не проверялись", "Историю этапов ещё не читали (синхронизация читает только задачи, выбранные в настройках)")]
 
 
-def _blank() -> dict:
-    return {**{k: 0 for k in COLS}, "done": 0, "info": 0, "total": 0, "open": 0}
+def _two() -> dict:
+    return {"done": 0, "open": 0}
 
 
-def _finish(d: dict) -> dict:
-    d["pct_done"] = round(100 * d["done"] / (d["total"] - d["info"])) if d["total"] - d["info"] > 0 else 0
-    d["pct_overdue"] = round(100 * d["overdue"] / d["open"]) if d["open"] else 0
-    return d
-
-
-def dashboard(c, by: str = "close", month: str = "") -> dict:
-    """month: "" = every task; "YYYY-MM" = only the tasks whose term (the date chosen by `by`) falls in that month; "current" = the month of today.
-    Every block of the page is built from the same set of tasks, so the numbers of the blocks agree with each other and with the list behind them."""
-    by = by if by in ("due", "strict") else "close"
-    t = today()
-    month = t.isoformat()[:7] if month == "current" else month
-    month = month if re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month or "") else ""
-    rows = c.execute("""SELECT t.id, t.assignee_id, t.status, t.due, t.close_date, t.kind, t.doc_no, t.code, t.point, t.text, t.done_at, u.unit_id
-                        FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id WHERE t.status != 'gone'""").fetchall()
-    months_all = sorted({e[:7] for e in (eff_value(r, by) for r in rows) if e})       # all the months that have tasks: the switch of the page lists them
-    if month:
-        rows = [r for r in rows if (eff_value(r, by) or "")[:7] == month]
-    users = {u["id"]: u for u in c.execute("SELECT id, name, active, role FROM users")}
-    unit_cells: dict[tuple[int, str], dict] = {}
-    per_month: dict[int, dict[str, dict]] = {}   # person -> "YYYY-MM" -> how many tasks fall on days 1-10 / 11-15 / 16-20 / 21-end
-    total, per = _blank(), {}
-    kinds, docs, open_rows, windows = {}, {}, [], [0] * 8
-    closed_14d = 0
-    horizon = t - timedelta(days=14)
-    for r in rows:
-        eff = eff_value(r, by)
-        b = bucket_of(r["status"], eff, t)
-        pid = r["assignee_id"] or 0
-        for acc in (total, per.setdefault(pid, _blank()), kinds.setdefault(r["kind"], _blank()), docs.setdefault(r["doc_no"], _blank())):
-            acc["total"] += 1
-            acc[b] += 1
-            if r["status"] in OPEN:
-                acc["open"] += 1
-        if eff:
-            ym, day = eff[:7], int(eff[8:10])
-            m = per_month.setdefault(pid, {}).setdefault(ym, {"d10": 0, "d15": 0, "d20": 0, "d31": 0, "total": 0, "done": 0})
-            m["d10" if day <= 10 else "d15" if day <= 15 else "d20" if day <= 20 else "d31"] += 1
-            m["total"] += 1
-            m["done"] += r["status"] == "done"
-        uacc = unit_cells.setdefault((r["unit_id"] or 0, r["kind"]), _blank())
-        uacc["total"] += 1
-        uacc[b] += 1
-        if r["status"] in OPEN:
-            uacc["open"] += 1
-        if r["status"] in OPEN:
-            open_rows.append((eff or "9999-12-31", r["code"], r, eff))
-            if eff and b != "overdue":
-                i = (date.fromisoformat(eff) - t).days // 7
-                if i < 8:
-                    windows[i] += 1
-        if r["status"] == "done" and r["done_at"] and r["done_at"][:10] >= horizon.isoformat():
-            closed_14d += 1
-    people = []
-    for pid, d in per.items():
-        u = users.get(pid)
-        name = u["name"] if u else "Не назначен"
-        if u and not u["active"] and d["total"] == 0:
-            continue
-        people.append({"id": pid, "name": name, "short": auth.short_name(name) if u else name, **_finish(d), "months": per_month.get(pid, {})})
-    for u in users.values():  # active employees with no tasks are still shown: "nobody gave them anything" is information too
-        if u["role"] == "user" and u["active"] and u["id"] not in per:
-            people.append({"id": u["id"], "name": u["name"], "short": auth.short_name(u["name"]), **_finish(_blank()), "months": {}})
-    people.sort(key=lambda p: (-p["open"], -p["overdue"], p["name"]))
-    timeline = [{"key": "overdue", "label": "Просрочено", "count": total["overdue"], "to": (t - timedelta(days=1)).isoformat()}]
-    last = max([i for i, n in enumerate(windows) if n] + [3])  # no empty weeks at the tail
-    for i, n in enumerate(windows[: last + 1]):
-        a, b = t + timedelta(days=7 * i), t + timedelta(days=7 * i + 6)
-        timeline.append({"key": f"w{i}", "label": f"{_fmt(a)} – {_fmt(b)}" if i else f"Сегодня – {_fmt(b)}", "count": n,
-                         "from": a.isoformat(), "to": b.isoformat()})
-    later_from = t + timedelta(days=56)
-    later = sum(1 for _, _, r, e in open_rows if e and e >= later_from.isoformat())
-    if later:
-        timeline.append({"key": "later", "label": f"После {_fmt(later_from - timedelta(days=1))}", "count": later, "from": later_from.isoformat()})
-    if total["nodate"]:
-        timeline.append({"key": "nodate", "label": "Без срока", "count": total["nodate"], "bucket": "nodate"})
-    open_rows.sort(key=lambda x: (x[0], x[1]))
-    upcoming = []
-    for _, _, r, e in open_rows[:8]:
-        a = users.get(r["assignee_id"])
-        upcoming.append({"id": r["id"], "code": r["code"], "doc_no": r["doc_no"], "point": r["point"], "eff": e,
-                         "days": (date.fromisoformat(e) - t).days if e else None,
-                         "text": (r["text"] or "").split("\n")[0][:140], "assignee": auth.short_name(a["name"]) if a else "Не назначен"})
-    doc_list = sorted(({"doc": k, **_finish(v)} for k, v in docs.items()), key=lambda x: (-x["open"], x["doc"]))[:10]
-    return {
-        "units": _units(c, unit_cells, kinds), "months": months_all, "month": month, "today": t.isoformat(), "by": by, "totals": _finish(total), "closed_14d": closed_14d, "people": people,
-        "timeline": timeline, "kinds": sorted(({"kind": k, **_finish(v)} for k, v in kinds.items()), key=lambda x: -x["total"]),
-        "docs": doc_list, "upcoming": upcoming, "bucket_labels": BUCKETS, "stages": _stages(c, month, by),
-    }
-
-
-def _stages(c, month: str = "", by: str = "close") -> dict:
-    from . import ijro
-    return ijro.funnel(c, month, by)
+def _acc() -> dict:
+    return {"months": {}, "nodate": _two(), "kinds": {}, "stages": {}, "sum": {"done": 0, "open": 0, "info": 0}}
 
 
 def _add(a: dict, b: dict) -> dict:
-    for k in NUM_KEYS:
-        a[k] = a.get(k, 0) + b.get(k, 0)
+    """a += b (a management takes its divisions' numbers)."""
+    for ym, v in b["months"].items():
+        t = a["months"].setdefault(ym, _two())
+        t["done"] += v["done"]; t["open"] += v["open"]
+    for k, v in b["kinds"].items():
+        t = a["kinds"].setdefault(k, _two())
+        t["done"] += v["done"]; t["open"] += v["open"]
+    for k, n in b["stages"].items():
+        a["stages"][k] = a["stages"].get(k, 0) + n
+    for k in ("done", "open"):
+        a["nodate"][k] += b["nodate"][k]
+    for k in ("done", "open", "info"):
+        a["sum"][k] += b["sum"][k]
     return a
 
 
-def _units(c, cells: dict, kinds_seen: dict) -> dict:
-    """The matrix "department structure x kind of document". A management's numbers include its divisions;
-    people without a department (and unassigned tasks) are shown as a separate row so that the total still adds up."""
-    cols = KIND_ORDER + [k for k in kinds_seen if k and k not in KIND_ORDER]
-    units = c.execute("SELECT * FROM units WHERE active=1 ORDER BY sort, id").fetchall()
-    by_id = {u["id"]: u for u in units}
+def _copy(a: dict) -> dict:
+    return _add(_acc(), a)
 
-    def row(uid: int, **meta) -> dict:
-        per = {k: dict(cells.get((uid, k), _blank())) for k in cols}
-        return {**meta, "id": uid, "cells": per, "sum": {}}
 
-    out = []
+def dashboard(c, by: str = "close") -> dict:
+    by = by if by in ("due", "strict") else "close"
+    units = c.execute("SELECT id, num, name, parent_id FROM units WHERE active=1 ORDER BY sort, id").fetchall()
+    ids = {u["id"] for u in units}
+    stage = ijro.stage_map(c)                                       # {task id: stage key} for the open tasks
+    own: dict[int, dict] = {u["id"]: _acc() for u in units}
+    own[0] = _acc()                                                  # «Без отдела»
+    months: set[str] = set()
+    kinds_seen: list[str] = []
+    for r in c.execute("""SELECT t.id, t.status, t.due, t.close_date, t.kind, u.unit_id FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
+                          WHERE t.status != 'gone'""").fetchall():
+        a = own[r["unit_id"] if r["unit_id"] in ids else 0]
+        st = r["status"]
+        if st == "info":
+            a["sum"]["info"] += 1
+            continue
+        key = "open" if st in OPEN else "done"
+        a["sum"][key] += 1
+        eff = eff_value(r, by)
+        if eff:
+            months.add(eff[:7])
+            a["months"].setdefault(eff[:7], _two())[key] += 1
+        else:
+            a["nodate"][key] += 1
+        kind = r["kind"] or "—"
+        if kind not in KIND_ORDER and kind not in kinds_seen:
+            kinds_seen.append(kind)
+        a["kinds"].setdefault(kind, _two())[key] += 1
+        if key == "open":
+            sk = stage.get(r["id"], "unchecked")
+            a["stages"][sk] = a["stages"].get(sk, 0) + 1
+    by_parent: dict[int, list[int]] = {}
     for u in units:
-        r = row(u["id"], num=u["num"], name=u["name"], parent_id=u["parent_id"] if u["parent_id"] in by_id else None, level=0 if not u["parent_id"] else 1)
-        out.append(r)
-    index = {r["id"]: r for r in out}
-    for r in out:                      # a division adds itself to its management
-        if r["parent_id"]:
-            for k in cols:
-                _add(index[r["parent_id"]]["cells"][k], r["cells"][k])
-    none = row(0, num="", name="Без отдела", parent_id=None, level=0)
-    total_cells = {k: _blank() for k in cols}
-    for r in out:
-        if not r["parent_id"]:
-            for k in cols:
-                _add(total_cells[k], r["cells"][k])
-    for k in cols:
-        _add(total_cells[k], none["cells"][k])
-    for r in out + [none]:
-        s = _blank()
-        for k in cols:
-            _add(s, r["cells"][k])
-        r["sum"] = _finish(s)
-    tot = _blank()
-    for k in cols:
-        _add(tot, total_cells[k])
-    result = {"columns": cols, "rows": out, "none": none if none["sum"]["total"] else None,
-              "total": {"cells": total_cells, "sum": _finish(tot)}}
-    return result
+        if u["parent_id"] in ids:
+            by_parent.setdefault(u["parent_id"], []).append(u["id"])
+    rows, total = [], _acc()
+    for u in units:
+        agg = _copy(own[u["id"]])
+        for child in by_parent.get(u["id"], []):                      # a management includes its divisions
+            _add(agg, own[child])
+        rows.append({"id": u["id"], "num": u["num"], "name": u["name"], "parent_id": u["parent_id"] if u["parent_id"] in ids else None,
+                     "level": 1 if u["parent_id"] in ids else 0, **agg})
+        if u["parent_id"] not in ids:
+            _add(total, agg)
+    none = _copy(own[0])
+    _add(total, none)
+    has_none = any(none["sum"].values())
+    t = total["sum"]
+    return {"today": today().isoformat(), "by": by, "months": sorted(months), "kinds": KIND_ORDER + kinds_seen,
+            "stages": [{"key": k, "label": label, "hint": hint} for k, label, hint in STAGE_COLS],
+            "totals": {"done": t["done"], "open": t["open"], "info": t["info"], "total": t["done"] + t["open"] + t["info"]},
+            "rows": rows, "none": {"id": 0, "num": "", "name": "Без отдела", "parent_id": None, "level": 0, **none} if has_none else None,
+            "total": total}

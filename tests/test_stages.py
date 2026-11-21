@@ -171,9 +171,10 @@ def test_stage_filter_and_the_funnel_on_the_dashboard(admin, key):
     got = admin.get("/api/tasks?stage=info").json()
     assert [t["code"] for t in got["items"]] == ["ST0002"]
     assert [t["code"] for t in admin.get("/api/tasks?stage=chamber").json()["items"]] == ["ST0000"]
-    st = admin.get("/api/dashboard").json()["stages"]
-    by = {s["code"]: s["count"] for s in st["steps"]}
-    assert by["info"] == 1 and by["chamber"] == 1 and st["attention"] >= 1
+    from test_app import dashboard_matches_lists
+    d = dashboard_matches_lists(admin)                                                        # the table of stages: every number opens exactly its list
+    st = d["total"]["stages"]
+    assert st["info"] == 1 and st["chamber"] == 1
     assert st["unchecked"] >= 1                                                               # ST0003 was never read from the site
     assert admin.get("/api/tasks?stage=unchecked").json()["total"] >= 1
 

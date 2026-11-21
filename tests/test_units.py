@@ -61,20 +61,21 @@ def test_assign_people_and_rollup(admin):
     assert admin.patch(f"/api/users/{user(admin, 'valiyev.v')['id']}", json={"unit_id": top2["id"]}).status_code == 200
     assert admin.patch(f"/api/users/{user(admin, 'aliyev.a')['id']}", json={"unit_id": 9999}).status_code == 400
     assert user(admin, "aliyev.a")["unit"].startswith("Туман")
-    d = admin.get("/api/dashboard").json()["units"]
-    assert d["columns"][:5] == K                                                    # kinds in the requested order
+    from test_app import dashboard_matches_lists
+    d = dashboard_matches_lists(admin)                                              # every number of the three tables opens exactly its list, departments included
     rows = {r["id"]: r for r in d["rows"]}
-    # division I-1: Aliyev's tasks only (UN0000..UN0002): 2 Фармон + 1 ВМ, one overdue (close 2026-11-10 < today 2026-11-16)
-    c11 = rows[div11["id"]]["cells"]
-    assert c11["Фармон"]["total"] == 2 and c11["ВМ"]["total"] == 1 and c11["Фармон"]["overdue"] == 1 and c11["Қарор"]["total"] == 0
+    assert d["kinds"][:5] == K                                                      # kinds in the requested order
+    # division I-1: Aliyev's tasks only (UN0000..UN0002): 2 Фармон + 1 ВМ
+    k11 = rows[div11["id"]]["kinds"]
+    assert sum(k11["Фармон"].values()) == 2 and sum(k11["ВМ"].values()) == 1 and "Қарор" not in k11
+    assert rows[div11["id"]]["level"] == 1 and rows[div11["id"]]["parent_id"] == top1["id"]
     # the management includes its divisions
-    assert rows[top1["id"]]["cells"]["Фармон"]["total"] >= c11["Фармон"]["total"] and rows[top1["id"]]["sum"]["total"] >= rows[div11["id"]]["sum"]["total"]
-    c2 = rows[top2["id"]]["cells"]
-    assert c2["Қарор"]["total"] == 1 and c2["ПА"]["total"] == 1 and c2["Қарор"]["overdue"] == 1
+    assert sum(rows[top1["id"]]["kinds"]["Фармон"].values()) >= sum(k11["Фармон"].values()) and rows[top1["id"]]["sum"]["open"] >= rows[div11["id"]]["sum"]["open"]
+    k2 = rows[top2["id"]]["kinds"]
+    assert sum(k2["Қарор"].values()) == 1 and sum(k2["ПА"].values()) == 1
     # the total row adds up to every task, including people without a department and unassigned tasks
-    tot = admin.get("/api/dashboard").json()
-    assert d["total"]["sum"]["total"] == tot["totals"]["total"]
-    assert d["none"] and d["none"]["cells"]["Баён"]["total"] >= 1 and d["none"]["cells"]["Қарор"]["total"] >= 1
+    assert d["total"]["sum"]["done"] + d["total"]["sum"]["open"] + d["total"]["sum"]["info"] == d["totals"]["total"]
+    assert d["none"] and sum(d["none"]["kinds"]["Баён"].values()) >= 1 and sum(d["none"]["kinds"]["Қарор"].values()) >= 1
 
 
 def test_filter_tasks_by_unit(admin):
@@ -131,20 +132,13 @@ MROWS = [[i + 1, "Қарор", f"МД-{i} \n 01.01.2026", f"{i}-банд\nM{i}",
                                       ("2026-11-18", "Бажарилмаган"), ("2026-11-25", "Бажарилмаган"), ("2026-11-30", "Бажарилмаган"), ("2026-12-03", "Бажарилмаган"), (None, "Бажарилмаган")])]
 
 
-def test_month_split_of_a_person(admin):
+def test_months_of_a_department_open_their_lists(admin):
     assert admin.post("/api/import?dry=0", files={"file": ("x.xlsx", xlsx(MROWS))}).status_code == 200
-    d = admin.get("/api/dashboard").json()
+    from test_app import dashboard_matches_lists
+    d = dashboard_matches_lists(admin)
     assert "2026-11" in d["months"] and "2026-12" in d["months"] and d["months"] == sorted(d["months"])
-    mona = [p for p in d["people"] if p["name"] == "Monthly Mona"][0]
-    nov, dec = mona["months"]["2026-11"], mona["months"]["2026-12"]
-    assert (nov["d10"], nov["d15"], nov["d20"], nov["d31"]) == (2, 2, 1, 2)       # 5th and 10th | 12th and 15th | 18th | 25th and 30th
-    assert nov["total"] == 7 and nov["done"] == 1                                  # the 10th is done
-    assert dec["d10"] == 1 and dec["d31"] == 1 and dec["total"] == 2              # the 3rd, and the task without a closing date: the administrator's fallback is the official term, 31 Dec
-    assert mona["total"] == 9 and nov["total"] + dec["total"] == 9
-    # the list opened from a cell has exactly the same tasks
-    n = admin.get(f"/api/tasks?assignee={mona['id']}&date_from=2026-11-11&date_to=2026-11-15").json()["total"]
-    assert n == nov["d15"]
-    assert admin.get(f"/api/tasks?assignee={mona['id']}&date_from=2026-11-01&date_to=2026-11-30&status=done").json()["total"] == nov["done"]
+    nov = d["none"]["months"]["2026-11"]                                            # Mona has no department: «Без отдела»
+    assert nov["done"] >= 1 and nov["open"] >= 6                                    # her 7 tasks of November: the 10th is done
 
 
 def test_missing_departments_are_added_once_to_an_existing_structure():

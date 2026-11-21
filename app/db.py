@@ -352,7 +352,7 @@ def remove_wrong_units(c) -> None:
 def unit_tree_ids(c, unit_id: int) -> list[int]:
     """The unit and everything inside it (a management includes its divisions)."""
     ids = [unit_id]
-    for r in c.execute("SELECT id FROM units WHERE parent_id=?", (unit_id,)):
+    for r in c.execute("SELECT id FROM units WHERE parent_id=? AND active=1", (unit_id,)):      # a hidden division is not in the management any more (its people are «Без отдела»)
         ids.append(r["id"])
     return ids
 

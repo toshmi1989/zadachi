@@ -9,7 +9,7 @@ const sent = async () => (await fetch(FAKE + "/__sent")).json();
   const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } }); const p = await ctx.newPage();
   p.on("pageerror", e => errs.push(e.message)); p.on("console", m => { if (m.type() === "error") errs.push(m.text()); });
   await p.goto(BASE + "/login"); await p.fill("#login", "admin"); await p.fill("#password", "secret123"); await p.click("button.btn.pri");
-  await p.waitForSelector(".kpi"); await p.click('#tabs a[data-r="reminders"]'); await p.waitForSelector("#tg-link"); await p.waitForTimeout(900);
+  await p.waitForSelector(".dbt"); await p.click('#tabs a[data-r="reminders"]'); await p.waitForSelector("#tg-link"); await p.waitForTimeout(900);
   await p.screenshot({ path: OUT + "/40-rem-unlinked.png", fullPage: true });
 
   await p.click("#tg-link"); await p.waitForSelector("#linkarea a.tg");
@@ -43,7 +43,7 @@ const sent = async () => (await fetch(FAKE + "/__sent")).json();
   await p.click(".tgc.on[data-v='14']").catch(() => {});
   // phone
   const m = await b.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); const mp = await m.newPage();
-  await mp.goto(BASE + "/login"); await mp.fill("#login", "admin"); await mp.fill("#password", "secret123"); await mp.click("button.btn.pri"); await mp.waitForSelector(".kpi");
+  await mp.goto(BASE + "/login"); await mp.fill("#login", "admin"); await mp.fill("#password", "secret123"); await mp.click("button.btn.pri"); await mp.waitForSelector(".dbt");
   await mp.goto(BASE + "/#/reminders"); await mp.waitForSelector("#c-me"); await mp.waitForTimeout(900);
   ok(!(await mp.evaluate(() => document.documentElement.scrollWidth > 392 || innerWidth > 392)), "no horizontal scroll on the phone");
   await mp.screenshot({ path: OUT + "/44-rem-phone.png" });

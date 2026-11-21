@@ -8,23 +8,24 @@ const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++
   const mk = async (opts) => { const c = await b.newContext(Object.assign({ viewport: { width: 1440, height: 900 } }, opts)); const p = await c.newPage();
     p.on("pageerror", e => errs.push(e.message)); p.on("console", m => { if (m.type() === "error" && !/401|403/.test(m.text())) errs.push(m.text()); }); return p; };
   // the sign-in page offers a list of people when there is one; the typed login is always available
-  const login = async (p, u, pw) => { await p.goto(BASE + "/login"); await p.waitForTimeout(500); if (await p.locator("#to-manual").isVisible()) await p.click("#to-manual"); await p.fill("#login", u); await p.fill("#pw2", pw); await p.click("#s-manual button.btn"); await p.waitForSelector(".kpi"); await p.waitForTimeout(1500); };
+  const login = async (p, u, pw) => { await p.goto(BASE + "/login"); await p.waitForTimeout(500); if (await p.locator("#to-manual").isVisible()) await p.click("#to-manual"); await p.fill("#login", u); await p.fill("#pw2", pw); await p.click("#s-manual button.btn"); await p.waitForSelector(".dbt"); await p.waitForTimeout(1500); };
   const p = await mk(); await login(p, "admin", "secret123");
 
   // drill-down from the dashboard
-  await p.click('.kpi[data-k="overdue"]'); await p.waitForSelector("#rows tr[data-id]");
-  ok(/bucket=overdue/.test(p.url()), "KPI 'Просрочено' opens the list with bucket=overdue");
-  ok((await p.textContent("#sub")).includes("51"), "list shows 51 overdue tasks");
+  const nOpen = await p.textContent("#t-months tbody tr.total td:last-child button.n.no");                    // «не выполнено» in the «Всего» column of the first table
+  await p.click("#t-months tbody tr.total td:last-child button.n.no"); await p.waitForSelector("#rows tr[data-id]");
+  ok(/status=open/.test(p.url()), "the red number of the total row opens the list of not done tasks");
+  ok((await p.textContent("#sub")).includes(nOpen.trim()), "the list has exactly that many tasks (" + nOpen.trim() + ")");
   ok(await p.locator(".fchip").count() === 1, "one active filter chip");
   await p.screenshot({ path: OUT + "/10-tasks-overdue.png" });
   await p.click(".fchip button"); await p.waitForTimeout(500);
   ok((await p.textContent("#sub")).includes("272"), "removing the chip shows all 272");
 
-  // person bar segment → person + bucket
-  await p.goBack(); await p.waitForSelector(".prow"); await p.waitForTimeout(1200);
-  await p.click('.prow[data-id="2"] .seg-b.k-week, .prow:first-child .seg-b.k-week');
+  // a number of the table of stages → stage + not done
+  await p.goBack(); await p.waitForSelector(".dbt"); await p.waitForTimeout(1200);
+  await p.click("#t-stages tbody tr.total button.n[data-s]");
   await p.waitForSelector("#rows tr[data-id]");
-  ok(/assignee=\d+/.test(p.url()) && /bucket=week/.test(p.url()), "bar segment opens person + deadline bucket: " + p.url().split("#")[1]);
+  ok(/stage=\w+/.test(p.url()) && /status=open/.test(p.url()), "a number of the stages table opens stage + not done: " + p.url().split("#")[1]);
 
   // sorting and paging
   await p.click('th[data-s="code"]').catch(() => {});
@@ -85,15 +86,14 @@ const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++
   ok(st === 404, "somebody else's task does not exist for an employee: " + st);
   ok((await u.request.get(`${BASE}/api/users`)).status() === 403, "API refuses /api/users for a user");
   await p.goto(BASE + "/#/settings"); await p.click('.opt[data-v="none"]'); await p.waitForTimeout(500);
-  await u.goto(BASE + "/#/dashboard"); await u.reload(); await u.waitForSelector(".kpi"); await u.waitForTimeout(800);
+  await u.goto(BASE + "/#/dashboard"); await u.reload(); await u.waitForSelector(".dbt"); await u.waitForTimeout(800);
   ok(await u.locator("#tabs a").count() === 2, "setting only-dashboard hides Tasks");
   ok((await u.request.get(`${BASE}/api/tasks`)).status() === 403, "API refuses the list under 'only dashboard'");
   await p.click('.opt[data-v="own"]'); await p.waitForTimeout(400);
 
   // dark + percent + phone
-  await p.goto(BASE + "/#/dashboard"); await p.waitForSelector(".kpi"); await p.waitForTimeout(1400);
-  await p.click('.seg button[data-v="pct"]'); await p.waitForTimeout(1000);
-  ok((await p.textContent('.prow .seg-b.k-overdue span')).includes("%"), "percent mode shows %");
+  await p.goto(BASE + "/#/dashboard"); await p.waitForSelector(".dbt"); await p.waitForTimeout(1400);
+  ok((await p.textContent("#t-months tbody tr.total")).includes("%"), "the tables show the percent done");
   await p.click("#theme"); await p.click("#theme"); await p.waitForTimeout(500);
   await p.screenshot({ path: OUT + "/30-dark-pct.png" });
   const m = await mk({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });

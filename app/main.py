@@ -235,10 +235,10 @@ def api_me(request: Request):
 
 
 @app.get("/api/dashboard")
-def api_dashboard(request: Request, by: str = "close", month: str = ""):
+def api_dashboard(request: Request, by: str = "close"):
     c = connect()
     try:
-        return stats.dashboard(c, tasks.norm_by(by, me(request)), month)
+        return stats.dashboard(c, tasks.norm_by(by, me(request)))
     finally:
         c.close()
 
@@ -267,7 +267,7 @@ def api_meta(request: Request):
 
 # ---------------------------------------------------------------- tasks
 
-FILTER_KEYS = ("unit", "assignee", "status", "bucket", "kind", "doc", "q", "by", "sort", "dir", "date_from", "date_to", "stage", "closing")
+FILTER_KEYS = ("unit", "assignee", "status", "bucket", "kind", "doc", "q", "by", "sort", "dir", "date_from", "date_to", "stage", "closing", "term")
 
 
 def filters(request: Request) -> dict:

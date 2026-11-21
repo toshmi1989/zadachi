@@ -108,7 +108,7 @@ def _where(f: dict, by: str, user: dict | None, own_only: bool) -> tuple[str, di
         p["kind"] = f["kind"]
     u = str(f.get("unit") or "")
     if u == "0":
-        clauses.append("a.unit_id IS NULL")
+        clauses.append("(a.unit_id IS NULL OR a.unit_id NOT IN (SELECT id FROM units WHERE active=1))")     # «Без отдела»: nobody's department, or a hidden one
     elif u.isdigit():
         ids = f.get("_unit_ids") or [int(u)]
         clauses.append(f"a.unit_id IN ({','.join(str(int(i)) for i in ids)})")
@@ -121,6 +121,8 @@ def _where(f: dict, by: str, user: dict | None, own_only: bool) -> tuple[str, di
     if f.get("date_to"):
         clauses.append(f"{e} <= :dto")
         p["dto"] = f["date_to"]
+    if f.get("term") == "none":
+        clauses.append(f"{e} IS NULL")                                     # tasks without any term (whatever their status): the «Без срока» column of the dashboard
     if f.get("closing") == "proposed":
         clauses.append("t.close_src != ''")
     if "_stage_ids" in f:
