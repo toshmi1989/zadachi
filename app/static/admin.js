@@ -204,6 +204,19 @@ routes.import = async function (page) {
     $("#again", stage).onclick = () => route();
     const ca = $("#conf-all", stage); if (ca) ca.onclick = async () => { try { const x = await api("/api/closing/confirm", { method: "POST", json: {} }); toast("Подтверждено: " + x.confirmed); ca.disabled = true; } catch (e) { toast(e.message, "error"); } };
   }
+  /* «Очистить базу»: erases every task. A copy of the database is made first; the person confirms by typing the word. */
+  page.insertAdjacentHTML("beforeend", `<div class="card rise" style="--i:3;margin-top:16px;border-color:color-mix(in srgb,var(--c-overdue) 45%,var(--line))"><div class="card-head"><div><h2>Очистить базу</h2>
+    <p class="sub">Стирает <b>все задачи</b> вместе с их историей и этапами, в том числе добавленные вручную и снятые с дашборда. Сотрудники, структура департамента и настройки остаются. Перед очисткой делается копия базы.</p></div>
+    <button class="btn danger" id="clear-all">${icon("x")}Очистить базу</button></div></div>`);
+  $("#clear-all", page).onclick = async () => {
+    let info; try { info = await api("/api/import/clear"); } catch (e) { toast(e.message, "error"); return; }
+    if (!info.tasks) { toast("В базе нет задач"); return; }
+    const r = await formDialog({ title: "Стереть все задачи?", ok: "Стереть все задачи",
+      text: `Будет стёрто задач: ${info.tasks}` + (info.manual ? `, из них добавленных вручную: ${info.manual}` : "") + (info.gone ? `, снятых с дашборда: ${info.gone}` : "") + ". Это нельзя отменить кнопкой: вернуть можно только из копии базы, которая будет сделана перед очисткой.",
+      fields: [{ name: "confirm", label: `Для подтверждения введите слово ${info.word}`, required: true }],
+      submit: d => api("/api/import/clear", { method: "POST", json: d }) });
+    if (r) { Z.meta = null; toast("Стёрто задач: " + r.deleted + ". Копия базы: " + r.backup); route(); }
+  };
   showDrop();
 };
 routes.import.title = "Импорт";

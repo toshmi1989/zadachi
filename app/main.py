@@ -738,6 +738,38 @@ async def api_import_aliases(request: Request):
     return {"saved": n}
 
 
+CLEAR_WORD = "ОЧИСТИТЬ"
+
+
+@app.get("/api/import/clear")
+def api_import_clear_info():
+    """What «Очистить базу» would erase (shown before the person confirms)."""
+    c = connect()
+    try:
+        r = c.execute("SELECT COUNT(*) AS n, COALESCE(SUM(manual), 0) AS m, COALESCE(SUM(status='gone'), 0) AS g FROM tasks").fetchone()
+        return {"tasks": r["n"], "manual": r["m"], "gone": r["g"], "word": CLEAR_WORD}
+    finally:
+        c.close()
+
+
+@app.post("/api/import/clear")
+async def api_import_clear(request: Request):
+    """Erases EVERY task (those added by hand and those taken off the dashboard too) with their history and what was read from the site. People, the structure of the
+    department, the settings and the journal stay. A copy of the database is made first, so the erase can be undone from the backup."""
+    b = await _json(request)
+    if str(b.get("confirm") or "").strip() != CLEAR_WORD:
+        bad(f"Чтобы стереть все задачи, введите слово {CLEAR_WORD}")
+    try:
+        copy = backup.make_now()
+    except Exception as e:
+        bad("Не удалось сделать копию перед очисткой, задачи не тронуты: " + str(e)[:120], 500)
+    with tx() as c:
+        n = c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        c.execute("DELETE FROM tasks")                 # the history of the tasks, the site's snapshots and the proposals to take off go with them (ON DELETE CASCADE)
+        audit(c, "tasks.clear", "tasks", None, {"deleted": n, "backup": str(copy)[-80:]})
+    return {"deleted": n, "backup": str(copy)}
+
+
 @app.post("/api/import/add-units")
 async def api_import_add_units(request: Request):
     """Adds the departments of a loaded file that are not in the structure of the department (the names are taken as they are written in the file; they go to the end of the
