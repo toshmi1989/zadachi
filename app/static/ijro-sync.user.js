@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.6.1
+// @version      1.6.2
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.6.1";
+  const VERSION = "1.6.2";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -261,7 +261,11 @@
     const sections = Object.fromEntries(job.sections.map(s => [s.id, s]));
     const order = hint => hint && sections[hint] ? [sections[hint]].concat(job.sections.filter(s => s.id !== hint)) : job.sections;
     const buffer = [], failed = []; let done = 0, found = 0, sent = 0, stopped = "", pace = delay, streak = 0, okRun = 0;
-    const flush = async () => { if (!buffer.length) return; const items = buffer.splice(0, buffer.length); await server("POST", "/api/sync/ingest", { run_id: job.run_id, items }); sent += items.length; };
+    const flush = async () => {
+      if (!buffer.length) return; const items = buffer.splice(0, buffer.length);
+      try { await server("POST", "/api/sync/ingest", { run_id: job.run_id, items }); } catch (e) { buffer.unshift(...items); throw e; }   // what was read is not lost: the next attempt sends it again
+      sent += items.length;
+    };
     const total = job.items.length;
     const progress = () => { if (onProgress) onProgress({ done: done + failed.length, total, found, failed: failed.length }); };
     // one task: the snapshot to send (found or not), or a TransientError when the site could not answer after all retries
@@ -349,7 +353,21 @@
   }
   const newRun = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Array.from({ length: 32 }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join(""));
 
-  const core = { orgOf, encode, decode, makeClient, runSync, finishRun, newRun, runExports, fetchExport, exportBody, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
+  /* a call to the platform that failed for a reason that passes (no answer, the connection broke, the server is restarting: 5xx, 429) is repeated; any other answer is final.
+     The platform's calls are safe to repeat: a batch of answers overwrites the same snapshots. */
+  async function withRetry(fn, { tries = 3, waits = [3000, 10000], sleep } = {}) {
+    let last;
+    for (let i = 0; i < tries; i++) {
+      try { return await fn(); } catch (e) {
+        last = e; if (!e || !e.retryable || i === tries - 1) break;
+        await sleep(waits[Math.min(i, waits.length - 1)]);
+      }
+    }
+    if (last && last.retryable) last.message += " (попыток: " + tries + ")";
+    throw last;
+  }
+
+  const core = { withRetry, orgOf, encode, decode, makeClient, runSync, finishRun, newRun, runExports, fetchExport, exportBody, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
   if (typeof module !== "undefined" && module.exports) { module.exports = core; return; }
   if (typeof GM_xmlhttpRequest === "undefined" || typeof document === "undefined") return;
 
@@ -385,13 +403,15 @@
   } catch (e) { /* ignore */ }
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const server = (method, path, body) => new Promise((resolve, reject) => {
+  const retryable = msg => Object.assign(new Error(msg), { retryable: true });
+  const serverOnce = (method, path, body) => new Promise((resolve, reject) => {
     const key = GM_getValue("zk", "");
     if (!key) return reject(new Error("Нет ключа синхронизации: нажмите «Ключ…» и вставьте ключ из раздела «Синхронизация» платформы."));
     GM_xmlhttpRequest({ method, url: SERVER + path, headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" }, data: body ? JSON.stringify(body) : undefined, timeout: 60000,
-      onload: r => { let j = null; try { j = JSON.parse(r.responseText); } catch (e) { /* ignore */ } if (r.status >= 200 && r.status < 300) resolve(j); else reject(new Error((j && j.error) || "Платформа ответила " + r.status)); },
-      onerror: () => reject(new Error("Нет связи с платформой " + SERVER)), ontimeout: () => reject(new Error("Платформа не отвечает")) });
+      onload: r => { let j = null; try { j = JSON.parse(r.responseText); } catch (e) { /* ignore */ } if (r.status >= 200 && r.status < 300) resolve(j); else { const m = (j && j.error) || "Платформа ответила " + r.status; reject(r.status >= 500 || r.status === 429 ? retryable(m) : new Error(m)); } },
+      onerror: () => reject(retryable("Нет связи с платформой " + SERVER)), ontimeout: () => reject(retryable("Платформа не отвечает")) });
   });
+  const server = (method, path, body) => withRetry(() => serverOnce(method, path, body), { sleep });
   const upload = (path, buf) => new Promise((resolve, reject) => {   // the xlsx as it is, to the platform
     const key = GM_getValue("zk", "");
     if (!key) return reject(new Error("Нет ключа синхронизации"));

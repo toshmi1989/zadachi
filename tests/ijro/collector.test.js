@@ -234,5 +234,24 @@ const fake = http.createServer((req, res) => {
   await core.finishRun({ server: fserver, run: "abc", exp: { files: 9, expected: 9, errors: [], stopped: "" }, sync: { stopped: "Остановлено вами", failed: [] } });
   ok(fcalls.map(x => x.complete).join() === "true,false,false,false" && /^[0-9a-f-]{8,64}$/.test(core.newRun()), "a run is complete only with every file, no failures and no stop");
 
+  // ---- the platform does not answer for a while: the call is repeated, a final answer is not
+  const rt = (n, kind) => { let c = 0; return { calls: () => c, fn: async () => { c++; if (c <= n) throw Object.assign(new Error(kind), { retryable: kind !== "final" }); return "ok"; } }; };
+  const waited = []; const rsleep = async ms => { waited.push(ms); };
+  const rt1 = rt(2, "Платформа не отвечает"); ok((await core.withRetry(rt1.fn, { sleep: rsleep })) === "ok" && rt1.calls() === 3 && waited.length === 2, "two timeouts, then an answer: the call succeeds on the third try");
+  const rt2 = rt(9, "Платформа не отвечает"); const rte2 = await core.withRetry(rt2.fn, { sleep: rsleep }).catch(e => e);
+  ok(rt2.calls() === 3 && /попыток: 3/.test(rte2.message), "it gives up after three tries and says so: " + rte2.message);
+  const rt3 = rt(9, "final"); await core.withRetry(rt3.fn, { sleep: rsleep }).catch(() => {}); ok(rt3.calls() === 1, "an answer that is final (not a network trouble) is not repeated");
+  // a batch that could not be sent is not lost: the next attempt sends it again with the next ones
+  const sent2 = []; let bdown = true;
+  const bserver = async (m, p, b) => {
+    if (p === "/api/sync/job") return { run_id: 0, sections: [{ id: "president", type_ids: ["t"] }], items: [{ code: "A1", section: "president" }, { code: "A2", section: "president" }, { code: "A3", section: "president" }] };
+    if (bdown) { bdown = false; throw new Error("Платформа не отвечает"); }
+    sent2.push(...b.items.map(x => x.code)); return { stored: b.items.length };
+  };
+  const bfind = { find: async (code) => ({ id: "r-" + code, status: 0, is_done: false, repeatable: 0 }), card: async () => ({ is_secret: false }), answers: async () => [], raw: async () => ({}) };
+  const rbk = await core.runSync({ server: bserver, client: bfind, sleep: noSleep, delay: 0, chunk: 2 }).catch(e => e);
+  ok(rbk instanceof Error && /не отвечает/.test(rbk.message), "the run stops with the platform's message when the platform does not answer");
+  ok(sent2.sort().join() === "A1,A2", "the two answers read before the failure were sent on the second attempt, not lost: " + sent2.join());
+
   fake.close(); console.log(fails ? fails + " FAILED" : "ALL PASS"); process.exit(fails ? 1 : 0);
 })().catch(e => { console.error("ERROR", e); process.exit(1); });
