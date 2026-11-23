@@ -1,7 +1,7 @@
 "use strict";
 /* Shared helpers: API, icons, formatting, router, toasts, drawer/modal, tooltip. No framework, no build. */
 const Z = { me: null, by: "close", mode: "count", meta: null };
-try { Z.by = localStorage.getItem("by") === "due" ? "due" : "close"; Z.mode = localStorage.getItem("mode") === "pct" ? "pct" : "count"; } catch (e) {}
+try { Z.by = ["due", "strict"].includes(localStorage.getItem("by")) ? localStorage.getItem("by") : "close"; Z.mode = localStorage.getItem("mode") === "pct" ? "pct" : "count"; } catch (e) {}
 
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));

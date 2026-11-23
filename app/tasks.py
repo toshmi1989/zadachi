@@ -22,12 +22,12 @@ class TaskError(Exception):
 
 
 def norm_by(by: str | None, user) -> str:
-    """Which date the numbers are built on. An administrator chooses: "close" (closing date, else the official term) or "due".
+    """Which date the numbers are built on. An administrator chooses: "close" (closing date, else the official term), "due" or "strict" (the closing date only, as the others see it).
     Everybody else always gets "strict": the closing date only. The official term is not shown to them anywhere, so it also
     must not leak through a fallback, a sort order, an export or a reminder."""
     if not user or user["role"] != "admin":
         return "strict"
-    return "due" if by == "due" else "close"
+    return by if by in ("due", "strict") else "close"      # «strict» for an administrator: the numbers exactly as everybody else sees them
 
 
 def eff_sql(by: str) -> str:

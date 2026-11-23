@@ -51,3 +51,14 @@ def test_the_period_is_checked_and_the_report_follows_it(admin):
     m = admin.get("/api/report.xlsx?month=2027-03")
     assert "2027 йил март ойига белгиланган" in openpyxl.load_workbook(io.BytesIO(m.content)).active["A1"].value
     assert admin.get("/api/report.xlsx?month=2027-3").status_code == 400
+
+
+def test_an_administrator_can_see_the_numbers_as_everybody_else_does(admin):
+    """Others see only the closing date: a task without one is in no month and no year. The administrator's default also counts the official term."""
+    assert admin.get("/api/dashboard?by=strict").json()["by"] == "strict" and admin.get("/api/dashboard?by=due").json()["by"] == "due" and admin.get("/api/dashboard").json()["by"] == "close"
+    d = connect(); d.execute("DELETE FROM tasks WHERE code='PD9001'"); d.commit(); d.close()
+    rows = [[1, "Қарор", "ПР-9 \n 01.01.2026", "9-банд\nPD9001", "20.08.2026", "", "Period Person", "Бажарилмаган", "PD9001"]]       # an official term, no closing date
+    assert admin.post("/api/import?dry=0", files={"file": ("x.xlsx", xlsx(rows))}).status_code == 200
+    mine = lambda by: admin.get(f"/api/dashboard?period=2026-08&by={by}").json()["totals"]["total"]
+    assert mine("close") >= mine("strict") + 1                      # the administrator's default counts it in August, the others' view does not
+    d = connect(); d.execute("DELETE FROM tasks WHERE code='PD9001'"); d.commit(); d.close()
