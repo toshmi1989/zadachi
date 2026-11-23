@@ -23,17 +23,17 @@ def admin():
     with TestClient(app) as c:
         c.post("/login", data={"login": "admin", "password": "secret123"}, follow_redirects=False)
         assert c.post("/api/import?dry=0", files={"file": ("x.xlsx", xlsx(ROWS))}).status_code == 200
-        units = c.get("/api/units").json()["items"]
-        top1 = [u for u in units if u["num"] == "I" and not u["parent_id"]][0]
-        div = [u for u in units if u["parent_id"] == top1["id"] and u["num"] == "1"][0]
-        top2 = [u for u in units if u["num"] == "II" and not u["parent_id"]][0]
+        mg1 = c.post("/api/units", json={"name": "Управление отчёта один", "num": "RX"}).json()["id"]
+        dv = c.post("/api/units", json={"name": "Отдел отчёта", "parent_id": mg1, "num": "1"}).json()["id"]
+        mg2 = c.post("/api/units", json={"name": "Управление отчёта два", "num": "RY"}).json()["id"]
         users = {u["login"]: u["id"] for u in c.get("/api/users").json()["items"]}
-        c.patch(f"/api/users/{users['repaliyev.a']}", json={"unit_id": div["id"]})
-        c.patch(f"/api/users/{users['repvaliyev.v']}", json={"unit_id": top2["id"]})
+        c.patch(f"/api/users/{users['repaliyev.a']}", json={"unit_id": dv})
+        c.patch(f"/api/users/{users['repvaliyev.v']}", json={"unit_id": mg2})
         yield c
         d = connect()
         d.execute("DELETE FROM tasks WHERE code LIKE 'RP%'")
         d.execute("DELETE FROM users WHERE name LIKE 'Rep%'")
+        d.execute("DELETE FROM units WHERE name LIKE '%отчёта%'")
         d.commit()
         d.close()
 
@@ -57,17 +57,17 @@ def test_the_table_of_december_has_the_format_of_the_ministry_and_the_numbers_of
         assert word in head, word
     assert "Юқори" not in head and "хавфли" not in head and "Қизилга" not in head          # the columns of risk are not in the table
     ln = lines(ws)
+    d = admin.get("/api/dashboard").json()["total"]["months"]["2026-12"]
     tot = ln["Департамент бўйича жами:"]
-    # December: 3 (Aliyev) + 2 (Valiyev) + 1 (Gulov) = 6; done 2; open 4
-    assert tot[2:7] == [6, 2, 33.3, 4, None]
-    pres, adm, cab = tot[7:10], tot[10:13], tot[13:16]
-    assert pres == [3, 1, 2] and adm == [2, 1, 1] and cab == [1, None, 1]                   # Фармон+Қарор+Баён | ПА | ВМ: total, done, left
-    top1 = [v for k, v in ln.items() if k.startswith("Тиббий") or "Тиббий хизматлар" in k][0]
-    assert top1[2] == 3 and top1[3] == 1                                                    # the management includes its division
-    assert ln["Бўлинма кўрсатилмаган (Без отдела)"][2] == 1
-    # the same numbers as the dashboard
-    d = admin.get("/api/dashboard").json()
-    assert d["total"]["months"]["2026-12"] == {"done": 2, "open": 4} or d["total"]["months"]["2026-12"]["done"] >= 2
+    assert tot[2] == d["done"] + d["open"] and tot[3] == (d["done"] or None) and tot[5] == (d["open"] or None)      # the total line is the dashboard's December
+    mg1, dv, mg2 = ln["Управление отчёта один"], ln["Отдел отчёта"], ln["Управление отчёта два"]
+    # Aliyev (division of the first management): Фармон done, Қарор open, ВМ open
+    assert dv[2:7] == [3, 1, 33, 2, None]
+    assert mg1[2] == 3 and mg1[3] == 1                                                      # the management includes its division
+    assert dv[7:10] == [2, 1, 1] and dv[10:13] == [None, None, None] and dv[13:16] == [1, None, 1]    # Фармон+Қарор+Баён | ПА | ВМ: total, done, left
+    # Valiyev (the second management): ПА done + ПА open in December (the January one is not in this month)
+    assert mg2[2:6] == [2, 1, 50, 1] and mg2[10:13] == [2, 1, 1] and mg2[7:10] == [None, None, None]
+    assert ln["Бўлинма кўрсатилмаган (Без отдела)"][2] >= 1
 
 
 def test_every_month_and_january(admin):

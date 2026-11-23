@@ -154,7 +154,8 @@ def build_xlsx(data: dict, month: str, stamp: str) -> bytes:
     # the lines
     def put(r, row, kind):
         d, o = row["done"], row["open"]
-        vals = [row.get("num", ""), row["name"], d + o, d or None, pct(d, o) if d + o else 0, o or None, row["info"] or None]
+        share = pct(d, o) if kind == "total" else round(pct(d, o))      # the total line has one decimal (22,5), the others are whole percents
+        vals = [row.get("num", ""), row["name"], d + o, d or None, share, o or None, row["info"] or None]
         for g in groups:
             gd = row["g"].get(g, {"done": 0, "open": 0})
             vals += [(gd["done"] + gd["open"]) or None, gd["done"] or None, gd["open"] or None]
