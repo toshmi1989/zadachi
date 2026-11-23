@@ -295,18 +295,27 @@ routes.settings = async function (page) {
     const items = (await api("/api/units")).items;
     uc.innerHTML = `<div class="card-head"><div><h2>${icon("stack")}Структура департамента</h2><p class="sub">Управления и отделы. К ним привязываются сотрудники (страница «Пользователи»), по ним строится дашборд.</p></div><button class="btn sm" id="u-add">${icon("plus")}Управление</button></div>` +
       items.map(u => `<div class="unit-row ${u.level ? "kid" : "mgmt"}${u.active ? "" : " off"}" data-id="${u.id}"><span class="unum">${esc(u.num)}</span><span class="nm">${esc(u.name)}</span><span class="ppl">${u.people ? u.people + " " + plural(u.people, "сотрудник", "сотрудника", "сотрудников") : ""}</span>
-        <span class="acts"><button class="btn sm" data-a="ren">Изменить</button>${u.level ? "" : `<button class="btn sm" data-a="add">+ Отдел</button>`}<button class="btn sm" data-a="vis">${u.active ? "Скрыть" : "Показать"}</button>${u.people || items.some(x => x.parent_id === u.id) ? "" : `<button class="btn sm danger" data-a="del">Удалить</button>`}</span></div>`).join("");
+        <span class="acts"><button class="btn sm" data-a="ren">Изменить</button>${u.level ? "" : `<button class="btn sm" data-a="add">+ Отдел</button>`}<button class="btn sm" data-a="vis">${u.active ? "Скрыть" : "Показать"}</button>${items.some(x => x.parent_id === u.id) ? "" : `<button class="btn sm" data-a="merge" title="Перенести сотрудников и задачи в другой отдел, а этот убрать">Слить с…</button>`}${u.people || items.some(x => x.parent_id === u.id) ? "" : `<button class="btn sm danger" data-a="del">Удалить</button>`}</span></div>`).join("");
     const ask = (title, fields, submit) => formDialog({ title, fields, submit });
     $("#u-add", uc).onclick = async () => { if (await ask("Новое управление", [{ name: "name", label: "Название", required: true }, { name: "num", label: "Номер", hint: "Пусто — следующий римский номер" }], d => api("/api/units", { method: "POST", json: d }))) { Z.meta = null; toast("Управление добавлено"); paintStructure(); } };
     uc.onclick = async e => {
       const b = e.target.closest("[data-a]"); if (!b) return;
       const u = items.find(x => x.id === +b.closest(".unit-row").dataset.id);
-      let ok = false;
+      let ok = false, msg = "";
       if (b.dataset.a === "ren") ok = await ask("Изменить", [{ name: "num", label: "Номер", value: u.num }, { name: "name", label: "Название", value: u.name, required: true }], d => api("/api/units/" + u.id, { method: "PATCH", json: d }));
       else if (b.dataset.a === "add") ok = await ask("Новый отдел в «" + (u.name.length > 40 ? u.name.slice(0, 38) + "…" : u.name) + "»", [{ name: "name", label: "Название", required: true }, { name: "num", label: "Номер", hint: "Пусто — следующий по порядку" }], d => api("/api/units", { method: "POST", json: Object.assign({}, d, { parent_id: u.id }) }));
       else if (b.dataset.a === "vis") { try { await api("/api/units/" + u.id, { method: "PATCH", json: { active: !u.active } }); ok = true; } catch (er) { toast(er.message, "error"); } }
+      else if (b.dataset.a === "merge") {
+        const parentOf = x => x.parent_id ? items.find(y => y.id === x.parent_id) : null;
+        const opts = items.filter(x => x.id !== u.id).map(x => [x.id, (x.level ? "— " : "") + (x.num ? x.num + ". " : "") + x.name.slice(0, 80) + (x.level && parentOf(x) ? "  (" + parentOf(x).num + ")" : "")]);
+        const r = await formDialog({ title: "Слить «" + u.name.slice(0, 50) + "»", ok: "Слить",
+          text: "Сотрудники этого отдела и все их задачи перейдут в выбранный отдел, а этот отдел будет удалён. Название этого отдела в следующих загрузках Excel тоже будет относиться к выбранному отделу. Перед слиянием делается копия базы.",
+          fields: [{ name: "into", label: "Слить с отделом", type: "select", options: opts, value: opts[0] && opts[0][0] }],
+          submit: d => api("/api/units/" + u.id + "/merge", { method: "POST", json: { into: +d.into } }) });
+        if (r) { ok = true; msg = "Слито: сотрудников " + r.people + ", задач " + r.tasks + ". Копия базы: " + r.backup; }
+      }
       else if (b.dataset.a === "del") { if (await formDialog({ title: "Удалить «" + u.name.slice(0, 50) + "»?", text: "Это нельзя отменить. Удалить можно только пустой отдел; иначе скройте его.", ok: "Удалить", fields: [] })) { try { await api("/api/units/" + u.id, { method: "DELETE" }); ok = true; } catch (er) { toast(er.message, "error"); } } }
-      if (ok) { Z.meta = null; toast("Сохранено"); paintStructure(); }
+      if (ok) { Z.meta = null; toast(msg || "Сохранено"); paintStructure(); }
     };
   }
   await paintStructure();

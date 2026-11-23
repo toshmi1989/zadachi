@@ -1126,6 +1126,43 @@ async def api_unit_update(request: Request, unit_id: int):
     return {"ok": True}
 
 
+@app.post("/api/units/{unit_id}/merge")
+async def api_unit_merge(request: Request, unit_id: int):
+    """Merges a unit into another: its people (and so their tasks on the dashboard) go to the other unit, the names of the site that stood for it stand for the other from now on
+    (the next Excel load puts the tasks there again), and the empty unit is deleted. A copy of the database is made first."""
+    b = await _json(request)
+    into = b.get("into")
+    if not isinstance(into, int) or isinstance(into, bool) or into == unit_id:
+        bad("Выберите другой отдел, в который слить")
+    c0 = connect()
+    try:
+        src, dst = (c0.execute("SELECT * FROM units WHERE id=?", (x,)).fetchone() for x in (unit_id, into))
+        if not src or not dst:
+            bad("Отдел не найден", 404)
+        if c0.execute("SELECT 1 FROM units WHERE parent_id=?", (unit_id,)).fetchone():
+            bad("В этом управлении есть вложенные отделы: сначала сливайте их по одному")
+        if dst["parent_id"] == unit_id:
+            bad("Нельзя слить управление в его же отдел")
+    finally:
+        c0.close()
+    try:
+        copy = backup.make_now()
+    except Exception as e:
+        bad("Не удалось сделать копию перед слиянием, ничего не изменено: " + str(e)[:120], 500)
+    with tx() as c:
+        people = c.execute("SELECT COUNT(*) FROM users WHERE unit_id=?", (unit_id,)).fetchone()[0]
+        tasks_n = c.execute("SELECT COUNT(*) FROM tasks WHERE assignee_id IN (SELECT id FROM users WHERE unit_id=?)", (unit_id,)).fetchone()[0]
+        c.execute("UPDATE users SET unit_id=? WHERE unit_id=?", (into, unit_id))
+        c.execute("UPDATE unit_aliases SET unit_id=? WHERE unit_id=?", (into, unit_id))
+        site_import.save_aliases(c, {site_import.skeleton(src["name"]): into})        # the next export with this department's name goes to the unit it was merged into
+        c.execute("UPDATE units SET active=1 WHERE id=?", (into,))
+        if dst["parent_id"]:
+            c.execute("UPDATE units SET active=1 WHERE id=?", (dst["parent_id"],))
+        c.execute("DELETE FROM units WHERE id=?", (unit_id,))
+        audit(c, "unit.merge", "unit", into, {"from": src["name"], "into": dst["name"], "people": people, "tasks": tasks_n})
+    return {"people": people, "tasks": tasks_n, "backup": copy}
+
+
 @app.delete("/api/units/{unit_id}")
 def api_unit_delete(unit_id: int):
     with tx() as c:

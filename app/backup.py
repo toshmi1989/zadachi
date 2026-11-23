@@ -4,7 +4,7 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .db import DATA_DIR, DB_PATH, TZ, audit, tx
 
@@ -18,7 +18,10 @@ def _files() -> list[str]:
 
 def make() -> str:
     os.makedirs(DIR, exist_ok=True)
-    name = f"{PREFIX}{datetime.now(TZ).strftime('%Y%m%d-%H%M%S')}.db"
+    t = datetime.now(TZ)
+    while os.path.exists(os.path.join(DIR, f"{PREFIX}{t.strftime('%Y%m%d-%H%M%S')}.db")):
+        t += timedelta(seconds=1)          # two copies in one second (a copy before a merge, then one before an erase) never overwrite each other
+    name = f"{PREFIX}{t.strftime('%Y%m%d-%H%M%S')}.db"
     path = os.path.join(DIR, name)
     src, dst = sqlite3.connect(DB_PATH), sqlite3.connect(path)
     try:
