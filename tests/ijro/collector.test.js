@@ -297,5 +297,10 @@ const fake = http.createServer((req, res) => {
   ok(core.deepFind({ a: { b: { modification_date: "2026-11-10 10:00" } }, modification_date: null }, "modification_date", 3) === "2026-11-10 10:00" && core.deepFind({ x: 1 }, "modification_date", 3) === undefined
     && core.deepFind({ doc: { due_date_changed: false } }, "due_date_changed", 3) === false, "the dates of the card are found at any depth, null at the top does not hide them");
 
+  // ---- the diagnostics of a given task: its dates only, nothing personal
+  const df = core.dateFields({ updated_time: "1783695464268194", modification_date: null, due_date_changed: false, full_name: "Ivanov Ivan", birthday: "1980-01-01", phone: "998", nested: { request_due_date: "2026-12-05", sign_at: "2026-11-06T21:38:00+05:00", contents: "text" } }, "", 3, {});
+  ok(df.updated_time === "1783695464268194" && df.modification_date === null && df.due_date_changed === false && df["nested.request_due_date"] === "2026-12-05" && df["nested.sign_at"]
+    && !("full_name" in df) && !("birthday" in df) && !("phone" in df) && !("nested.contents" in df), "the date fields are listed with their values; names, birthdays, phones and texts are not");
+
   fake.close(); console.log(fails ? fails + " FAILED" : "ALL PASS"); process.exit(fails ? 1 : 0);
 })().catch(e => { console.error("ERROR", e); process.exit(1); });

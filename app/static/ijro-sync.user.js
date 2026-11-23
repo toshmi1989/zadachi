@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.8.2
+// @version      1.8.3
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.8.2";
+  const VERSION = "1.8.3";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -357,19 +357,29 @@
     return typeof v;
   };
   /* what the answers look like, without any value that could be personal: names of fields, their types, small numbers */
-  async function diagnose({ server, client, session }) {
+  /* every date-like value of an object (names of fields that say date / time / term / change, with their values): timestamps and flags only, nothing personal */
+  const dateFields = (o, path, depth, out) => {
+    if (!o || typeof o !== "object" || o instanceof Uint8Array || depth < 0 || Object.keys(out).length > 120) return out;
+    for (const k of Array.isArray(o) ? o.slice(0, 3).keys() : Object.keys(o)) {
+      const v = o[k], p = path ? path + "." + k : String(k);
+      if (v && typeof v === "object" && !(v instanceof Uint8Array)) { dateFields(v, p, depth - 1, out); continue; }
+      if (/date|time|_at$|_ms$|due|modif|chang|extend|prolong|postpon|period|sign/i.test(String(k)) && !/birth|phone|name/i.test(String(k)) && (v === null || ["string", "number", "boolean"].includes(typeof v))) out[p] = v;
+    }
+    return out;
+  };
+  async function diagnose({ server, client, session, code }) {
     const job = await server("GET", "/api/sync/job");
     const out = { script: VERSION, session: session ? { has_session_id: !!session.id, year: session.year, has_recipient_db_id: !!session.recipientDb, page_template_seen: !!session.template, template_keys: session.template ? Object.keys(session.template) : [] } : null, job_items: job.items.length, probes: [] };
-    for (const t of job.items.slice(0, 15)) {
+    for (const t of (code ? [{ code: String(code).trim().toUpperCase() }] : job.items.slice(0, 15))) {      // a given code (e.g. a task whose term moved), else the first ones
       for (const s of job.sections) {
         const info = {};
         const it = await client.find(t.code, s, info);
         if (it) {
           const id = it.id ?? it.recipient_id;
           const ans = await client.answers(id).catch(e => [{ error: String(e.message || e) }]);
-          const cardRes = await client.card(id).then(c => ({ ok: true, is_secret: c.is_secret, raw_flag: deepFind(c.raw, "due_date_changed", 3), raw_mod: deepFind(c.raw, "modification_date", 3), raw_req: deepFind(c.raw, "request_due_date", 3), shape: shapeDeep(c.raw, 2) }), e => ({ ok: false, error: String(e.message || e) }));
+          const cardRes = await client.card(id).then(c => ({ ok: true, is_secret: c.is_secret, all_dates: dateFields(c.raw, "", 3, {}), raw_flag: deepFind(c.raw, "due_date_changed", 3), raw_mod: deepFind(c.raw, "modification_date", 3), raw_req: deepFind(c.raw, "request_due_date", 3), shape: shapeDeep(c.raw, 2) }), e => ({ ok: false, error: String(e.message || e) }));
           const per = Array.isArray(it.repeat_periods) && it.repeat_periods[0] ? shapeDeep(it.repeat_periods[0], 1) : null;
-          return Object.assign(out, { dates: { updated_time: it.updated_time ?? null, modification_date: it.modification_date ?? null, task_due_date_ms: it.task_due_date_ms ?? null, card_due_date_changed: cardRes.ok && cardRes.raw_flag !== undefined ? cardRes.raw_flag : null, card_modification_date: cardRes.ok ? (cardRes.raw_mod ?? null) : null, card_request_due_date: cardRes.ok ? (cardRes.raw_req ?? null) : null }, found: true, section: s.id, matched_by: ownCodeOf(it) ? "code_in_item" : "server_filter", ambiguous: info.ambiguous || 0, item: shapeDeep(it, 2), repeat_period: per, card: cardRes, answers_count: ans.length, answer: shapeDeep(ans[0], 3) });
+          return Object.assign(out, { all_dates: { item: dateFields(it, "", 3, {}), answers: ans.slice(0, 6).map(a => dateFields(a, "", 1, {})) }, dates: { updated_time: it.updated_time ?? null, modification_date: it.modification_date ?? null, task_due_date_ms: it.task_due_date_ms ?? null, card_due_date_changed: cardRes.ok && cardRes.raw_flag !== undefined ? cardRes.raw_flag : null, card_modification_date: cardRes.ok ? (cardRes.raw_mod ?? null) : null, card_request_due_date: cardRes.ok ? (cardRes.raw_req ?? null) : null }, found: true, section: s.id, matched_by: ownCodeOf(it) ? "code_in_item" : "server_filter", ambiguous: info.ambiguous || 0, item: shapeDeep(it, 2), repeat_period: per, card: cardRes, answers_count: ans.length, answer: shapeDeep(ans[0], 3) });
         }
       }
     }
@@ -407,7 +417,7 @@
     throw last;
   }
 
-  const core = { deepFind, withRetry, orgOf, encode, decode, makeClient, runSync, finishRun, newRun, runExports, fetchExport, exportBody, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
+  const core = { dateFields, deepFind, withRetry, orgOf, encode, decode, makeClient, runSync, finishRun, newRun, runExports, fetchExport, exportBody, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
   if (typeof module !== "undefined" && module.exports) { module.exports = core; return; }
   if (typeof GM_xmlhttpRequest === "undefined" || typeof document === "undefined") return;
 
@@ -486,7 +496,8 @@
     $("stop").onclick = () => { stop = true; };
     $("diag").onclick = async () => {
       if (running) return; running = true; log("Диагностика…");
-      try { const r = await diagnose({ server, client: client(), session: state }); const t = JSON.stringify(r, null, 2); log(t); try { await navigator.clipboard.writeText(t); log("Скопировано в буфер обмена. Отправьте это разработчику.\n" + t); } catch (e) { /* shown anyway */ } }
+      const asked = prompt("Диагностика: код задачи (например, MDO7615). Пусто — первые задачи из списка.", ""); if (asked === null) { running = false; log("Диагностика отменена."); return; }
+      try { const r = await diagnose({ server, client: client(), session: state, code: asked.trim() }); const t = JSON.stringify(r, null, 2); log(t); try { await navigator.clipboard.writeText(t); log("Скопировано в буфер обмена. Отправьте это разработчику.\n" + t); } catch (e) { /* shown anyway */ } }
       catch (e) { log("Ошибка: " + e.message); } running = false;
     };
     $("go").onclick = async () => {
