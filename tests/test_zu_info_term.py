@@ -33,14 +33,14 @@ def test_the_stage_depends_on_when_the_term_was_changed(admin):
     assert S(snap(ext_date="2026-11-01"))["code"] == "info"                               # the extension is older than the answer
     assert S(snap(due_mod_ms=ANSWER + 2 * HOUR))["code"] == "info_term"                   # the card's own modification date
     assert S(snap(due_mod_ms=ANSWER - 2 * HOUR))["code"] == "info"
-    # the real cards: the flag of the card + the moment of the last change of the task
-    assert S(snap(due_changed=1, updated_ms=ANSWER + 34))["code"] == "info_term"          # the term was moved by the very answer (the task changed 34 ms after it): dealt with
-    assert S(snap(due_changed=1, updated_ms=ANSWER + 3 * 24 * HOUR))["code"] == "info_term"  # moved later
-    assert S(snap(due_changed=1))["code"] == "info_term"                                  # the flag alone, no time known
+    # the flag of the card is true for every task whose term was ever changed: it does not move a task by itself
+    assert S(snap(due_changed=1))["code"] == "info"
+    assert S(snap(due_changed=1, updated_ms=ANSWER + 34))["code"] == "info"               # changed 34 ms after the answer: the answer's own bump, nothing says the term moved
+    assert S(snap(due_changed=1, updated_ms=ANSWER + 3 * 24 * HOUR))["code"] == "info_term"   # the task was changed by the site three days after the answer
     assert S(snap(due_changed=0, updated_ms=ANSWER + 3 * 24 * HOUR))["code"] == "info"    # the card says the term was never changed
-    assert S(snap(due_changed=1, updated_ms=ANSWER - 3 * 24 * HOUR))["code"] == "info"    # the task was last changed long before the answer
     assert S(snap(due_changed=1, ext_date="2026-11-01"))["code"] == "info"                # the list says the extension is older than the answer: the Chamber answered after it
     assert S(snap(due_changed=1, ext_date="2026-11-06"))["code"] == "info_term"           # the same day as the answer: counts
+    assert S(snap(due_changed=0, ext_date="2026-11-10"))["code"] == "info_term"           # the date of the list decides before the flag
     ev = S(snap(ext_date="2026-11-10"))["evidence"]
     assert "06.11.2026" in ev and "10.11.2026" in ev                                      # the administrator is shown the dates the decision stands on
     assert "нет" in S(snap())["evidence"] and "evidence" not in S(snap(), dates=False) or S(snap(), dates=False)["evidence"] == ""

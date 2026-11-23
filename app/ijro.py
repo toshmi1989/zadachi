@@ -115,26 +115,20 @@ def _local_day(ms: int) -> str:
 
 
 def term_changed_after(snap, answer_ms: int) -> bool:
-    """The Chamber of Accounts accepted the answer for information at `answer_ms`. Is the term of the task already changed (extended) since then, or by that very answer?
-    Then the task has been dealt with: a new term is in place, nothing waits for us. What the site gives (checked on its real cards):
-      the card's flag «due_date_changed» is true only for a task whose term was changed (false for a task that never was), and the task's updated_time is the moment
-      of its last change: for a task that the Chamber returned and whose term was moved at once it is the moment of the answer (34 ms later), for one whose term was
-      moved later it is that later moment. The site gives no separate date of the term's change; the Excel list has one («Муддат узайтириш санаси»).
-    In this order:
-      the extension date of the Excel list: on or after the day of the answer -> yes, earlier -> no (the term was moved before the Chamber answered);
+    """The Chamber of Accounts accepted the answer for information at `answer_ms`. Was the term of the task changed (extended) AFTER that, or by that very answer?
+    Then the task has been dealt with: a new term is in place, nothing waits for us. What the site gives (checked on its real cards): the card's flag «due_date_changed» is
+    true for EVERY task whose term was ever changed, so it cannot tell one task from another; `updated_time` is the moment of the task's last change (the Chamber's own
+    answer moves it too); the site has no separate date of the term's change. The Excel list has one («Муддат узайтириш санаси»): it decides, in this order:
+      the extension date of the Excel list: on or after the day of the answer -> yes (the term was moved by the answer or later), earlier -> no;
       the card says the term was never changed -> no;
-      the card says it was, and the task was last changed at or after the answer (up to 5 minutes before: clocks) -> yes;
-      without the card's flag: the date of the card's modification, the change seen by the synchronisation after the answer, or the task changed by the site later
-        than 5 minutes after the answer -> yes."""
+      the card's modification date, the change that the synchronisation saw after the answer, or the task changed by the site more than 5 minutes after the answer -> yes;
+      nothing of this: the task stays «Палата вернула» (a task is not taken out of the list that waits for us on a guess)."""
     ext = _opt(snap, "ext_date")
     if ext:
         return ext >= _local_day(answer_ms)
-    flag, upd = _opt(snap, "due_changed"), _opt(snap, "updated_ms")
-    if flag == 0:
+    if _opt(snap, "due_changed") == 0:
         return False
-    if flag == 1 and (upd is None or upd >= answer_ms - 5 * 60 * 1000):
-        return True
-    mod, seen = _opt(snap, "due_mod_ms"), _opt(snap, "term_seen_ms")
+    mod, seen, upd = _opt(snap, "due_mod_ms"), _opt(snap, "term_seen_ms"), _opt(snap, "updated_ms")
     if mod and mod > answer_ms + 60 * 1000:
         return True
     if seen and seen > answer_ms:
@@ -151,7 +145,7 @@ def term_evidence(snap, answer_ms: int) -> str:
              f"дата продления срока в списке сайта: {fd(ext)}" if ext else "даты продления срока в списке сайта нет (загрузите свежий список Excel)",
              f"дата изменения срока в карточке: {ft(mod)}" if mod else "",
              f"задача изменена на сайте: {ft(upd)}" if upd else "",
-             {1: "карточка сайта: срок задачи менялся", 0: "карточка сайта: срок задачи не менялся"}.get(_opt(snap, "due_changed"), ""),
+             {1: "карточка сайта: срок задачи менялся когда-то (флаг не говорит когда)", 0: "карточка сайта: срок задачи не менялся"}.get(_opt(snap, "due_changed"), ""),
              f"синхронизация увидела новый срок: {ft(seen)}" if seen else ""]
     return "; ".join(x for x in parts if x)
 
