@@ -207,7 +207,7 @@ def read_rows(c, raw_all: list[dict], due_from: str | None, due_to: str | None, 
                 d["how"] = "people"
     lo = parse_date(due_from)[0] if due_from else None
     hi = parse_date(due_to)[0] if due_to else None
-    owner = {r["code"]: r["assignee_raw"] for r in c.execute("SELECT code, assignee_raw FROM tasks WHERE assignee_raw != ''")}
+    owner = {(r["site_code"] or r["code"]): r["assignee_raw"] for r in c.execute("SELECT code, site_code, assignee_raw FROM tasks WHERE assignee_raw != ''")}
     cand: dict[str, list[dict]] = {}
     for r in raw:
         if by_kind and not_kept_kind(r["kind"]):                                # a kind of document of the Cabinet's list that is not kept
@@ -230,9 +230,12 @@ def read_rows(c, raw_all: list[dict], due_from: str | None, due_to: str | None, 
         if (lo and due < lo) or (hi and due > hi):
             skipped["window"] += 1
             continue
-        cand.setdefault(r["code"], []).append(dict(r, _due=due, _unit=uid))
+        cand.setdefault((r["code"], due), []).append(dict(r, _due=due, _unit=uid))      # a periodic task has a row for EVERY period (its own term): each is kept
+    dues_of: dict[str, set] = {}
+    for (code, due) in cand:
+        dues_of.setdefault(code, set()).add(due)
     rows = []
-    for code, lst in cand.items():
+    for (code, _due0), lst in cand.items():
         mine = auth.norm_name(owner.get(code, ""))
         lst.sort(key=lambda x: (auth.norm_name(x["who"]) != mine, x["role"] != "Асосий", x["_due"]))   # the person who already has the task, then the main executor, then the earliest term
         r = lst[0]
@@ -244,7 +247,7 @@ def read_rows(c, raw_all: list[dict], due_from: str | None, due_to: str | None, 
 
         st = STATE.get(r["state"].strip().casefold(), "todo")
         rows.append({"code": code, "seq": 0, "kind": kind_of(r["kind"]), "doc_no": doc_no, "doc_date": doc_date, "point": point, "text": text, "due": r["_due"], "close_date": None,
-                     "who": r["who"], "status": st, "tag": "", "unit_id": r["_unit"], "department": r["dept"], "ext": r["ext"],
+                     "who": r["who"], "status": st, "tag": "", "unit_id": r["_unit"], "department": r["dept"], "ext": r["ext"], "occ": len(dues_of[code]),
                      "ext_date": last_date(r.get("ext_d")), "ext_n": int(r["ext"]) if str(r["ext"]).strip().isdigit() else None})
     votes: dict[tuple, int] = {}            # which unit the export puts a person in, and where he is now
     for r in rows:
@@ -273,7 +276,8 @@ def absent(c, data_codes: set[str], due_from: str | None, due_to: str | None) ->
         q += " AND due >= ?"; args.append(due_from)
     if due_to:
         q += " AND due <= ?"; args.append(due_to)
-    return [dict(r) for r in c.execute(q, args) if r["code"] not in data_codes]
+    q = q.replace("SELECT code,", "SELECT code, site_code,")
+    return [dict(r) for r in c.execute(q, args) if (r["site_code"] or r["code"]) not in data_codes]
 
 
 def save_aliases(c, mapping: dict[str, int | None]) -> int:

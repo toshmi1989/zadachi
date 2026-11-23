@@ -130,27 +130,93 @@ def _same_words(a, b) -> bool:
     return flat(a) == flat(b)
 
 
-def store_ext(c, rows: list[dict]) -> None:
+def _days_apart(a: str | None, b: str | None) -> int:
+    from datetime import date as _d
+    try:
+        return abs((_d.fromisoformat(a) - _d.fromisoformat(b)).days)
+    except (TypeError, ValueError):
+        return 10 ** 6
+
+
+def _periods_of(c) -> dict[int, set]:
+    """{task id: the terms (ISO dates) of all the periods of a periodic task} as the synchronisation read them from the site."""
+    import json
+    from datetime import datetime, timezone
+    out: dict[int, set] = {}
+    for r in c.execute("SELECT task_id, periods FROM ijro_snapshots WHERE repeatable=1 AND periods != '[]'"):
+        try:
+            ps = json.loads(r["periods"])
+        except ValueError:
+            continue
+        out[r["task_id"]] = {datetime.fromtimestamp(p["due_ms"] / 1000, timezone.utc).date().isoformat() for p in ps if isinstance(p, dict) and p.get("due_ms")}
+    return out
+
+
+class Matcher:
+    """Which task of ours a row of the site's file is. A task is a CODE at a TERM: a periodic task has a row for every period, each with its own term, and each period is
+    its own task on the dashboard (its month, its status). A row is
+      the task with the same code and the same term, if there is one;
+      an extension of the task (the file says the term was extended: «Муддат узайтириш сони» is a number): the nearest term of that code;
+      another PERIOD when the code is periodic (the file has several terms of the code, or the code already has several tasks, or the site's own list of the periods
+        has this term): a new task «КОД#срок», shown with the site's code;
+      otherwise the same task with a new term (the term of an ordinary task moved)."""
+    def __init__(self, c):
+        self.c = c
+        self.by_site: dict[str, list] = {}
+        for t in c.execute("SELECT * FROM tasks"):
+            self.by_site.setdefault(t["site_code"] or t["code"], []).append(dict(t))
+        self.periods = _periods_of(c)
+        self.taken = {t["code"] for ts in self.by_site.values() for t in ts}
+
+    def find(self, r: dict):
+        sibs = self.by_site.get(r["code"], [])
+        for t in sibs:
+            if t["due"] == r["due"]:
+                return t
+        if not sibs:
+            return None
+        if (r.get("ext_n") or 0) > 0:
+            return min(sibs, key=lambda t: _days_apart(t["due"], r["due"]))
+        if r.get("occ", 1) > 1 or len(sibs) > 1 or any(r["due"] in self.periods.get(t["id"], ()) for t in sibs):
+            return None
+        return sibs[0]
+
+    def new_code(self, r: dict) -> str:
+        sibs = self.by_site.get(r["code"], [])
+        code = r["code"] if not sibs else f"{r['code']}#{r['due']}"
+        n = 2
+        while code in self.taken:
+            code, n = f"{r['code']}#{r['due']}-{n}", n + 1
+        self.taken.add(code)
+        return code
+
+    def add(self, t: dict) -> None:
+        self.by_site.setdefault(t["site_code"] or t["code"], []).append(t)
+
+
+def store_ext(c, pairs: list) -> None:
     """The extension date of the site's list («Муддат узайтириш санаси») and the number of extensions: kept on the task and copied to what was read from the site,
-    because the Chamber's «accepted for information» answer only means «waiting for us» until the term is extended after it."""
-    for r in rows:
-        if "unit_id" not in r:
+    because the Chamber's «accepted for information» answer only means «waiting for us» until the term is extended after it. pairs: [(task id, row)]."""
+    for tid, r in pairs:
+        if tid is None or "unit_id" not in r:
             continue                      # only the raw export of the site has these columns
-        c.execute("UPDATE tasks SET ext_date=?, ext_n=? WHERE code=?", (r.get("ext_date"), r.get("ext_n"), r["code"]))
-        c.execute("UPDATE ijro_snapshots SET ext_date=? WHERE task_id=(SELECT id FROM tasks WHERE code=?)", (r.get("ext_date"), r["code"]))
+        c.execute("UPDATE tasks SET ext_date=?, ext_n=? WHERE id=?", (r.get("ext_date"), r.get("ext_n"), tid))
+        c.execute("UPDATE ijro_snapshots SET ext_date=? WHERE task_id=?", (r.get("ext_date"), tid))
 
 
 def apply_status(c, rows: list[dict], warnings: list[str], filename: str, user_id: int | None, dry: bool) -> dict:
     """The ordinary import: ONLY the statuses of tasks that are already in the base. A task that is not in the base is counted, never created;
     texts, terms, responsible people are not touched; what the administrator edited by hand stays as it is."""
-    existing = {r["code"]: r for r in c.execute("SELECT id, code, status, edited FROM tasks")}
+    m = Matcher(c)
     updated = same = kept = missing = 0
     t = now()
+    ext_pairs = []
     for r in rows:
-        cur = existing.get(r["code"])
-        if cur is None:
+        cur = m.find(r)
+        if cur is None:                          # not in the base (another period of a periodic task is not created here either)
             missing += 1
             continue
+        ext_pairs.append((cur["id"], r))
         raw = "unit_id" in r                     # a raw export of the site (its "in progress" never lowers our status)
         if cur["status"] == "gone" and raw:      # the site lists it as ours again: back on the dashboard
             new = r["status"]
@@ -169,7 +235,7 @@ def apply_status(c, rows: list[dict], warnings: list[str], filename: str, user_i
         if not dry:
             c.execute("UPDATE tasks SET status=?, done_at=?, updated_at=? WHERE id=?", (new, t if new == "done" else None, t, cur["id"]))
     if not dry:
-        store_ext(c, rows)
+        store_ext(c, ext_pairs)
     summary = {"rows": len(rows), "created": 0, "updated": updated, "unchanged": same, "kept_manual": kept, "missing": missing,
                "new_people": [], "warnings": warnings, "dry": dry, "mode": "status"}
     if not dry:
@@ -182,8 +248,8 @@ def apply_status(c, rows: list[dict], warnings: list[str], filename: str, user_i
 def absent_tasks(c, present: set) -> list[dict]:
     """The tasks of the base whose code is not in the loaded file, whatever their status: the base is loaded as a whole, so what is not in it is no longer in the base.
     A task added by hand is not in any file and is never one of them."""
-    return [dict(r) for r in c.execute("SELECT id, code, status, doc_no, point, substr(text, 1, 120) AS text, due FROM tasks WHERE status != 'gone' AND manual=0 ORDER BY code")
-            if r["code"] not in present]
+    return [dict(r) for r in c.execute("SELECT id, code, site_code, status, doc_no, point, substr(text, 1, 120) AS text, due FROM tasks WHERE status != 'gone' AND manual=0 ORDER BY code")
+            if (r["site_code"] or r["code"]) not in present]
 
 
 def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int | None, dry: bool, mode: str = "base", overwrite: bool = False) -> dict:
@@ -198,8 +264,9 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
         if u["excel_name"]:
             users[auth.norm_name(u["excel_name"])] = u["id"]
     new_people, created, updated, same, kept, overwritten = [], 0, 0, 0, 0, 0
-    existing = {r["code"]: r for r in c.execute("SELECT * FROM tasks")}
+    m = Matcher(c)
     t = now()
+    ext_pairs = []
     for r in rows:
         key = auth.norm_name(r["who"])
         uid = users.get(key) if key else None
@@ -214,15 +281,21 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
                 new_people[-1]["login"] = login
         if uid and r.get("unit_id") and not dry:   # the department of the export tells where a person without a unit of ours belongs
             c.execute("UPDATE users SET unit_id=? WHERE id=? AND unit_id IS NULL", (r["unit_id"], uid))
-        cur_row = existing.get(r["code"])
+        cur_row = m.find(r)
         if cur_row is None:
             created += 1
+            code = m.new_code(r)
+            new_id = None
             if not dry:
-                c.execute("""INSERT INTO tasks(code, seq, kind, doc_no, doc_date, point, text, due, close_date, assignee_id, assignee_raw,
-                             status, tag, done_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                          (r["code"], r["seq"], r["kind"], r["doc_no"], r["doc_date"], r["point"], r["text"], r["due"], r["close_date"],
+                cur = c.execute("""INSERT INTO tasks(code, site_code, seq, kind, doc_no, doc_date, point, text, due, close_date, assignee_id, assignee_raw,
+                             status, tag, done_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                          (code, r["code"], r["seq"], r["kind"], r["doc_no"], r["doc_date"], r["point"], r["text"], r["due"], r["close_date"],
                            uid, r["who"], r["status"], r["tag"], t if r["status"] == "done" else None, t, t))
+                new_id = cur.lastrowid
+            m.add({"id": new_id, "code": code, "site_code": r["code"], "due": r["due"], "status": r["status"], "edited": 0, "close_src": "", "manual": 0})
+            ext_pairs.append((new_id, r))
             continue
+        ext_pairs.append((cur_row["id"], r))
         fields = {"seq": r["seq"], "kind": r["kind"], "doc_no": r["doc_no"], "doc_date": r["doc_date"], "point": r["point"],
                   "text": r["text"], "due": r["due"], "assignee_raw": r["who"], "tag": r["tag"]}
         if "unit_id" in r:
@@ -257,7 +330,7 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
             diff["updated_at"] = t
             c.execute(f"UPDATE tasks SET {', '.join(k + '=?' for k in diff)} WHERE id=?", (*diff.values(), cur_row["id"]))
     if not dry:
-        store_ext(c, rows)
+        store_ext(c, ext_pairs)
     summary = {"rows": len(rows), "created": created, "updated": updated, "unchanged": same, "kept_manual": kept, "overwritten": overwritten,
                "new_people": new_people, "warnings": warnings, "dry": dry, "mode": "base"}
     if not dry:

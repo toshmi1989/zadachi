@@ -480,7 +480,7 @@ async def api_task_by_codes(request: Request):
             if not ijro.CODE_RE.fullmatch(code):
                 invalid.append(tok[:30])
                 continue
-            if c.execute("SELECT 1 FROM tasks WHERE code=?", (code,)).fetchone():
+            if c.execute("SELECT 1 FROM tasks WHERE code=? OR site_code=?", (code, code)).fetchone():
                 existing.append(code)
                 continue
             c.execute("""INSERT INTO tasks(code, seq, kind, doc_no, point, text, status, tag, manual, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",

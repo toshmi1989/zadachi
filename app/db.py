@@ -268,6 +268,7 @@ MIGRATIONS = [
     "ALTER TABLE ijro_snapshots ADD COLUMN ext_date TEXT",               # «Муддат узайтириш санаси» of the Excel list: the date the term was extended (a copy of tasks.ext_date)
     "ALTER TABLE tasks ADD COLUMN ext_date TEXT",
     "ALTER TABLE tasks ADD COLUMN ext_n INTEGER",
+    "ALTER TABLE tasks ADD COLUMN site_code TEXT NOT NULL DEFAULT ''",        # the code of the site when the task is one PERIOD of a periodic task (code is then «КОД#срок»); empty = code
     "ALTER TABLE tasks ADD COLUMN manual INTEGER NOT NULL DEFAULT 0",       # 1 = a task added by hand: a loaded base never takes it off the dashboard
 ]
 # pw_set = somebody has issued this person a password (people created by the Excel import have none yet)

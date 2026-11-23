@@ -139,7 +139,7 @@ def row_out(r, by: str) -> dict:
     eff = eff_value(r, by)
     t = today()
     return {
-        "id": r["id"], "code": r["code"], "num": r["seq"], "kind": r["kind"], "doc_no": r["doc_no"], "doc_date": r["doc_date"],
+        "id": r["id"], "code": r["site_code"] or r["code"], "num": r["seq"], "kind": r["kind"], "doc_no": r["doc_no"], "doc_date": r["doc_date"],
         "point": r["point"], "text": r["text"], "due": None if by == "strict" else r["due"], "close_date": r["close_date"], "eff": eff,
         "close_src": r["close_src"], "close_note": r["close_note"],
         "days": (date.fromisoformat(eff) - t).days if eff else None,

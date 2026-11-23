@@ -479,7 +479,9 @@ def claim(c, key_id: int, run_id: int, codes: list) -> dict:
     codes = [x for x in codes if isinstance(x, str)][:100]
     if not codes:
         return {"granted": [], "taken": []}
-    ids = {r["code"]: r["id"] for r in c.execute(f"SELECT id, code FROM tasks WHERE code IN ({','.join('?' * len(codes))})", codes)}
+    ids = {}
+    for r in c.execute(f"SELECT id, COALESCE(NULLIF(site_code, ''), code) AS code FROM tasks WHERE COALESCE(NULLIF(site_code, ''), code) IN ({','.join('?' * len(codes))}) ORDER BY id", codes):
+        ids.setdefault(r["code"], r["id"])
     granted, taken = [], []
     busy = {r["task_id"] for r in c.execute("SELECT task_id FROM sync_claims WHERE key_id IS NOT ? AND claimed_at >= ?", (key_id, _ago(CLAIM_MINUTES)))}
     fresh = {r["task_id"] for r in c.execute("""SELECT s.task_id FROM ijro_snapshots s LEFT JOIN sync_runs r ON r.id=s.run_id
@@ -500,12 +502,16 @@ def job(c, key_id: int, resume: bool = False) -> dict:
     term is in the current month. The section order for each follows the document kind.
     With resume, what was checked in the last hours is skipped: the run goes on where an interrupted one stopped."""
     cond, args = history_filter()
-    sql = "SELECT t.id, t.code, t.kind FROM tasks t WHERE 1=1" + cond
+    sql = "SELECT t.id, COALESCE(NULLIF(t.site_code, ''), t.code) AS code, t.kind FROM tasks t WHERE 1=1" + cond
     if resume:
         from datetime import timedelta
         sql += " AND t.id NOT IN (SELECT task_id FROM ijro_snapshots WHERE checked_at >= ?)"
         args.append((datetime.now(TZ) - timedelta(hours=RESUME_HOURS)).strftime("%Y-%m-%d %H:%M:%S"))
-    rows = c.execute(sql + " ORDER BY t.seq, t.id", args).fetchall()
+    rows, seen_codes = [], set()
+    for r in c.execute(sql + " ORDER BY t.seq, t.id", args).fetchall():      # the periods of a periodic task are one task on the site: it is read once, the result goes to all its periods
+        if r["code"] not in seen_codes:
+            seen_codes.add(r["code"])
+            rows.append(r)
     cond0, args0 = history_filter()
     outside = c.execute("SELECT COUNT(*) FROM tasks t WHERE t.manual IN (0, 2) AND t.status IN ('todo','progress') AND t.id NOT IN (SELECT t.id FROM tasks t WHERE 1=1" + cond0 + ")", args0).fetchone()[0]
     by_kind = {k: s["id"] for s in SECTIONS["sections"] for k in s["kinds"]}
@@ -635,12 +641,13 @@ def ingest(c, key_row, body: dict) -> dict:
     if not isinstance(items, list) or not items or len(items) > MAX_ITEMS:
         raise ValueError(f"Нужен список от 1 до {MAX_ITEMS} задач")
     run_id = _int(body.get("run_id"))
-    codes = {r["code"]: r["id"] for r in c.execute("SELECT id, code FROM tasks")}
+    by_site: dict[str, list[int]] = {}
+    for r in c.execute("SELECT id, COALESCE(NULLIF(site_code, ''), code) AS code FROM tasks ORDER BY id"):
+        by_site.setdefault(r["code"], []).append(r["id"])
     stored = found = 0
     touched: list[int] = []
-    for it in items:
-        if not isinstance(it, dict) or not isinstance(it.get("code"), str) or it["code"] not in codes:
-            continue   # a code we do not have is ignored: the collector can never create tasks
+    expanded = [(tid, it) for it in items if isinstance(it, dict) and isinstance(it.get("code"), str) for tid in by_site.get(it["code"], [])]   # a code we do not have is ignored: the collector can never create tasks; the periods of a periodic task are all one code
+    for tid, it in expanded:
         sec = it.get("section") if it.get("section") in SECTION_BY_ID else ""
         is_found = bool(it.get("found")) and bool(sec)
         periods = []
@@ -665,7 +672,7 @@ def ingest(c, key_row, body: dict) -> dict:
         rid = str(rid)[:64] if isinstance(rid, (str, int)) and not isinstance(rid, bool) else ""
         ref = it.get("task_ref")
         ref = str(ref)[:64] if isinstance(ref, (str, int)) and not isinstance(ref, bool) else ""
-        old_row = c.execute("SELECT due_ms, answers FROM ijro_snapshots WHERE task_id=?", (codes[it["code"]],)).fetchone()
+        old_row = c.execute("SELECT due_ms, answers FROM ijro_snapshots WHERE task_id=?", (tid,)).fetchone()
         seen_ms = None
         if old_row and is_found and old_row["due_ms"] and _int(it.get("due_ms")) and _day(old_row["due_ms"]) != _day(_int(it.get("due_ms"))):
             prev = current_answer(json.loads(old_row["answers"] or "[]"))
@@ -689,13 +696,13 @@ def ingest(c, key_row, body: dict) -> dict:
                        due_mod_ms=CASE WHEN excluded.found=1 THEN excluded.due_mod_ms ELSE ijro_snapshots.due_mod_ms END,
                        task_updated_ms=CASE WHEN excluded.found=1 AND excluded.task_updated_ms IS NOT NULL THEN excluded.task_updated_ms ELSE ijro_snapshots.task_updated_ms END,
                        term_seen_ms=COALESCE(excluded.term_seen_ms, ijro_snapshots.term_seen_ms)""",
-                  (codes[it["code"]], int(is_found), sec if is_found else "", rid if is_found else "", ref if is_found else "", _int(it.get("status")) if is_found else None,
+                  (tid, int(is_found), sec if is_found else "", rid if is_found else "", ref if is_found else "", _int(it.get("status")) if is_found else None,
                    int(bool(it.get("is_done"))), None if it.get("overdue") is None else int(bool(it.get("overdue"))), int(bool(it.get("repeatable"))),
                    _int(it.get("due_ms")), _int(it.get("done_ms")), json.dumps(periods), int(secret), json.dumps(answers, ensure_ascii=False), now(), run_id, total, upd_ms if is_found else None, dch if is_found else None, seen_ms, mod_ms if is_found else None, tupd_ms if is_found else None,
                    int(bool(it.get("answers_loaded"))), int(bool(it.get("answers_loaded")))))
-        c.execute("UPDATE ijro_snapshots SET ext_date=(SELECT ext_date FROM tasks WHERE id=?) WHERE task_id=?", (codes[it["code"]], codes[it["code"]]))
+        c.execute("UPDATE ijro_snapshots SET ext_date=(SELECT ext_date FROM tasks WHERE id=?) WHERE task_id=?", (tid, tid))
         stored += 1
-        touched.append(codes[it["code"]])
+        touched.append(tid)
         found += is_found
     auto, moved = 0, {"done": 0, "progress": 0, "due": 0}
     if setting("ijro_auto_apply") == "1":
@@ -787,7 +794,7 @@ def finish_run(c, run: str, complete: bool) -> dict:
     if r["files"] < export_files() or not complete:
         return {"judged": False, "why": f"Запуск неполный (файлов {r['files']} из {export_files()}{'' if complete else ', проверка статусов не завершена'}): задачи не трогаю"}
     rows = c.execute("""SELECT t.id, t.code, s.site_status, s.found, s.checked_at FROM tasks t LEFT JOIN ijro_snapshots s ON s.task_id=t.id
-                        WHERE t.status IN ('todo','progress') AND t.manual=0 AND t.code NOT IN (SELECT code FROM export_seen WHERE run=?)""", (run,)).fetchall()
+                        WHERE t.status IN ('todo','progress') AND t.manual=0 AND COALESCE(NULLIF(t.site_code, ''), t.code) NOT IN (SELECT code FROM export_seen WHERE run=?)""", (run,)).fetchall()
     stale, unsure = [], 0
     for x in rows:
         site_open = x["found"] and x["checked_at"] and x["checked_at"] >= r["created_at"] and x["site_status"] in SITE_OPEN_STATUSES
