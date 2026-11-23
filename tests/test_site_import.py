@@ -396,7 +396,7 @@ def test_the_download_plan_follows_the_setting(admin):
 def test_the_settings_of_the_import_are_explained_and_validated(admin):
     s = admin.get("/api/settings").json()["sync"]
     fields = {f["key"]: f for f in s["fields"]}
-    assert set(fields) == {"base_f_dept", "base_f_exec", "base_f_kind", "base_f_window", "base_manual", "base_absent", "sync_source", "sync_apply", "base_back", "base_fwd", "history_scope", "history_date", "history_statuses", "sync_parallel"}
+    assert set(fields) == {"base_f_dept", "base_f_exec", "base_f_kind", "base_f_window", "base_manual", "base_absent", "sync_source", "sync_apply", "base_back", "base_fwd", "history_scope", "history_date", "history_statuses", "sync_parallel", "history_days"}
     assert [fields[k]["value"] for k in ("base_f_dept", "base_f_exec", "base_f_kind", "base_f_window")] == ["1", "0", "0", "0"]     # departments are filtered; the files are already selected otherwise
     assert all(fields[k]["kind"] == "switch" and fields[k]["help"] for k in ("base_f_dept", "base_f_exec", "base_f_kind", "base_f_window"))
     assert fields["base_manual"]["value"] == "overwrite" and fields["base_absent"]["value"] == "gone"                  # the base overwrites; what is not in it leaves the dashboard

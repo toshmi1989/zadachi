@@ -74,6 +74,37 @@ def current_answer(answers: list[dict]):
     return (active or ordered)[-1]
 
 
+_DAYS = {"t": 0.0, "v": 30}
+
+
+def history_days() -> int:
+    """How many days back the answers of the site count (the setting; 0 = the whole history). Read at most once in a few seconds: a list of tasks asks it for every row."""
+    import time
+    if time.time() - _DAYS["t"] > 3:
+        v = setting("history_days")
+        _DAYS.update(t=time.time(), v=int(v) if str(v).isdigit() else 30)
+    return _DAYS["v"]
+
+
+def reset_history_days() -> None:
+    _DAYS["t"] = 0.0
+
+
+def window_ms() -> int | None:
+    """The oldest moment an answer may have to count (the start of the day `history_days` days ago, UTC), or None for the whole history."""
+    d = history_days()
+    return int(datetime.combine(today() - timedelta(days=d), datetime.min.time(), timezone.utc).timestamp() * 1000) if d else None
+
+
+def live_answers(snap) -> tuple[list[dict], int]:
+    """(the answers inside the window, how many the site has). An answer without a date is kept: nothing says it is old."""
+    allv = json.loads(snap["answers"] or "[]")
+    cut = window_ms()
+    keep = [a for a in allv if cut is None or not a.get("at_ms") or a["at_ms"] >= cut]
+    total = snap["answers_total"] if "answers_total" in snap.keys() else 0
+    return keep, max(len(allv), total or 0)
+
+
 def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
     """Where the task is on its way. {code, n (index in STAGE_STEPS, -1 = no answer yet), label, hint, attention, new_due}.
     code 'info': the Chamber of Accounts sent it back (accepted for information / asked for more): the task is NOT done and its term changes."""
@@ -82,7 +113,9 @@ def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
         return base | {"code": "not_found", "n": None, "label": "Не найдена на сайте", "hint": ""}
     periods = json.loads(snap["periods"] or "[]")
     periodic = bool(snap["repeatable"] and periods)
-    answers = json.loads(snap["answers"] or "[]")
+    scope_all = json.loads(snap["answers"] or "[]")          # everything stored; the answers older than the window do not count for the stage
+    cut = window_ms()
+    answers = [a for a in scope_all if cut is None or not a.get("at_ms") or a["at_ms"] >= cut]
     if periodic:
         # A periodic task has one list of answers for all its periods; each answer carries the term of its period ("pd"). The stage is read from the answers of
         # the period that our deadline stands for. A period that is done is simply done (the site's own status of the period says so).
@@ -93,6 +126,7 @@ def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
             # the answers do not say which period they belong to (read by an older collector): no stage is claimed, none is guessed
             return base | {"code": "period_unknown", "n": -1, "label": "Этап периода уточняется",
                            "hint": "Периодическая задача: этап берётся из ответов именно этого периода. Он появится после обновления скрипта и новой проверки задачи"}
+        scope_all = [a for a in scope_all if a.get("pd") and _day(a["pd"]) == want]
         answers = [a for a in answers if a.get("pd") and _day(a["pd"]) == want]
     cur = current_answer(answers)
     t = cur["sender_type"] if cur else None
@@ -120,6 +154,10 @@ def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
         return base | {"code": "moj", "n": 1, "label": "Адлия вазирлигида", "hint": "Ответ введён, идёт согласование в Минюсте"}
     if t is not None:   # a type we do not know: shown, not guessed
         return base | {"code": "chamber_other", "n": 3, "label": f"Ответ типа {t}", "hint": "Тип ответа не распознан: уточните на сайте", "attention": True}
+    site_total = (snap["answers_total"] if "answers_total" in snap.keys() else 0) or 0
+    if not answers and (scope_all or (site_total and not periodic)):   # the site has answers, but none in the last days: the stage is not guessed from an old one
+        return base | {"code": "quiet", "n": -1, "label": f"Нет ответов за последние {history_days()} дн.",
+                       "hint": f"Последний ответ на сайте старше {history_days()} дней (всего ответов: {max(len(scope_all), site_total)}): этап по такой истории не определяется. Откройте задачу на сайте."}
     if snap["site_status"] == 2 and not periodic:           # for a periodic task the general status says nothing about this period
         return base | {"code": "answered", "n": 0, "label": "Киритилди", "hint": "Ответ введён; этап уточнится при следующей проверке (нет данных об ответах)"}
     return base | {"code": "none", "n": -1, "label": "Ответ не введён", "hint": "Исполнитель ещё не ответил"}
@@ -292,6 +330,11 @@ SYNC_FIELDS = [
         ("month_overdue", "Текущий месяц и просроченные прошлых",
          "Текущий месяц плюс все ещё не выполненные задачи с более ранним сроком: чтобы не потерять давно просроченное, пока оно не закрыто."),
         ("month_next", "Текущий и следующий месяц", "Удобно в конце месяца: следующий уже в работе, а этапы нужны заранее.")]},
+    {"key": "history_days", "group": "history", "title": "За какой срок читать и хранить ответы сайта", "kind": "choice", "options": [
+        ("30", "Последний месяц (по умолчанию)", "Читаются и хранятся только ответы за последние 30 дней: в карточке задачи видна свежая история, этап определяется по ней. "
+         "Если последний ответ на сайте старше, задача получает пометку «Нет ответов за последние 30 дн.» (этап не угадывается по старому ответу), а на дашборде попадает в «Другое»."),
+        ("90", "Три месяца", "Для задач, которые долго идут по цепочке согласования. История длиннее, этапов определяется больше."),
+        ("0", "Вся история", "Читается и хранится всё, что есть на сайте (до 30 последних ответов). Этап считается по самому свежему ответу, каким бы старым он ни был.")]},
     {"key": "sync_parallel", "group": "history", "title": "Сколько задач читать одновременно", "kind": "choice", "options": [
         ("1", "По одной", "Самый бережный режим: сайт нагружается минимально, но проверка 250 задач занимает около 5 минут."),
         ("2", "По две", "Вдвое быстрее, чем по одной."),
@@ -414,7 +457,7 @@ def job(c, key_id: int, resume: bool = False) -> dict:
     by_kind = {k: s["id"] for s in SECTIONS["sections"] for k in s["kinds"]}
     cur = c.execute("INSERT INTO sync_runs(key_id, started_at, expected) VALUES (?,?,?)", (key_id, now(), len(rows)))
     return {"run_id": cur.lastrowid, "outside_scope": outside, "scope": setting("history_scope"), "api_tasks": SECTIONS["api_tasks"], "sections": SECTIONS["sections"],
-            "parallel": max(1, min(5, int(setting("sync_parallel") or 3))), "items": [{"code": r["code"], "section": by_kind.get(r["kind"], "")} for r in rows]}
+            "parallel": max(1, min(5, int(setting("sync_parallel") or 3))), "answers_days": history_days(), "items": [{"code": r["code"], "section": by_kind.get(r["kind"], "")} for r in rows]}
 
 
 # ---------------------------------------------------------------- mapping of the site's status to ours
@@ -492,7 +535,7 @@ def _ts(ms) -> str:
 def answers_out(snap) -> list[dict]:
     """The answers as the card shows them: the NEWEST first, each with the body that gave it (Ҳисоб палатаси, Вазирлар Маҳкамаси, Адлия вазирлиги, the executor ...)."""
     out = []
-    for a in json.loads(snap["answers"] or "[]"):
+    for a in live_answers(snap)[0]:
         out.append({"type": ANSWER_TYPES.get(a.get("sender_type"), f"Тип {a.get('sender_type')}"), "sender_type": a.get("sender_type"),
                     "state": a.get("state"), "at": _ts(a.get("at_ms")), "text": "" if snap["is_secret"] else a.get("text", ""),
                     "active": bool(a.get("active")), "org": "" if snap["is_secret"] else (a.get("org") or "")})
@@ -520,7 +563,7 @@ def site_info(snap, our_status: str, due: str | None = None, admin: bool = True)
             "proposed_label": STATUSES.get(cl["status"], "") if cl["status"] else "", "diff": diff,
             "site_open_we_done": bool(snap["found"] and cl["known"] and (cl["status"] in ("todo", "progress") or cl.get("open")) and our_status == "done"),
             "checked_at": snap["checked_at"], "link": card_link(snap), "exact_link": bool(setting("ijro_card_tpl").strip() and snap["recipient_id"]),
-            "secret": bool(snap["is_secret"]), "answers": answers_out(snap), "late": snap["site_status"] == 21,
+            "secret": bool(snap["is_secret"]), "answers": answers_out(snap), "answers_total": live_answers(snap)[1], "answers_days": history_days(), "late": snap["site_status"] == 21,
             "stage": {k: v for k, v in st.items() if k != "new_due" or admin}}
 
 
@@ -550,7 +593,12 @@ def ingest(c, key_row, body: dict) -> dict:
                 periods.append({"order": _int(p.get("order")), "status": _int(p.get("status")), "recipient_status": _int(p.get("recipient_status")), "due_ms": _int(p.get("due_ms"))})
         answers = []
         secret = bool(it.get("is_secret"))
-        for a in ((it.get("answers") or []) if is_found else [])[-MAX_ANSWERS:]:
+        raw_answers = ((it.get("answers") or []) if is_found else [])[-MAX_ANSWERS:]
+        cut = window_ms()
+        total = max(len(raw_answers), _int(it.get("answers_total")) or 0)
+        for a in raw_answers:
+            if cut is not None and _int(a.get("at_ms") if isinstance(a, dict) else None) and a["at_ms"] < cut:
+                continue                  # older than the window: not kept
             if isinstance(a, dict) and _int(a.get("sender_type")) is not None:   # an answer without a type means nothing: skipped
                 text = a.get("text") if isinstance(a.get("text"), str) else ""
                 org = a.get("org") if isinstance(a.get("org"), str) else ""
@@ -562,16 +610,17 @@ def ingest(c, key_row, body: dict) -> dict:
         ref = it.get("task_ref")
         ref = str(ref)[:64] if isinstance(ref, (str, int)) and not isinstance(ref, bool) else ""
         c.execute("""INSERT INTO ijro_snapshots(task_id, found, section, recipient_id, task_ref, site_status, is_done, overdue, repeatable, due_ms, done_ms,
-                                                periods, is_secret, answers, checked_at, run_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                                periods, is_secret, answers, checked_at, run_id, answers_total) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                      ON CONFLICT(task_id) DO UPDATE SET found=excluded.found, section=excluded.section, recipient_id=excluded.recipient_id, task_ref=excluded.task_ref,
                        site_status=excluded.site_status, is_done=excluded.is_done, overdue=excluded.overdue, repeatable=excluded.repeatable,
                        due_ms=excluded.due_ms, done_ms=excluded.done_ms, periods=excluded.periods, is_secret=excluded.is_secret,
                        answers=CASE WHEN excluded.found=1 AND ? THEN excluded.answers ELSE ijro_snapshots.answers END,
-                       checked_at=excluded.checked_at, run_id=excluded.run_id""",
+                       checked_at=excluded.checked_at, run_id=excluded.run_id,
+                       answers_total=CASE WHEN excluded.found=1 AND ? THEN excluded.answers_total ELSE ijro_snapshots.answers_total END""",
                   (codes[it["code"]], int(is_found), sec if is_found else "", rid if is_found else "", ref if is_found else "", _int(it.get("status")) if is_found else None,
                    int(bool(it.get("is_done"))), None if it.get("overdue") is None else int(bool(it.get("overdue"))), int(bool(it.get("repeatable"))),
-                   _int(it.get("due_ms")), _int(it.get("done_ms")), json.dumps(periods), int(secret), json.dumps(answers, ensure_ascii=False), now(), run_id,
-                   int(bool(it.get("answers_loaded")))))
+                   _int(it.get("due_ms")), _int(it.get("done_ms")), json.dumps(periods), int(secret), json.dumps(answers, ensure_ascii=False), now(), run_id, total,
+                   int(bool(it.get("answers_loaded"))), int(bool(it.get("answers_loaded")))))
         stored += 1
         touched.append(codes[it["code"]])
         found += is_found

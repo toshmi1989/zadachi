@@ -906,6 +906,7 @@ async def api_settings_put(request: Request):
         from .db import put_settings
         put_settings(c, values)
         audit(c, "settings.update", "settings", None, values)
+    ijro.reset_history_days()
     return {"ok": True}
 
 

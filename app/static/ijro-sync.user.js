@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.7.0
+// @version      1.7.1
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.7.0";
+  const VERSION = "1.7.1";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -203,14 +203,15 @@
     return { call, raw, find, answers, bodyFor, card };
   }
 
-  function snapshotOf(code, sectionId, it, answerList, loaded) {
+  function snapshotOf(code, sectionId, it, answerList, loaded, days) {
     const periods = (Array.isArray(it.repeat_periods) ? it.repeat_periods : []).map(p => ({ order: p.order_index, status: p.status, recipient_status: p.recipient_status, due_ms: toMs(p.due_date) }));
     const num = v => typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : null;
     return {
       code, found: true, section: sectionId, recipient_id: String(pick(it, ["id", "recipient_id"]) ?? ""), task_ref: String(it.task_id ?? ""), status: num(it.status), is_done: !!it.is_done,
       overdue: (() => { const v = pick(it, ["overdue", "is_overdue", "expired"]); return v === undefined ? null : !!v; })(),
       repeatable: !!(it.repeatable) || periods.length > 0, due_ms: toMs(pick(it, ["task_due_date_ms", "due_date"])), done_ms: toMs(it.done_at), periods, is_secret: !!it.is_secret, answers_loaded: !!loaded,
-      answers: (answerList || []).map(a => ({ a, t: toMs(pick(a, ["created_at_ms", "created_at", "date_row_ms", "date", "sent_at", "updated_at"])) })).sort((x, y) => (x.t || 0) - (y.t || 0)).slice(-30).map(({ a, t }) => ({ sender_type: num(a.sender_type), state: num(a.state), active: !!a.active,
+      answers_total: (answerList || []).length,      // how many answers the site has; only the last `days` days are sent
+      answers: (answerList || []).map(a => ({ a, t: toMs(pick(a, ["created_at_ms", "created_at", "date_row_ms", "date", "sent_at", "updated_at"])) })).filter(x => !days || !x.t || x.t >= Date.now() - days * 86400000).sort((x, y) => (x.t || 0) - (y.t || 0)).slice(-30).map(({ a, t }) => ({ sender_type: num(a.sender_type), state: num(a.state), active: !!a.active,
         org: orgOf(a), pd: toMs(a.period && a.period.due_date),
         at_ms: t, text: String(pick(a, ["contents", "comment", "text", "description", "content", "message", "note"]) ?? "").slice(0, 600) })),
     };
@@ -287,7 +288,7 @@
         try { ans = await client.answers(id); loaded = true; } catch (e) { if (e instanceof SessionError || e instanceof TransientError) throw e; }
         await sleep(pace);
       }
-      return Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded), { is_secret: secret });
+      return Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded, job.answers_days), { is_secret: secret });
     }
     /* the tasks are taken in small portions by several workers; before reading a portion the platform is asked which of it is free:
        what another person's run has taken or has just read is left to them (several people can press the button at once, and nobody reads the same twice) */

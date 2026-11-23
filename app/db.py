@@ -239,6 +239,7 @@ DEFAULT_SETTINGS = {
     "base_back": "30",            # a list that adds tasks takes terms from this many days back (empty = no limit) ...
     "base_fwd": "60",             # ... to this many days ahead (empty = no limit)
     "sync_parallel": "3",         # how many tasks the collector reads at the same time (1-5)
+    "history_days": "30",         # how far back the answers of the site are read and kept: 30 (the last month) | 90 | 0 (the whole history)
     "history_scope": "all",       # whose answers (the stage history) are read: all (every not-done task of the base) | month | month_overdue | month_next
     "history_date": "close",      # the term that decides the month of a task for that: close (closing date, else official) | due (official, else closing)
     "history_statuses": "open",   # open (only not-done tasks) | all (done ones too)
@@ -258,6 +259,7 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN pw_set INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN unit_id INTEGER REFERENCES units(id)",
     "ALTER TABLE ijro_snapshots ADD COLUMN task_ref TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE ijro_snapshots ADD COLUMN answers_total INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN manual INTEGER NOT NULL DEFAULT 0",       # 1 = a task added by hand: a loaded base never takes it off the dashboard
 ]
 # pw_set = somebody has issued this person a password (people created by the Excel import have none yet)

@@ -275,5 +275,11 @@ const fake = http.createServer((req, res) => {
   pgot.length = 0; const ro = await core.runSync({ server: oserver, client: pclient, sleep: async () => {}, delay: 0 });
   ok(ro.done === 14 && ro.taken === 0, "without the claim the whole job is read");
 
+  // ---- only the last days of the history are sent; the number of all the answers of the site is told
+  const nowMs = Date.now(), mkA = (ms, st) => ({ sender_type: st, state: 1, created_at_ms: String(ms), contents: "t" });
+  const sw = core.snapshotOf("W1", "president", { id: "r", status: 2 }, [mkA(nowMs - 120 * 86400000, 10), mkA(nowMs - 3 * 86400000, 25)], true, 30);
+  ok(sw.answers.length === 1 && sw.answers[0].sender_type === 25 && sw.answers_total === 2, "30 days: the old answer is not sent, the site's total is");
+  ok(core.snapshotOf("W1", "president", { id: "r", status: 2 }, [mkA(nowMs - 120 * 86400000, 10)], true, 0).answers.length === 1, "0 days: the whole history");
+
   fake.close(); console.log(fails ? fails + " FAILED" : "ALL PASS"); process.exit(fails ? 1 : 0);
 })().catch(e => { console.error("ERROR", e); process.exit(1); });
