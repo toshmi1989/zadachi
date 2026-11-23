@@ -636,3 +636,5 @@ table.dbt{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px;
 /* the period of the dashboard: the numbers are being fetched */
 .dboard.loading,.dkpis.loading{opacity:.45;pointer-events:none;transition:opacity .15s}
 .ctl.rp select{min-width:0}
+/* the header on a phone: the period, the export and the kind of date wrap into lines instead of widening the page */
+@media (max-width:760px){.ctl.rp{flex-wrap:wrap;white-space:normal}.ctl.rp select{width:auto;flex:1 1 110px}.pagehead .controls{flex-wrap:wrap;max-width:100%}.pagehead .controls .ctl{flex-wrap:wrap;max-width:100%}}
