@@ -263,6 +263,7 @@ MIGRATIONS = [
     "ALTER TABLE ijro_snapshots ADD COLUMN updated_ms INTEGER",          # the time the site last changed the task itself (not an answer): a term moved after the Chamber's answer shows here
     "ALTER TABLE ijro_snapshots ADD COLUMN due_changed INTEGER",         # the card's own flag «term changed» (NULL = the site did not say)
     "ALTER TABLE ijro_snapshots ADD COLUMN term_seen_ms INTEGER",        # when the synchronisation saw the term change after it had already seen the Chamber's answer
+    "ALTER TABLE ijro_snapshots ADD COLUMN task_updated_ms INTEGER",     # when the TASK itself (the card, not the list row that every answer moves) was last changed on the site
     "ALTER TABLE ijro_snapshots ADD COLUMN due_mod_ms INTEGER",          # the card's own «modification_date» (when the term was modified), if the site gives one
     "ALTER TABLE ijro_snapshots ADD COLUMN ext_date TEXT",               # «Муддат узайтириш санаси» of the Excel list: the date the term was extended (a copy of tasks.ext_date)
     "ALTER TABLE tasks ADD COLUMN ext_date TEXT",

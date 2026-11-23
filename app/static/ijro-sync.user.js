@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.8.3
+// @version      1.8.4
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.8.3";
+  const VERSION = "1.8.4";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -294,12 +294,13 @@
       let it = null, sec = null;
       for (const s of order(t.section)) { it = await client.find(t.code, s); await sleep(pace); if (it) { sec = s; break; } }
       if (!it) return { code: t.code, found: false };
-      let ans = [], loaded = false, secret = !!it.is_secret, dueChanged = null, dueMod = null;
+      let ans = [], loaded = false, secret = !!it.is_secret, dueChanged = null, dueMod = null, taskUpd = null;
       if (it.status !== 0 || it.is_done || it.repeatable) {
         const id = it.id ?? it.recipient_id;
         try {
           const cd = await client.card(id); secret = secret || cd.is_secret;
           const flag = deepFind(cd.raw, "due_date_changed", 3); if (typeof flag === "boolean") dueChanged = flag;      // the card's own flag: the term of the task was changed
+          if (cd.raw && cd.raw.updated_time != null) taskUpd = toMs(cd.raw.updated_time);      // when the TASK itself was last changed (the list row's time moves with every answer)
           const md = deepFind(cd.raw, "modification_date", 3); if (md != null) dueMod = toMs(md);                    // and the date of the modification, if the site gives one
           if (cd.code && cd.code.toUpperCase() !== t.code.toUpperCase()) return { code: t.code, found: false };   // the card says it is another task: never trust it
         } catch (e) { if (e instanceof SessionError || e instanceof TransientError) throw e; secret = true; }   // a card that cannot be read: treated as secret, no answer text
@@ -307,7 +308,7 @@
         try { ans = await client.answers(id); loaded = true; } catch (e) { if (e instanceof SessionError || e instanceof TransientError) throw e; }
         await sleep(pace);
       }
-      return Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded, job.answers_days), { is_secret: secret, due_changed: dueChanged, due_mod_ms: dueMod });
+      return Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded, job.answers_days), { is_secret: secret, due_changed: dueChanged, due_mod_ms: dueMod, task_updated_ms: taskUpd });
     }
     /* the tasks are taken in small portions by several workers; before reading a portion the platform is asked which of it is free:
        what another person's run has taken or has just read is left to them (several people can press the button at once, and nobody reads the same twice) */

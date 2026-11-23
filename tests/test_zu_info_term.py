@@ -35,10 +35,13 @@ def test_the_stage_depends_on_when_the_term_was_changed(admin):
     assert S(snap(due_mod_ms=ANSWER - 2 * HOUR))["code"] == "info"
     # the flag of the card is true for every task whose term was ever changed: it does not move a task by itself
     assert S(snap(due_changed=1))["code"] == "info"
-    assert S(snap(due_changed=1, updated_ms=ANSWER + 34))["code"] == "info"               # changed 34 ms after the answer: the answer's own bump, nothing says the term moved
-    assert S(snap(due_changed=1, updated_ms=ANSWER + 3 * 24 * HOUR))["code"] == "info_term"   # the task was changed by the site three days after the answer
-    assert S(snap(due_changed=0, updated_ms=ANSWER + 3 * 24 * HOUR))["code"] == "info"    # the card says the term was never changed
-    assert S(snap(due_changed=1, ext_date="2026-11-01"))["code"] == "info"                # the list says the extension is older than the answer: the Chamber answered after it
+    assert S(snap(due_changed=1, updated_ms=ANSWER + 34))["code"] == "info"               # the list row moves with the answer itself (34 ms later): not a change of the term
+    # the TASK in its card: changed 2.8 days after the answer -> the term was moved (real cards of the site); months before the answer -> not
+    assert S(snap(due_changed=1, updated_ms=ANSWER + 34, task_updated_ms=ANSWER + 241263 * 1000))["code"] == "info_term"
+    assert S(snap(due_changed=1, updated_ms=ANSWER + 34, task_updated_ms=ANSWER - 169 * 24 * HOUR))["code"] == "info"
+    assert S(snap(due_changed=1, task_updated_ms=ANSWER - 34 * 24 * HOUR))["code"] == "info"
+    assert S(snap(due_changed=0, task_updated_ms=ANSWER + 3 * 24 * HOUR))["code"] == "info"   # the card says the term was never changed
+    assert S(snap(due_changed=1, ext_date="2026-11-01", task_updated_ms=ANSWER + 3 * 24 * HOUR))["code"] == "info"   # the list says the extension is older than the answer
     assert S(snap(due_changed=1, ext_date="2026-11-06"))["code"] == "info_term"           # the same day as the answer: counts
     assert S(snap(due_changed=0, ext_date="2026-11-10"))["code"] == "info_term"           # the date of the list decides before the flag
     ev = S(snap(ext_date="2026-11-10"))["evidence"]
@@ -101,3 +104,12 @@ def test_through_the_synchronisation(admin):
     early[col] = "10.11.2026"
     admin.post("/api/import?dry=0&due_from=2026-12-01&due_to=2026-12-31&ai=0&f_dept=0&f_window=0", files={"file": ("e.xlsx", export([early, late]))})
     assert card("IT0002")["site"]["stage"]["code"] == "info_term" and card("IT0003")["site"]["stage"]["code"] == "info"
+    # 5. the real cards (diagnostics of the site): the task record changed 2.8 days after the answer -> moves; changed months before -> stays
+    moved, stays = row("IT0004", PRIMARY, "Term Person", "25.12.2026"), row("IT0005", PRIMARY, "Term Person", "25.12.2026")
+    assert admin.post("/api/import?dry=0&due_from=2026-12-01&due_to=2026-12-31&ai=0&f_dept=0&f_window=0", files={"file": ("e.xlsx", export([moved, stays]))}).status_code == 200
+    common = dict(due_changed=True, updated_ms=ANSWER + 34)                             # the list row moved by the answer itself, the flag is true for both
+    anon.post("/api/sync/ingest", json={"run_id": 0, "items": [item("IT0004", MS(2026, 12, 25), task_updated_ms=ANSWER + 241263 * 1000, **common),
+                                                               item("IT0005", MS(2026, 12, 25), task_updated_ms=ANSWER - 123 * 24 * HOUR, **common)]}, headers=h)
+    a, b = card("IT0004"), card("IT0005")
+    assert a["site"]["stage"]["code"] == "info_term" and b["site"]["stage"]["code"] == "info"
+    assert "карточка" in a["site"]["stage"]["evidence"]

@@ -115,22 +115,25 @@ def _local_day(ms: int) -> str:
 
 
 def term_changed_after(snap, answer_ms: int) -> bool:
-    """The Chamber of Accounts accepted the answer for information at `answer_ms`. Was the term of the task changed (extended) AFTER that, or by that very answer?
-    Then the task has been dealt with: a new term is in place, nothing waits for us. What the site gives (checked on its real cards): the card's flag «due_date_changed» is
-    true for EVERY task whose term was ever changed, so it cannot tell one task from another; `updated_time` is the moment of the task's last change (the Chamber's own
-    answer moves it too); the site has no separate date of the term's change. The Excel list has one («Муддат узайтириш санаси»): it decides, in this order:
-      the extension date of the Excel list: on or after the day of the answer -> yes (the term was moved by the answer or later), earlier -> no;
+    """The Chamber of Accounts accepted the answer for information at `answer_ms`. Was the term of the task changed (extended) AFTER that?
+    Then the task has been dealt with: a new term is in place, nothing waits for us. What the site gives (checked on its real cards): the card's flag «due_date_changed» is true
+    for EVERY task whose term was ever changed, so it cannot tell one task from another; the `updated_time` of the LIST row is moved by every answer (34 ms after it);
+    the `updated_time` of the TASK in its card moves only when the task itself is changed (its term extended): for the tasks that really got a new term it is days after
+    the Chamber's answer, for the tasks that did not it is months before it. The Excel list has a date of the extension too («Муддат узайтириш санаси»). In this order:
+      the extension date of the Excel list: on or after the day of the answer -> yes, earlier -> no;
       the card says the term was never changed -> no;
-      the card's modification date, the change that the synchronisation saw after the answer, or the task changed by the site more than 5 minutes after the answer -> yes;
+      the task itself was changed on the site (the card's updated_time), or the card's modification date, later than a minute after the answer -> yes;
+      the change that the synchronisation saw after the answer; the list row changed more than 5 minutes after the answer (old data without the card's time) -> yes;
       nothing of this: the task stays «Палата вернула» (a task is not taken out of the list that waits for us on a guess)."""
     ext = _opt(snap, "ext_date")
     if ext:
         return ext >= _local_day(answer_ms)
     if _opt(snap, "due_changed") == 0:
         return False
-    mod, seen, upd = _opt(snap, "due_mod_ms"), _opt(snap, "term_seen_ms"), _opt(snap, "updated_ms")
-    if mod and mod > answer_ms + 60 * 1000:
+    tupd, mod = _opt(snap, "task_updated_ms"), _opt(snap, "due_mod_ms")
+    if (tupd and tupd > answer_ms + 60 * 1000) or (mod and mod > answer_ms + 60 * 1000):
         return True
+    seen, upd = _opt(snap, "term_seen_ms"), _opt(snap, "updated_ms")
     if seen and seen > answer_ms:
         return True
     return bool(upd and upd > answer_ms + 5 * 60 * 1000)
@@ -140,11 +143,12 @@ def term_evidence(snap, answer_ms: int) -> str:
     """What the platform knows about the term of a task that the Chamber returned, in words (for the administrator): to see at once why it is where it is."""
     fd = lambda iso: iso[8:10] + "." + iso[5:7] + "." + iso[:4]
     ft = lambda ms: datetime.fromtimestamp(ms / 1000, TZ).strftime("%d.%m.%Y %H:%M")
-    ext, mod, seen, upd = _opt(snap, "ext_date"), _opt(snap, "due_mod_ms"), _opt(snap, "term_seen_ms"), _opt(snap, "updated_ms")
+    ext, mod, seen, upd, tupd = _opt(snap, "ext_date"), _opt(snap, "due_mod_ms"), _opt(snap, "term_seen_ms"), _opt(snap, "updated_ms"), _opt(snap, "task_updated_ms")
     parts = [f"ответ Палаты: {ft(answer_ms)}",
              f"дата продления срока в списке сайта: {fd(ext)}" if ext else "даты продления срока в списке сайта нет (загрузите свежий список Excel)",
              f"дата изменения срока в карточке: {ft(mod)}" if mod else "",
-             f"задача изменена на сайте: {ft(upd)}" if upd else "",
+             f"задача (карточка) изменена на сайте: {ft(tupd)}" if tupd else ("карточка задачи ещё не читалась скриптом 1.8.4" if not upd else ""),
+             f"запись в списке изменена: {ft(upd)}" if upd else "",
              {1: "карточка сайта: срок задачи менялся когда-то (флаг не говорит когда)", 0: "карточка сайта: срок задачи не менялся"}.get(_opt(snap, "due_changed"), ""),
              f"синхронизация увидела новый срок: {ft(seen)}" if seen else ""]
     return "; ".join(x for x in parts if x)
@@ -669,10 +673,11 @@ def ingest(c, key_row, body: dict) -> dict:
                 seen_ms = int(datetime.now(TZ).timestamp() * 1000)
         upd_ms = _int(it.get("updated_ms"))
         mod_ms = _int(it.get("due_mod_ms"))
+        tupd_ms = _int(it.get("task_updated_ms"))
         dch = it.get("due_changed")
         dch = None if dch is None or not isinstance(dch, bool) else int(dch)
         c.execute("""INSERT INTO ijro_snapshots(task_id, found, section, recipient_id, task_ref, site_status, is_done, overdue, repeatable, due_ms, done_ms,
-                                                periods, is_secret, answers, checked_at, run_id, answers_total, updated_ms, due_changed, term_seen_ms, due_mod_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                                periods, is_secret, answers, checked_at, run_id, answers_total, updated_ms, due_changed, term_seen_ms, due_mod_ms, task_updated_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                      ON CONFLICT(task_id) DO UPDATE SET found=excluded.found, section=excluded.section, recipient_id=excluded.recipient_id, task_ref=excluded.task_ref,
                        site_status=excluded.site_status, is_done=excluded.is_done, overdue=excluded.overdue, repeatable=excluded.repeatable,
                        due_ms=excluded.due_ms, done_ms=excluded.done_ms, periods=excluded.periods, is_secret=excluded.is_secret,
@@ -682,10 +687,11 @@ def ingest(c, key_row, body: dict) -> dict:
                        updated_ms=CASE WHEN excluded.found=1 THEN excluded.updated_ms ELSE ijro_snapshots.updated_ms END,
                        due_changed=CASE WHEN excluded.found=1 THEN excluded.due_changed ELSE ijro_snapshots.due_changed END,
                        due_mod_ms=CASE WHEN excluded.found=1 THEN excluded.due_mod_ms ELSE ijro_snapshots.due_mod_ms END,
+                       task_updated_ms=CASE WHEN excluded.found=1 AND excluded.task_updated_ms IS NOT NULL THEN excluded.task_updated_ms ELSE ijro_snapshots.task_updated_ms END,
                        term_seen_ms=COALESCE(excluded.term_seen_ms, ijro_snapshots.term_seen_ms)""",
                   (codes[it["code"]], int(is_found), sec if is_found else "", rid if is_found else "", ref if is_found else "", _int(it.get("status")) if is_found else None,
                    int(bool(it.get("is_done"))), None if it.get("overdue") is None else int(bool(it.get("overdue"))), int(bool(it.get("repeatable"))),
-                   _int(it.get("due_ms")), _int(it.get("done_ms")), json.dumps(periods), int(secret), json.dumps(answers, ensure_ascii=False), now(), run_id, total, upd_ms if is_found else None, dch if is_found else None, seen_ms, mod_ms if is_found else None,
+                   _int(it.get("due_ms")), _int(it.get("done_ms")), json.dumps(periods), int(secret), json.dumps(answers, ensure_ascii=False), now(), run_id, total, upd_ms if is_found else None, dch if is_found else None, seen_ms, mod_ms if is_found else None, tupd_ms if is_found else None,
                    int(bool(it.get("answers_loaded"))), int(bool(it.get("answers_loaded")))))
         c.execute("UPDATE ijro_snapshots SET ext_date=(SELECT ext_date FROM tasks WHERE id=?) WHERE task_id=?", (codes[it["code"]], codes[it["code"]]))
         stored += 1
