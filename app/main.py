@@ -236,10 +236,12 @@ def api_me(request: Request):
 
 
 @app.get("/api/dashboard")
-def api_dashboard(request: Request, by: str = "close"):
+def api_dashboard(request: Request, by: str = "close", period: str = ""):
+    if period and not re.fullmatch(r"\d{4}(-(0[1-9]|1[0-2]))?", period):
+        bad("period: ГГГГ или ГГГГ-ММ")
     c = connect()
     try:
-        return stats.dashboard(c, tasks.norm_by(by, me(request))) | {"updated": report.last_updates(c)}
+        return stats.dashboard(c, tasks.norm_by(by, me(request)), period) | {"updated": report.last_updates(c)}
     finally:
         c.close()
 
@@ -250,8 +252,8 @@ def api_report(request: Request, month: str = "", by: str = "close"):
     user = me(request)
     if user["role"] not in auth.STAFF:
         bad("Выгрузка доступна администратору и специалисту", 403)
-    if month and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
-        bad("month: ГГГГ-ММ или пусто")
+    if month and not re.fullmatch(r"\d{4}(-(0[1-9]|1[0-2]))?", month):
+        bad("month: ГГГГ, ГГГГ-ММ или пусто")
     c = connect()
     try:
         data = report.collect(c, month, tasks.norm_by(by, user))

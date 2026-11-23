@@ -49,7 +49,7 @@ def collect(c, month: str, by: str) -> dict:
     own[0] = _acc()
     for r in c.execute("""SELECT t.id, t.status, t.due, t.close_date, t.kind, u.unit_id FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
                           WHERE t.status NOT IN ('gone', 'info')""").fetchall():
-        if month and (eff_value(r, by) or "")[:7] != month:
+        if month and not (eff_value(r, by) or "").startswith(month):
             continue
         a = own[r["unit_id"] if r["unit_id"] in ids else 0]
         key = "open" if r["status"] in OPEN else "done"
@@ -88,7 +88,7 @@ def asof_text(stamp: str) -> str:
 
 
 def title_text(month: str) -> str:
-    when = f" {month[:4]} йил {MONTHS_UZ[int(month[5:7]) - 1]} ойига белгиланган" if month else ""
+    when = (f" {month[:4]} йил {MONTHS_UZ[int(month[5:7]) - 1]} ойига белгиланган" if len(month) == 7 else f" {month[:4]} йилга белгиланган") if month else ""
     return f"Соғлиқни сақлаш вазирлигида{when} ijro.gov.uz тизимидаги топшириқларининг бажарилиши"
 
 

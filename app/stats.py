@@ -46,25 +46,33 @@ def _copy(a: dict) -> dict:
     return _add(_acc(), a)
 
 
-def dashboard(c, by: str = "close") -> dict:
+def dashboard(c, by: str = "close", period: str = "") -> dict:
+    """period: "" (every task, also those without a term), "YYYY" (the terms of that year) or "YYYY-MM" (that month). `periods` always lists every month that has tasks,
+    whatever the period is, so that the page can offer the years and the months."""
     by = by if by in ("due", "strict") else "close"
+    period = period if period and len(period) in (4, 7) else ""
     units = c.execute("SELECT id, num, name, parent_id FROM units WHERE active=1 ORDER BY sort, id").fetchall()
     ids = {u["id"] for u in units}
     stage = ijro.stage_map(c)                                       # {task id: stage key} for the open tasks
     own: dict[int, dict] = {u["id"]: _acc() for u in units}
     own[0] = _acc()                                                  # «Без отдела»
     months: set[str] = set()
+    every_month: set[str] = set()
     kinds_seen: list[str] = []
     for r in c.execute("""SELECT t.id, t.status, t.due, t.close_date, t.kind, u.unit_id FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
                           WHERE t.status != 'gone'""").fetchall():
         a = own[r["unit_id"] if r["unit_id"] in ids else 0]
         st = r["status"]
+        eff = eff_value(r, by)
+        if eff:
+            every_month.add(eff[:7])
+        if period and not (eff and eff.startswith(period)):
+            continue                                       # not in the chosen year / month (a task without a term is in no period)
         if st == "info":
             a["sum"]["info"] += 1
             continue
         key = "open" if st in OPEN else "done"
         a["sum"][key] += 1
-        eff = eff_value(r, by)
         if eff:
             months.add(eff[:7])
             a["months"].setdefault(eff[:7], _two())[key] += 1
@@ -94,7 +102,7 @@ def dashboard(c, by: str = "close") -> dict:
     _add(total, none)
     has_none = any(none["sum"].values())
     t = total["sum"]
-    return {"today": today().isoformat(), "by": by, "months": sorted(months), "kinds": KIND_ORDER + kinds_seen,
+    return {"today": today().isoformat(), "by": by, "period": period, "periods": sorted(every_month), "months": sorted(months), "kinds": KIND_ORDER + kinds_seen,
             "stages": [{"key": k, "label": label, "hint": hint} for k, label, hint in STAGE_COLS],
             "totals": {"done": t["done"], "open": t["open"], "info": t["info"], "total": t["done"] + t["open"] + t["info"]},
             "rows": rows, "none": {"id": 0, "num": "", "name": "Без отдела", "parent_id": None, "level": 0, **none} if has_none else None,
