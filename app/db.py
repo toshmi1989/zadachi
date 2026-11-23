@@ -145,6 +145,13 @@ CREATE TABLE IF NOT EXISTS sync_runs (
     received INTEGER NOT NULL DEFAULT 0,
     found INTEGER NOT NULL DEFAULT 0
 );
+-- who is reading which task right now: several people may press «Синхронизировать» at once, and every task is read by one of them, not by all
+CREATE TABLE IF NOT EXISTS sync_claims (
+    task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    run_id INTEGER NOT NULL,
+    key_id INTEGER,
+    claimed_at TEXT NOT NULL
+);
 -- The last thing read from the site about a task. It never changes the task by itself: the administrator applies it.
 CREATE TABLE IF NOT EXISTS ijro_snapshots (
     task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
@@ -231,6 +238,7 @@ DEFAULT_SETTINGS = {
     "sync_apply": "status",       # what a downloaded list does: status (only updates the statuses of tasks already in the base) | base (also adds new tasks and updates the fields)
     "base_back": "30",            # a list that adds tasks takes terms from this many days back (empty = no limit) ...
     "base_fwd": "60",             # ... to this many days ahead (empty = no limit)
+    "sync_parallel": "3",         # how many tasks the collector reads at the same time (1-5)
     "history_scope": "all",       # whose answers (the stage history) are read: all (every not-done task of the base) | month | month_overdue | month_next
     "history_date": "close",      # the term that decides the month of a task for that: close (closing date, else official) | due (official, else closing)
     "history_statuses": "open",   # open (only not-done tasks) | all (done ones too)
@@ -260,11 +268,11 @@ BACKFILL_PW_SET = """UPDATE users SET pw_set=1 WHERE role='admin'
 
 def connect() -> sqlite3.Connection:
     os.makedirs(DATA_DIR, exist_ok=True)
-    c = sqlite3.connect(DB_PATH, timeout=10)
+    c = sqlite3.connect(DB_PATH, timeout=20)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys=ON")
     c.execute("PRAGMA journal_mode=WAL")
-    c.execute("PRAGMA busy_timeout=5000")
+    c.execute("PRAGMA busy_timeout=20000")
     return c
 
 

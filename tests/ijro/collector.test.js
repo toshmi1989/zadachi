@@ -245,6 +245,7 @@ const fake = http.createServer((req, res) => {
   const sent2 = []; let bdown = true;
   const bserver = async (m, p, b) => {
     if (p === "/api/sync/job") return { run_id: 0, sections: [{ id: "president", type_ids: ["t"] }], items: [{ code: "A1", section: "president" }, { code: "A2", section: "president" }, { code: "A3", section: "president" }] };
+    if (p === "/api/sync/claim") return { granted: b.codes, taken: [] };
     if (bdown) { bdown = false; throw new Error("Платформа не отвечает"); }
     sent2.push(...b.items.map(x => x.code)); return { stored: b.items.length };
   };
@@ -252,6 +253,27 @@ const fake = http.createServer((req, res) => {
   const rbk = await core.runSync({ server: bserver, client: bfind, sleep: noSleep, delay: 0, chunk: 2 }).catch(e => e);
   ok(rbk instanceof Error && /не отвечает/.test(rbk.message), "the run stops with the platform's message when the platform does not answer");
   ok(sent2.sort().join() === "A1,A2", "the two answers read before the failure were sent on the second attempt, not lost: " + sent2.join());
+
+  // ---- several tasks at a time, and the tasks that another person is reading are left to them
+  const pcodes = Array.from({ length: 14 }, (_, i) => "P" + String(i).padStart(4, "0"));
+  const pstarted = []; let pactive = 0, pmax = 0; const pgot = [];
+  const pserver = async (m, p, b) => {
+    if (p === "/api/sync/job") return { run_id: 0, parallel: 3, sections: [{ id: "president", type_ids: ["t"] }], items: pcodes.map(c => ({ code: c, section: "president" })) };
+    if (p === "/api/sync/claim") return { granted: b.codes.filter(c => c !== "P0003" && c !== "P0004"), taken: [] };           // two tasks are somebody else's
+    if (p === "/api/sync/ingest") { pgot.push(...b.items.map(x => x.code)); return { stored: b.items.length, moved: { done: 1, progress: 2, due: 0 } }; }
+  };
+  const pclient = { find: async code => { pactive++; pmax = Math.max(pmax, pactive); await new Promise(r => setTimeout(r, 5)); pactive--; return { id: "r-" + code, status: 0, is_done: false, repeatable: 0 }; },
+    card: async () => ({ is_secret: false }), answers: async () => [], raw: async () => ({}) };
+  const rp = await core.runSync({ server: pserver, client: pclient, sleep: async () => {}, delay: 0, chunk: 5 });
+  ok(rp.done === 12 && rp.taken === 2 && rp.total === 14 && pgot.length === 12 && !pgot.includes("P0003") && !pgot.includes("P0004"), `portions of tasks that others have taken are skipped: read ${rp.done}, left to others ${rp.taken}`);
+  ok(pmax === 3, "three tasks are read at the same time (the platform's setting): " + pmax);
+  ok(rp.moved.done === 3 && rp.moved.progress === 6, "the statuses that the platform moved are summed over the batches: " + JSON.stringify(rp.moved));
+  pmax = 0; await core.runSync({ server: pserver, client: pclient, sleep: async () => {}, delay: 0, parallel: 1 });
+  ok(pmax === 1, "one at a time when asked to");
+  // a platform without the claim (an older one) is not a problem: the run reads everything itself
+  const oserver = async (m, p, b) => { if (p === "/api/sync/claim") throw new Error("Платформа ответила 404"); return pserver(m, p, b); };
+  pgot.length = 0; const ro = await core.runSync({ server: oserver, client: pclient, sleep: async () => {}, delay: 0 });
+  ok(ro.done === 14 && ro.taken === 0, "without the claim the whole job is read");
 
   fake.close(); console.log(fails ? fails + " FAILED" : "ALL PASS"); process.exit(fails ? 1 : 0);
 })().catch(e => { console.error("ERROR", e); process.exit(1); });

@@ -292,6 +292,12 @@ SYNC_FIELDS = [
         ("month_overdue", "Текущий месяц и просроченные прошлых",
          "Текущий месяц плюс все ещё не выполненные задачи с более ранним сроком: чтобы не потерять давно просроченное, пока оно не закрыто."),
         ("month_next", "Текущий и следующий месяц", "Удобно в конце месяца: следующий уже в работе, а этапы нужны заранее.")]},
+    {"key": "sync_parallel", "group": "history", "title": "Сколько задач читать одновременно", "kind": "choice", "options": [
+        ("1", "По одной", "Самый бережный режим: сайт нагружается минимально, но проверка 250 задач занимает около 5 минут."),
+        ("2", "По две", "Вдвое быстрее, чем по одной."),
+        ("3", "По три (по умолчанию)", "Хорошее соотношение: около 250 задач за 1,5–2 минуты. Если сайт начнёт отвечать ошибками, скрипт сам замедлится."),
+        ("4", "По четыре", "Быстрее, но чаще упирается в ограничения сайта."),
+        ("5", "По пять", "Самый быстрый режим. Выбирайте, только если сайт не жалуется.")]},
     {"key": "history_date", "group": "history", "title": "Какой срок решает, в каком месяце задача", "kind": "choice", "options": [
         ("close", "Дата закрытия, иначе официальный срок (по умолчанию)", "Как на дашборде по умолчанию: ваша внутренняя дата закрытия, а если её нет, то официальный срок."),
         ("due", "Официальный срок, иначе дата закрытия", "Срок из поручения («Топшириқ муддати»); дата закрытия подставляется, только если срока нет.")]},
@@ -361,6 +367,37 @@ def history_filter() -> tuple[str, list]:
     return sql, args
 
 
+CLAIM_MINUTES = 5          # a task that somebody else has taken is left to them for this long (then it is free again: that one may have closed the tab)
+SHARE_MINUTES = 10         # a task that somebody else has read this recently is not read again
+
+
+def _ago(minutes: int) -> str:
+    from datetime import timedelta
+    return (datetime.now(TZ) - timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def claim(c, key_id: int, run_id: int, codes: list) -> dict:
+    """Several people may run the synchronisation at the same time. Before reading a few tasks the collector asks which of them it may take:
+    those that another key has taken in the last minutes or has read in the last minutes are left to the other. {granted: [...], taken: [...]}."""
+    codes = [x for x in codes if isinstance(x, str)][:100]
+    if not codes:
+        return {"granted": [], "taken": []}
+    ids = {r["code"]: r["id"] for r in c.execute(f"SELECT id, code FROM tasks WHERE code IN ({','.join('?' * len(codes))})", codes)}
+    granted, taken = [], []
+    busy = {r["task_id"] for r in c.execute("SELECT task_id FROM sync_claims WHERE key_id IS NOT ? AND claimed_at >= ?", (key_id, _ago(CLAIM_MINUTES)))}
+    fresh = {r["task_id"] for r in c.execute("""SELECT s.task_id FROM ijro_snapshots s LEFT JOIN sync_runs r ON r.id=s.run_id
+                                                WHERE s.checked_at >= ? AND r.key_id IS NOT NULL AND r.key_id IS NOT ?""", (_ago(SHARE_MINUTES), key_id))}
+    for code in codes:
+        tid = ids.get(code)
+        if tid is None or tid in busy or tid in fresh:
+            taken.append(code)
+            continue
+        c.execute("INSERT INTO sync_claims(task_id, run_id, key_id, claimed_at) VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET run_id=excluded.run_id, key_id=excluded.key_id, claimed_at=excluded.claimed_at",
+                  (tid, run_id, key_id, now()))
+        granted.append(code)
+    return {"granted": granted, "taken": taken}
+
+
 def job(c, key_id: int, resume: bool = False) -> dict:
     """The tasks the collector must look up. Which ones is a setting (history_scope / history_statuses / history_date): by default the open tasks whose
     term is in the current month. The section order for each follows the document kind.
@@ -377,7 +414,7 @@ def job(c, key_id: int, resume: bool = False) -> dict:
     by_kind = {k: s["id"] for s in SECTIONS["sections"] for k in s["kinds"]}
     cur = c.execute("INSERT INTO sync_runs(key_id, started_at, expected) VALUES (?,?,?)", (key_id, now(), len(rows)))
     return {"run_id": cur.lastrowid, "outside_scope": outside, "scope": setting("history_scope"), "api_tasks": SECTIONS["api_tasks"], "sections": SECTIONS["sections"],
-            "items": [{"code": r["code"], "section": by_kind.get(r["kind"], "")} for r in rows]}
+            "parallel": max(1, min(5, int(setting("sync_parallel") or 3))), "items": [{"code": r["code"], "section": by_kind.get(r["kind"], "")} for r in rows]}
 
 
 # ---------------------------------------------------------------- mapping of the site's status to ours
@@ -423,7 +460,7 @@ def classify(snap, due: str | None = None, dates: bool = True) -> dict:
         if cur.get("recipient_status") == 20:
             return {"status": "done", "label": f"Период {k} из {n} выполнен{tail}", "note": "Периодическая задача: считается по периоду вашего срока", "known": True}
         done = sum(1 for p in periods if p.get("recipient_status") == 20)
-        return {"status": None, "label": f"Период {k} из {n} не выполнен{tail}", "note": f"Периодическая задача, выполнено периодов: {done} из {n}. Общий статус на сайте остаётся «в работе»", "known": True}
+        return {"status": None, "label": f"Период {k} из {n} не выполнен{tail}", "note": f"Периодическая задача, выполнено периодов: {done} из {n}. Общий статус на сайте остаётся «в работе»", "known": True, "open": True}
     if snap["is_done"] and st in (20, 21):
         late = st == 21
         return {"status": "done", "label": "Выполнена с опозданием" if late else "Выполнена в срок", "note": "", "known": True}
@@ -538,16 +575,24 @@ def ingest(c, key_row, body: dict) -> dict:
         stored += 1
         touched.append(codes[it["code"]])
         found += is_found
-    auto = 0
+    auto, moved = 0, {"done": 0, "progress": 0, "due": 0}
     if setting("ijro_auto_apply") == "1":
         for tid in touched:
-            if auto_apply(c, tid):
+            did = auto_apply(c, tid)
+            if did:
                 auto += 1
+                for d in did:
+                    if d == "status→done":
+                        moved["done"] += 1
+                    elif d == "status→progress":
+                        moved["progress"] += 1
+                    elif d.startswith("due"):
+                        moved["due"] += 1
         if auto:
             audit(c, "ijro.auto_apply", "task", None, {"tasks": auto, "run": run_id})
     if run_id:
         c.execute("UPDATE sync_runs SET received=received+?, found=found+?, finished_at=? WHERE id=? AND key_id=?", (stored, found, now(), run_id, key_row["id"]))
-    return {"stored": stored, "found": found, "auto_applied": auto}
+    return {"stored": stored, "found": found, "auto_applied": auto, "moved": moved}
 
 
 # ---------------------------------------------------------------- tasks the site no longer lists as ours

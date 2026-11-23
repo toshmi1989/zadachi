@@ -11,6 +11,7 @@ import openpyxl
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from . import auth, backup, closing, importer, ijro, reminders, site_import, stats, tasks, telegram
 from .db import STATUSES, audit, connect, init_db, now, setting, today, tx
@@ -33,7 +34,7 @@ app = FastAPI(title="Zadachi", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 OPEN_PATHS = ("/healthz", "/login", "/api/login-users", "/ijro-sync.user.js")
-BEARER_PATHS = ("/api/sync/job", "/api/sync/ingest", "/api/sync/export", "/api/sync/export-plan", "/api/sync/finish")   # opened with a key of the platform (collector in a browser), not with a cookie
+BEARER_PATHS = ("/api/sync/job", "/api/sync/claim", "/api/sync/ingest", "/api/sync/export", "/api/sync/export-plan", "/api/sync/finish")   # opened with a key of the platform (collector in a browser), not with a cookie
 ADMIN_ONLY = re.compile(r"^/api/(users|units|import|settings|backup|audit|ai|closing|sync/(keys|review|apply|settings)|reminders/(settings|preview|run|log))(/|$)")
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -679,8 +680,10 @@ async def api_import(request: Request, file: list[UploadFile] = File(...), dry: 
             bad(f"Файл больше {MAX_UPLOAD // (1024 * 1024)} МБ")
         datas.append(d)
     name = ", ".join((f.filename or "export.xlsx") for f in file)[:200]
-    return import_files(datas, name, me(request)["id"], bool(dry), due_from or None, due_to or None, bool(ai), mode=mode, overwrite=bool(overwrite), replace=bool(replace),
-                        confirm=bool(confirm), by_dept=bool(f_dept), by_exec=bool(f_exec), by_kind=bool(f_kind), by_window=bool(f_window))
+    uid = me(request)["id"]
+    # reading the files, the closing dates and the database work take seconds: they run in a thread, so that the other people's requests (the synchronisation of the others) are not held up
+    return await run_in_threadpool(lambda: import_files(datas, name, uid, bool(dry), due_from or None, due_to or None, bool(ai), mode=mode, overwrite=bool(overwrite), replace=bool(replace),
+                                                          confirm=bool(confirm), by_dept=bool(f_dept), by_exec=bool(f_exec), by_kind=bool(f_kind), by_window=bool(f_window)))
 
 
 @app.get("/api/sync/export-plan")
@@ -706,11 +709,15 @@ async def api_sync_export(request: Request, source: str = "", last: int = 0, run
     ours: set = set()
     mode = "base" if setting("sync_apply") == "base" else "status"        # Settings: only the statuses of tasks in the base, or new tasks as well
     day = lambda key, sign: (t + timedelta(days=sign * int(setting(key)))).isoformat() if setting(key).strip().isdigit() else None    # empty = no limit
-    out = import_file(data, f"sync:{source or 'export'}.xlsx", request.state.key["created_by"], False, day("base_back", -1), day("base_fwd", 1),
-                      ai_on(), suggest=bool(last) and mode == "base", ours_out=ours, mode=mode)
-    if re.fullmatch(r"[0-9a-fA-F-]{8,64}", run or ""):
-        with tx() as c:
-            ijro.record_export(c, run, ours)
+    created_by, back, fwd, with_ai = request.state.key["created_by"], day("base_back", -1), day("base_fwd", 1), ai_on()
+
+    def work():
+        res = import_file(data, f"sync:{source or 'export'}.xlsx", created_by, False, back, fwd, with_ai, suggest=bool(last) and mode == "base", ours_out=ours, mode=mode)
+        if re.fullmatch(r"[0-9a-fA-F-]{8,64}", run or ""):
+            with tx() as c:
+                ijro.record_export(c, run, ours)
+        return res
+    out = await run_in_threadpool(work)
     site = out.get("site", {})
     return {"source": source, "mode": mode, "rows": out["rows"], "created": out["created"], "updated": out["updated"], "unchanged": out["unchanged"], "missing": out.get("missing", 0),
             "unmapped": [d["name"] for d in site.get("departments", []) if not d.get("unit_id") and d.get("how") != "confirmed"][:30], "skipped": site.get("skipped", {}),
@@ -1164,12 +1171,28 @@ async def api_sync_ingest(request: Request):
         bad("Ожидался JSON")
     if not isinstance(body, dict):
         bad("Ожидался объект JSON")
-    with tx() as c:
-        try:
-            out = ijro.ingest(c, request.state.key, body)
-        except ValueError as e:
-            bad(str(e))
-    return out
+    def work():
+        with tx() as c:
+            return ijro.ingest(c, request.state.key, body)
+    try:
+        return await run_in_threadpool(work)      # the database work is off the event loop: other people's requests are not held up while this one waits for its turn
+    except ValueError as e:
+        bad(str(e))
+
+
+@app.post("/api/sync/claim")
+async def api_sync_claim(request: Request):
+    """The collector asks which of the next tasks it may read: tasks that another person's run has taken or has just read are left to them."""
+    b = await _json(request)
+    run_id = b.get("run_id")
+    codes = b.get("codes")
+    if not isinstance(codes, list) or not isinstance(run_id, int) or isinstance(run_id, bool):
+        bad("Нужны run_id и список codes")
+
+    def work():
+        with tx() as c:
+            return ijro.claim(c, request.state.key["id"], run_id, codes)
+    return await run_in_threadpool(work)
 
 
 @app.post("/api/sync/finish")
@@ -1179,8 +1202,10 @@ async def api_sync_finish(request: Request):
     run = str(b.get("run") or "")
     if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", run):
         bad("Неверный номер запуска")
-    with tx() as c:
-        return ijro.finish_run(c, run, bool(b.get("complete")))
+    def work():
+        with tx() as c:
+            return ijro.finish_run(c, run, bool(b.get("complete")))
+    return await run_in_threadpool(work)
 
 
 @app.get("/api/sync/stale")

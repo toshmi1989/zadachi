@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.6.2
+// @version      1.7.0
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.6.2";
+  const VERSION = "1.7.0";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -256,18 +256,21 @@
   }
 
   /* ───────────── one synchronisation run ───────────── */
-  async function runSync({ server, client, onProgress, shouldStop, sleep, chunk = 40, delay = 250, resume = false }) {
+  async function runSync({ server, client, onProgress, shouldStop, sleep, chunk = 40, delay = 250, resume = false, parallel = 0 }) {
     const job = await server("GET", "/api/sync/job" + (resume ? "?resume=1" : ""));
     const sections = Object.fromEntries(job.sections.map(s => [s.id, s]));
     const order = hint => hint && sections[hint] ? [sections[hint]].concat(job.sections.filter(s => s.id !== hint)) : job.sections;
-    const buffer = [], failed = []; let done = 0, found = 0, sent = 0, stopped = "", pace = delay, streak = 0, okRun = 0;
+    const width = Math.max(1, Math.min(5, Math.trunc(parallel || job.parallel || 1)));      // how many tasks are read at the same time (the platform's setting)
+    const buffer = [], failed = [], moved = { done: 0, progress: 0, due: 0 }; let done = 0, found = 0, sent = 0, taken = 0, stopped = "", pace = delay, streak = 0, okRun = 0, halt = false, fatal = null;
     const flush = async () => {
       if (!buffer.length) return; const items = buffer.splice(0, buffer.length);
-      try { await server("POST", "/api/sync/ingest", { run_id: job.run_id, items }); } catch (e) { buffer.unshift(...items); throw e; }   // what was read is not lost: the next attempt sends it again
+      let r;
+      try { r = await server("POST", "/api/sync/ingest", { run_id: job.run_id, items }); } catch (e) { buffer.unshift(...items); throw e; }   // what was read is not lost: the next attempt sends it again
       sent += items.length;
+      if (r && r.moved) for (const k of Object.keys(moved)) moved[k] += r.moved[k] || 0;
     };
     const total = job.items.length;
-    const progress = () => { if (onProgress) onProgress({ done: done + failed.length, total, found, failed: failed.length }); };
+    const progress = () => { if (onProgress) onProgress({ done: done + failed.length + taken, total, found, failed: failed.length, taken, moved }); };
     // one task: the snapshot to send (found or not), or a TransientError when the site could not answer after all retries
     async function checkOne(t) {
       let it = null, sec = null;
@@ -286,24 +289,41 @@
       }
       return Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded), { is_secret: secret });
     }
-    try {
-      for (const t of job.items) {
-        if (shouldStop && shouldStop()) { stopped = "Остановлено вами"; break; }
+    /* the tasks are taken in small portions by several workers; before reading a portion the platform is asked which of it is free:
+       what another person's run has taken or has just read is left to them (several people can press the button at once, and nobody reads the same twice) */
+    let cursor = 0;
+    const PORTION = 6;
+    const pull = () => { const b = job.items.slice(cursor, cursor + PORTION); cursor += b.length; return b; };
+    async function worker() {
+      while (!halt) {
+        const batch = pull(); if (!batch.length) return;
+        let mine = batch;
         try {
-          const snap = await checkOne(t);
-          buffer.push(snap); done++; if (snap.found) found++;
-          streak = 0; if (++okRun >= 20 && pace > delay) { pace = Math.max(delay, Math.round(pace / 2)); okRun = 0; }
-        } catch (e) {
-          if (!(e instanceof TransientError)) throw e;
-          failed.push(t.code); streak++; okRun = 0; pace = Math.min(pace * 2, 2500);   // a stubborn task is skipped, the whole run is not lost; the pace slows down
-          if (streak >= 4) { stopped = "Сайт ijro сейчас не отвечает (" + e.message + "). Подождите несколько минут и нажмите «Продолжить»: уже проверенное повторно не читается."; break; }
+          const g = await server("POST", "/api/sync/claim", { run_id: job.run_id, codes: batch.map(x => x.code) });
+          if (g && Array.isArray(g.granted)) { const ok = new Set(g.granted); mine = batch.filter(x => ok.has(x.code)); taken += batch.length - mine.length; }
+        } catch (e) { /* an older platform, or a hiccup: the portion is simply read by this run (reading twice is harmless) */ }
+        for (const t of mine) {
+          if (halt) return;
+          if (shouldStop && shouldStop()) { stopped = stopped || "Остановлено вами"; halt = true; return; }
+          try {
+            const snap = await checkOne(t);
+            buffer.push(snap); done++; if (snap.found) found++;
+            streak = 0; if (++okRun >= 20 && pace > delay) { pace = Math.max(delay, Math.round(pace / 2)); okRun = 0; }
+          } catch (e) {
+            if (!(e instanceof TransientError)) throw e;
+            failed.push(t.code); streak++; okRun = 0; pace = Math.min(pace * 2, 2500);   // a stubborn task is skipped, the whole run is not lost; the pace slows down
+            if (streak >= 4) { stopped = stopped || "Сайт ijro сейчас не отвечает (" + e.message + "). Подождите несколько минут и нажмите «Продолжить»: уже проверенное повторно не читается."; halt = true; return; }
+          }
+          progress();
+          if (buffer.length >= chunk) await flush();
         }
         progress();
-        if (buffer.length >= chunk) await flush();
       }
-    } catch (e) { stopped = e.message || String(e); if (!(e instanceof SessionError || e instanceof RateError)) { await flush().catch(() => {}); throw e; } }
+    }
+    await Promise.all(Array.from({ length: width }, () => worker().catch(e => { halt = true; fatal = fatal || e; })));
+    if (fatal) { stopped = fatal.message || String(fatal); if (!(fatal instanceof SessionError || fatal instanceof RateError)) { await flush().catch(() => {}); throw fatal; } }
     await flush();
-    return { done, total, found, sent, stopped, failed, outside: job.outside_scope || 0, run_id: job.run_id };
+    return { done, total, found, sent, stopped, failed, taken, moved, outside: job.outside_scope || 0, run_id: job.run_id };
   }
 
   /* what the answers look like, without any values that could be personal: names of fields and their types */
@@ -462,12 +482,12 @@
       let finLine = "";
       const expLine = () => !exp ? "" : `\nСписок: файлов ${exp.files}${exp.mode === "status" ? `, статусов обновлено ${exp.updated}, нет в базе ${exp.missing}${exp.missing ? " (добавьте через «Импорт базы задач»)" : ""}` : `, новых задач ${exp.created}, обновлено ${exp.updated}`}${exp.unmapped.size ? ", отделов без сопоставления " + exp.unmapped.size + " (откройте импорт в платформе)" : ""}${exp.errors.length ? "\nНе удалось: " + exp.errors.join("; ") : ""}`;
       try {
-        const r = await runSync({ server, client: client(), sleep, resume, shouldStop: () => stop, onProgress: p => { $("bar").style.width = Math.round(100 * p.done / Math.max(1, p.total)) + "%"; log(`Проверено ${p.done} из ${p.total} · найдено на сайте ${p.found}${p.failed ? " · пропущено (сайт не ответил) " + p.failed : ""}`); } });
+        const r = await runSync({ server, client: client(), sleep, resume, shouldStop: () => stop, onProgress: p => { $("bar").style.width = Math.round(100 * p.done / Math.max(1, p.total)) + "%"; log(`Проверено ${p.done} из ${p.total} · найдено на сайте ${p.found}${p.taken ? " · читают другие: " + p.taken : ""}${p.failed ? " · пропущено (сайт не ответил) " + p.failed : ""}`); } });
         let fin = null;
         if (exp) { try { fin = await finishRun({ server, run, exp, sync: r }); } catch (e) { fin = { judged: false, why: e.message }; } }
         finLine = !fin ? "" : !fin.judged ? "\nСнятие лишних задач: пропущено (" + fin.why + ")" : `\nСнятие лишних задач: не относятся к нашим выгрузкам ${fin.stale}${fin.archived ? ", убрано с дашборда " + fin.archived : ""}${fin.waiting ? ", ждут вашего решения в платформе (раздел «Синхронизация»)" : ""}${fin.unsure ? "; не проверялись или закрыты: " + fin.unsure : ""}`;
         resume = !!(r.stopped || r.failed.length);   // after an interrupted run the same button continues where it stopped
-        log(`${r.stopped ? r.stopped + "\n" : ""}Проверено ${r.done} из ${r.total}, найдено ${r.found}, передано ${r.sent}.${r.outside ? "\nНе проверялись " + r.outside + " невыполненных: вне периода, выбранного в «Настройках» («У каких задач читать историю этапов»)." : ""}${r.failed.length ? "\nНе удалось проверить " + r.failed.length + " (сайт не отвечал): " + r.failed.slice(0, 8).join(", ") + (r.failed.length > 8 ? "…" : "") + ". Нажмите «Продолжить»." : ""}\nОткройте в платформе раздел «Синхронизация»: там список изменений.${expLine()}${finLine}`);
+        log(`${r.stopped ? r.stopped + "\n" : ""}Проверено ${r.done} из ${r.total}, найдено ${r.found}, передано ${r.sent}.${r.taken ? "\nЗадач, которые в это время читал другой пользователь: " + r.taken + " (их результат уже в платформе)." : ""}\nСтатусы в платформе: ${r.moved.done + r.moved.progress ? "обновлено " + (r.moved.done + r.moved.progress) + " (выполнено " + r.moved.done + ", в работе " + r.moved.progress + ")" : "изменений нет"}${r.moved.due ? ", новых сроков: " + r.moved.due : ""}.${r.outside ? "\nНе проверялись " + r.outside + " невыполненных: вне периода, выбранного в «Настройках» («У каких задач читать историю этапов»)." : ""}${r.failed.length ? "\nНе удалось проверить " + r.failed.length + " (сайт не отвечал): " + r.failed.slice(0, 8).join(", ") + (r.failed.length > 8 ? "…" : "") + ". Нажмите «Продолжить»." : ""}\nОткройте в платформе раздел «Синхронизация»: там список изменений.${expLine()}${finLine}`);
       } catch (e) { resume = true; log("Ошибка: " + e.message + "\nНажмите «Продолжить»: уже проверенное повторно не читается."); }
       running = false; $("go").disabled = false; $("stop").disabled = true; $("go").textContent = resume ? "Продолжить" : "Синхронизировать";
     };
