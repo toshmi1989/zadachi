@@ -128,7 +128,7 @@ routes.tasks = async function (page, params) {
     const who = t.assignee_id ? `<span class="who">${avatar(t.assignee_id, t.assignee_name, "sm")}${esc(t.assignee)}</span>` : '<span class="who none">Не назначен</span>';
     return `<tr data-id="${t.id}" style="--i:${Math.min(i, 24)}" tabindex="0">
       ${admin ? `<td class="c-cb"><input type="checkbox" class="cb" aria-label="Выбрать"></td>` : ""}
-      <td class="code num">${t.num || ""}<br>${t.site && t.site.link ? `<a class="ext" href="${esc(t.site.link)}" target="_blank" rel="noopener noreferrer" data-ext ${t.site.exact ? "" : `data-copycode="${esc(t.code)}"`} data-tip="${t.site.exact ? "Открыть задачу на ijro.uz" : "Откроется раздел на ijro, а код задачи скопируется: вставьте его в поиск"}">${esc(t.code)}${icon("ext")}</a>` : esc(t.code)}</td>
+      <td class="code num">${t.num || ""}<br><button type="button" class="codebtn" data-copy="${esc(t.code)}" data-tip="Нажмите, чтобы скопировать код">${esc(t.code)}${icon("copy")}</button></td>
       <td class="doc"><b>${esc(t.doc_no)}</b><small>${esc(t.kind)}${t.doc_date ? " · " + fdate(t.doc_date) : ""}</small></td>
       <td>${t.point ? `<span class="pt">${esc(t.point)}</span>` : ""}<div class="tx">${esc(t.text)}</div></td>
       <td>${who}</td><td>${deadlineCell(t)}</td>
@@ -163,6 +163,8 @@ routes.tasks = async function (page, params) {
   }
   const body = $("#rows", page);
   body.addEventListener("click", async e => {
+    const cp = e.target.closest("[data-copy]");
+    if (cp) { copyText(cp.dataset.copy, "Код " + cp.dataset.copy + " скопирован"); return; }      // the code is copied; the card does not open
     if (e.target.closest("[data-ext]")) return;   // the link to ijro opens in a new tab and must not open the drawer
     const tr = e.target.closest("tr[data-id]"); if (!tr) return;
     const id = +tr.dataset.id;

@@ -29,12 +29,12 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   ok((await p.locator("#s-rev tbody tr").count()) === 3, "after applying 2 of 5, 3 remain");
   // list: link to ijro and the chip
   await p.goto(BASE + "/#/tasks?q=XPG5469"); await p.waitForSelector("#rows tr[data-id]"); await p.waitForTimeout(800);
-  const link = p.locator("#rows a.ext").first();
-  const href = await link.getAttribute("href"); ok(/^https:\/\/edo\.ijro\.uz\/assignments\/president-assignments\/current-user\/main\/tasks\/all\/r-xpg$/.test(href), "the code in the list is a link to the exact task on ijro: " + href);
-  ok(await link.getAttribute("target") === "_blank" && /noopener/.test(await link.getAttribute("rel")), "opens in a new tab, noopener");
+  const link = p.locator("#rows button.codebtn").first();
+  ok(await p.locator("#rows a.ext").count() === 0 && (await link.getAttribute("data-copy")) === "XPG5469", "the code in the list is a copy button, not a link to ijro");
   ok(/на сайте: Ответ дан/.test(await p.textContent("#rows")), "the list shows that the site disagrees");
-  const [popup] = await Promise.all([ctx.waitForEvent("page", { timeout: 3000 }).catch(() => null), link.click()]); if (popup) await popup.close().catch(() => {});
-  ok(!p.url().includes("drawer") && await p.locator(".drawer.on").count() === 0, "clicking the link does not open the drawer");
+  let popup = null; ctx.on("page", pg => { popup = pg; }); await link.click(); await p.waitForTimeout(600);
+  ok(!popup && /XPG5469 скопирован|Не удалось скопировать/.test(await p.textContent("body")), "a click on the code only copies it: no new tab, a message");
+  ok(await p.locator(".drawer.on").count() === 0, "clicking the code does not open the drawer");
   await p.screenshot({ path: OUT + "/102-list-link.png" });
   // card
   await p.click("#rows tr[data-id] td:nth-child(3)"); await p.waitForSelector(".drawer.on .site-box"); await p.waitForTimeout(700);

@@ -619,3 +619,8 @@ table.dbt{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px;
 .okc{color:var(--ok)}.noc{color:var(--no)}
 @media (max-width:760px){.dkpis{grid-template-columns:1fr}.dk{border-left:0;border-top:1px solid var(--rule)}.dk:first-child{border-top:0}.dk .v{font-size:28px}.dk .go{opacity:1}}
 #d-table.v-stages td.dc{min-width:92px}#d-table.v-stages th:first-child,#d-table.v-stages td:first-child{min-width:270px;max-width:300px}#d-table.v-stages .rt{display:none}
+/* the code of a task in the list: a click copies it */
+.codebtn{display:inline-flex;align-items:center;gap:5px;border:1px solid transparent;border-radius:6px;background:none;color:inherit;font:inherit;font-weight:600;padding:1px 6px;margin-left:-6px;cursor:copy}
+.codebtn .ic{width:13px;height:13px;opacity:0;transition:opacity .15s;color:var(--text-3)}
+.codebtn:hover,.codebtn:focus-visible{border-color:var(--line-2);background:var(--surface-2)}.codebtn:hover .ic,.codebtn:focus-visible .ic{opacity:1}
+.codebtn:focus-visible{outline:2px solid var(--brand);outline-offset:1px}

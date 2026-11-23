@@ -22,10 +22,24 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   await row.locator('select[data-f="assignee_id"]').selectOption(who); await a.waitForSelector(`#ed-rows tr[data-id="${id}"] .ed-saved`, { timeout: 5000 });
   ok(String((await (await a.request.get(BASE + `/api/tasks/${id}`)).json()).assignee_id) === who, "the responsible person is saved at once");
   await a.screenshot({ path: OUT + "/72-editor.png", fullPage: false });
-  // a task by hand
-  await a.click("#ed-add"); await a.fill("#nt-text", "Подготовить справку для проверки редактора"); await a.selectOption("#nt-kind", "Қарор"); await a.fill("#nt-doc", "ПҚ-1 от 01.12.2026"); await a.fill("#nt-close", "2026-12-12");
-  await a.click(".modal button.pri"); await a.waitForSelector("#ed-rows tr[data-id]", { timeout: 8000 }); await a.waitForTimeout(800);
-  ok(/вручную/.test(await a.textContent("#ed-rows")) && /^M\d{5}/.test((await a.locator("#ed-rows tr .code b").first().textContent()).trim()), "the new task is in the list with its own code and the mark «вручную»");
+  // tasks by their codes: only the codes are entered
+  await a.click("#ed-add"); await a.waitForSelector("#nt-codes");
+  ok(await a.locator(".modal input, .modal select").count() === 0 && await a.locator(".modal textarea").count() === 1, "adding asks only for the codes");
+  await a.fill("#nt-codes", "edt1111, EDT2222\nnot-a-code"); await a.click(".modal button.pri"); await a.waitForSelector("#ed-rows tr[data-id]", { timeout: 8000 }); await a.waitForTimeout(1000);
+  ok(/Добавлено: 2/.test(await a.textContent("body")), "two codes were added, the bad one is reported");
+  await a.fill("#ed-q", "EDT1111"); await a.waitForTimeout(900);
+  const newRow = a.locator("#ed-rows tr[data-id]").first();
+  ok(/EDT1111/.test(await newRow.textContent()) && /ждёт данных с сайта/.test(await newRow.textContent()) && /по коду/.test(await newRow.textContent()), "the new task waits for its data from the site and is marked «по коду»");
+  ok(/ждут данных с сайта/.test(await a.textContent("#ed-pend")), "a banner says that tasks wait for the script");
+  await a.screenshot({ path: OUT + "/73-editor-codes.png" });
+  // deleting
+  const delId = await newRow.getAttribute("data-id");
+  await newRow.locator(".ed-del").click(); await a.waitForSelector(".modal button.pri");
+  await a.click(".modal [data-x]"); await a.waitForTimeout(300);
+  ok((await a.request.get(BASE + `/api/tasks/${delId}`)).status() === 200, "«Отмена» keeps the task");
+  await newRow.locator(".ed-del").click(); await a.waitForSelector(".modal button.pri"); await a.click(".modal button.pri"); await a.waitForTimeout(1200);
+  ok((await a.request.get(BASE + `/api/tasks/${delId}`)).status() === 404 && /удалена/.test(await a.textContent("body")), "the task is deleted after the confirmation");
+  await a.request.delete(BASE + `/api/tasks/${(await (await a.request.get(BASE + "/api/tasks?q=EDT2222&status=all")).json()).items[0].id}`);
   // the specialist
   const s = await (await b.newContext({ viewport: { width: 1400, height: 1000 } })).newPage();
   s.on("pageerror", e => errs.push(e.message));

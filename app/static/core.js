@@ -25,6 +25,8 @@ const ICON = {
   eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 9.7-9.7M18 5l3 3M15 8l2 2"/>',
@@ -237,6 +239,13 @@ function markNav(name) {
   $$("#tabs a, #bottom a").forEach(a => a.classList.toggle("on", a.dataset.r === name));
   const a = $("#tabs a.on"), ink = $("#ink");
   if (a) { ink.style.left = a.offsetLeft + "px"; ink.style.width = a.offsetWidth + "px"; ink.style.opacity = 1; } else ink.style.opacity = 0;
+}
+
+/* copy a text to the clipboard (the code of a task); where the clipboard API is not allowed the old way is used */
+function copyText(text, done) {
+  const ok = () => toast(done || "Скопировано: " + text);
+  const old = () => { const t = document.createElement("textarea"); t.value = text; t.style.cssText = "position:fixed;opacity:0;top:0"; document.body.appendChild(t); t.select(); let r = false; try { r = document.execCommand("copy"); } catch (e) { /* no */ } t.remove(); r ? ok() : toast("Не удалось скопировать: выделите код и нажмите Ctrl+C", "error"); };
+  try { navigator.clipboard.writeText(text).then(ok, old); } catch (e) { old(); }
 }
 
 /* A link to ijro that cannot open the task itself (no card address known) leads to the section and copies the code of the task:

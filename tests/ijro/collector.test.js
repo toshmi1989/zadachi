@@ -226,6 +226,18 @@ const fake = http.createServer((req, res) => {
   ok(xresd.stopped && xresd.files === 0, "a lost session stops the run: " + xresd.stopped);
   ok((await core.runExports({ server: xserver, upload: xupload, client: xclient, recipientDb: "", sleep: noSleep, pageFetch: xFetch }).then(() => "no", e => e.name)) !== "no", "no organization known: a clear error, nothing is downloaded");
 
+  // ---- tasks added by their code: their data is looked for in the site's lists; the download stops when nothing is left to find
+  const fsent = []; let fcount = 0;
+  const fupload = async (path, buf) => { fsent.push(path); fcount++; return fcount === 1 ? { filled: 1, pending: ["BBB2222"] } : { filled: 1, pending: [] }; };
+  const fserver2 = async (m, p, b) => p === "/api/sync/export-plan" ? Object.assign({}, await xserver(m, p, b), { pending: 2 }) : xserver(m, p, b);
+  const fres = await core.runExports({ server: fserver2, upload: fupload, client: xclient, recipientDb: "ORG1", sleep: noSleep, pageFetch: xFetch, pause: 0, fill: true });
+  ok(fres.fill && fres.filled === 2 && fres.pending.length === 0 && fres.files === 2 && fsent.length === 2 && fsent.every(x => x.includes("fill=1") && !x.includes("last=1")), "fill: two lists were enough, the third is not downloaded: " + fsent.length);
+  const fnone = async (m, p, b) => p === "/api/sync/export-plan" ? Object.assign({}, await xserver(m, p, b), { pending: 0 }) : xserver(m, p, b);
+  fsent.length = 0; const fr0 = await core.runExports({ server: fnone, upload: fupload, client: xclient, recipientDb: "ORG1", sleep: noSleep, pageFetch: xFetch, pause: 0, fill: true });
+  ok(fr0.filled === 0 && fsent.length === 0 && fr0.pendingAtStart === 0, "fill: no task waits, nothing is downloaded");
+  fcount = 5; fsent.length = 0; const frNot = await core.runExports({ server: fserver2, upload: async () => ({ filled: 0, pending: ["ZZZ0001"] }), client: xclient, recipientDb: "ORG1", sleep: noSleep, pageFetch: xFetch, pause: 0, fill: true });
+  ok(frNot.filled === 0 && frNot.pending[0] === "ZZZ0001" && frNot.files === xplan.sections.length * xplan.tabs.length, "fill: a code that is in no list is reported after all the lists were looked at");
+
   // ---- the final call: only a complete run is judged
   const fcalls = []; const fserver = async (m, p, b) => { fcalls.push(b); return { judged: true }; };
   await core.finishRun({ server: fserver, run: "abc", exp: { files: 9, expected: 9, errors: [], stopped: "" }, sync: { stopped: "", failed: [] } });

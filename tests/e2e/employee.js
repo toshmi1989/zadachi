@@ -34,7 +34,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   // what the official site says about their own task
   const mine = p.locator("#rows tr", { hasText: mineCode });
   ok(/на сайте: Ответ дан/.test(await mine.textContent()), "the list shows what the site says about their own task");
-  ok(await mine.locator("a.ext").count() === 1, "the code is a link to ijro for their own task");
+  ok(await mine.locator("button.codebtn").count() === 1 && await mine.locator("a.ext").count() === 0, "the code in the list is a copy button, not a link to ijro");
   await mine.locator("td:nth-child(3)").click(); await p.waitForSelector(".drawer.on .site-box"); await p.waitForTimeout(700);
   const box = await p.textContent(".site-box");
   ok(/Ответ дан, идёт согласование/.test(box) && /Ответы на сайте \(2\)/.test(box) && /Возврат на доработку/.test(box), "the card shows the site's status and the answers");

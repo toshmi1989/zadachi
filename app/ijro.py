@@ -392,7 +392,7 @@ def history_filter() -> tuple[str, list]:
     """The part of the query that says WHOSE history (answers, stages) is read, by the settings: which statuses of ours, and which month of the term.
     A task without any term is outside every month scope (there is nothing to put it in)."""
     sts = ("todo", "progress", "done", "info") if setting("history_statuses") == "all" else ("todo", "progress")
-    sql, args = f" AND t.manual=0 AND t.status IN ({','.join('?' * len(sts))})", list(sts)          # a task added by hand is not on the site: nothing to read
+    sql, args = f" AND t.manual IN (0, 2) AND t.status IN ({','.join('?' * len(sts))})", list(sts)          # a task added by hand (manual=1) is not on the site: nothing to read; one added by its code (manual=2) is read like any other
     scope = setting("history_scope")
     if scope in ("month", "month_next", "month_overdue"):
         eff = tasks.eff_sql("due" if setting("history_date") == "due" else "close")
@@ -453,7 +453,7 @@ def job(c, key_id: int, resume: bool = False) -> dict:
         args.append((datetime.now(TZ) - timedelta(hours=RESUME_HOURS)).strftime("%Y-%m-%d %H:%M:%S"))
     rows = c.execute(sql + " ORDER BY t.seq, t.id", args).fetchall()
     cond0, args0 = history_filter()
-    outside = c.execute("SELECT COUNT(*) FROM tasks t WHERE t.manual=0 AND t.status IN ('todo','progress') AND t.id NOT IN (SELECT t.id FROM tasks t WHERE 1=1" + cond0 + ")", args0).fetchone()[0]
+    outside = c.execute("SELECT COUNT(*) FROM tasks t WHERE t.manual IN (0, 2) AND t.status IN ('todo','progress') AND t.id NOT IN (SELECT t.id FROM tasks t WHERE 1=1" + cond0 + ")", args0).fetchone()[0]
     by_kind = {k: s["id"] for s in SECTIONS["sections"] for k in s["kinds"]}
     cur = c.execute("INSERT INTO sync_runs(key_id, started_at, expected) VALUES (?,?,?)", (key_id, now(), len(rows)))
     return {"run_id": cur.lastrowid, "outside_scope": outside, "scope": setting("history_scope"), "api_tasks": SECTIONS["api_tasks"], "sections": SECTIONS["sections"],
@@ -642,6 +642,34 @@ def ingest(c, key_row, body: dict) -> dict:
     if run_id:
         c.execute("UPDATE sync_runs SET received=received+?, found=found+?, finished_at=? WHERE id=? AND key_id=?", (stored, found, now(), run_id, key_row["id"]))
     return {"stored": stored, "found": found, "auto_applied": auto, "moved": moved}
+
+
+# ---------------------------------------------------------------- tasks added by their code: the rest is filled from the site's list
+
+CODE_RE = __import__("re").compile(r"^[A-Z]{2,4}\d{3,6}$")
+
+
+def pending_codes(c) -> list[str]:
+    """Tasks that were added by the code only and wait for their data (text, document, term, the responsible person): the collector brings it from the site's list."""
+    return [r["code"] for r in c.execute("SELECT code FROM tasks WHERE manual=2 AND text='' ORDER BY id")]
+
+
+def fill_pending(c, data: bytes, filename: str, user_id: int | None) -> dict:
+    """The site's Excel list (the same file as an import) is searched for the codes that wait for their data; the rows found fill those tasks, exactly as an import
+    would (kind, document, point, text, term, the responsible person and their department, the status). Nothing else in the file is touched."""
+    from . import importer, site_import
+    want = set(pending_codes(c))
+    if not want:
+        return {"filled": 0, "pending": []}
+    raw = [r for r in site_import._read_rows(data) if str(r["code"]).upper() in want]
+    if not raw:
+        return {"filled": 0, "pending": sorted(want)}
+    for r in raw:
+        r["code"] = str(r["code"]).upper()
+    rows, warnings, _report = site_import.read_rows(c, raw, None, None, None, False, False, False)      # no filters: these codes were asked for by a person
+    importer.apply(c, rows, warnings, filename or "fill.xlsx", user_id, False, mode="base", overwrite=True)
+    left = pending_codes(c)
+    return {"filled": len(want) - len(left), "pending": left}
 
 
 # ---------------------------------------------------------------- tasks the site no longer lists as ours

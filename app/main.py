@@ -431,6 +431,71 @@ async def api_task_create(request: Request):
     return out
 
 
+CODES_SPLIT = re.compile(r"[\s,;]+")
+
+
+@app.post("/api/tasks/by-codes")
+async def api_task_by_codes(request: Request):
+    """Tasks are added by their CODES only (administrator or specialist): the rest (text, document, term, the responsible person) the collector finds on the site and fills in
+    at its next synchronisation. Such a task is never taken off the dashboard by a loaded base."""
+    user = me(request)
+    if user["role"] not in auth.STAFF:
+        bad("Задачи добавляет администратор или специалист", 403)
+    b = await _json(request)
+    raw = b.get("codes")
+    tokens = [x for x in (CODES_SPLIT.split(raw) if isinstance(raw, str) else [str(x) for x in raw] if isinstance(raw, list) else []) if x.strip()]
+    if not tokens:
+        bad("Введите коды задач: по одному в строке или через пробел")
+    if len(tokens) > 300:
+        bad("За один раз можно добавить до 300 кодов")
+    created, existing, invalid, seen = [], [], [], set()
+    with tx() as c:
+        for tok in tokens:
+            code = tok.strip().upper()
+            if code in seen:
+                continue
+            seen.add(code)
+            if not ijro.CODE_RE.fullmatch(code):
+                invalid.append(tok[:30])
+                continue
+            if c.execute("SELECT 1 FROM tasks WHERE code=?", (code,)).fetchone():
+                existing.append(code)
+                continue
+            c.execute("""INSERT INTO tasks(code, seq, kind, doc_no, point, text, status, tag, manual, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                      (code, 0, "", "", "", "", "todo", "", 2, now(), now()))
+            created.append(code)
+        if created:
+            audit(c, "task.create_by_code", "task", None, {"codes": created[:50], "count": len(created), "by_role": user["role"]})
+    return {"created": created, "existing": existing, "invalid": invalid}
+
+
+@app.get("/api/tasks-pending")
+def api_tasks_pending(request: Request):
+    if me(request)["role"] not in auth.STAFF:
+        bad("Доступно администратору и специалисту", 403)
+    c = connect()
+    try:
+        codes = ijro.pending_codes(c)
+    finally:
+        c.close()
+    return {"count": len(codes), "codes": codes[:50]}
+
+
+@app.delete("/api/tasks/{task_id}")
+def api_task_delete(request: Request, task_id: int):
+    """Deletes a task with its history and what was read from the site (administrator or specialist). A task of the site's base comes back with the next load of the base."""
+    user = me(request)
+    if user["role"] not in auth.STAFF:
+        bad("Задачи удаляет администратор или специалист", 403)
+    with tx() as c:
+        t = c.execute("SELECT code, status, manual, substr(text, 1, 120) AS text FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not t:
+            bad("Задача не найдена", 404)
+        c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+        audit(c, "task.delete", "task", task_id, {"code": t["code"], "status": t["status"], "text": t["text"], "by_role": user["role"]})
+    return {"ok": True, "code": t["code"]}
+
+
 @app.post("/api/tasks/bulk")
 async def api_task_bulk(request: Request):
     if me(request)["role"] not in auth.STAFF:
@@ -689,12 +754,17 @@ async def api_import(request: Request, file: list[UploadFile] = File(...), dry: 
 @app.get("/api/sync/export-plan")
 def api_sync_export_plan():
     """What the collector downloads with the site's «Hisobot» button: for each of the three lists the open and the overdue tasks (the two tabs of the site)."""
-    return {**ijro.export_plan(),
+    c = connect()
+    try:
+        pending = ijro.pending_codes(c)
+    finally:
+        c.close()
+    return {**ijro.export_plan(), "pending": len(pending),
             "urls": {"export": ijro.SECTIONS["api_tasks"] + "/report/list-by-recipient-export", "presigned": ijro.EDO_API + "/v2/files/presigned-url/download"}}
 
 
 @app.post("/api/sync/export")
-async def api_sync_export(request: Request, source: str = "", last: int = 0, run: str = ""):
+async def api_sync_export(request: Request, source: str = "", last: int = 0, run: str = "", fill: int = 0):
     """The Excel export of one of the three lists of the site, sent by the collector (the file is what the site's own «Hisobot» button gives).
     Imported at once with the default window (the last 30 days and the next 60 of terms) and the remembered department mapping;
     departments that are not mapped yet are only reported (they are mapped once, on the import screen). `last=1` on the final file of a run:
@@ -704,6 +774,12 @@ async def api_sync_export(request: Request, source: str = "", last: int = 0, run
         bad(f"Файл больше {MAX_UPLOAD // (1024 * 1024)} МБ", 413)
     if not data or not site_import.is_site_export(data):
         bad("Это не выгрузка «Топшириқлар кесимида» сайта")
+    if fill:      # only the tasks that were added by their code get their data from this list; nothing else in the file is touched
+        def fill_only():
+            with tx() as c:
+                return ijro.fill_pending(c, data, f"sync-fill:{source or 'export'}.xlsx", request.state.key["created_by"])
+        res = await run_in_threadpool(fill_only)
+        return {"source": source, "fill": True, **res}
     from datetime import timedelta
     t = today()
     ours: set = set()
@@ -716,12 +792,14 @@ async def api_sync_export(request: Request, source: str = "", last: int = 0, run
         if re.fullmatch(r"[0-9a-fA-F-]{8,64}", run or ""):
             with tx() as c:
                 ijro.record_export(c, run, ours)
+        with tx() as c:       # the tasks that wait for their data are filled from the same file
+            res["filled"] = ijro.fill_pending(c, data, f"sync-fill:{source or 'export'}.xlsx", created_by)
         return res
     out = await run_in_threadpool(work)
     site = out.get("site", {})
     return {"source": source, "mode": mode, "rows": out["rows"], "created": out["created"], "updated": out["updated"], "unchanged": out["unchanged"], "missing": out.get("missing", 0),
             "unmapped": [d["name"] for d in site.get("departments", []) if not d.get("unit_id") and d.get("how") != "confirmed"][:30], "skipped": site.get("skipped", {}),
-            "closing": out.get("closing")}
+            "closing": out.get("closing"), "filled": out.get("filled", {}).get("filled", 0), "pending": out.get("filled", {}).get("pending", [])}
 
 
 @app.put("/api/import/aliases")
@@ -753,7 +831,7 @@ def api_import_clear_info():
     """What «Очистить базу» would erase (shown before the person confirms)."""
     c = connect()
     try:
-        r = c.execute("SELECT COUNT(*) AS n, COALESCE(SUM(manual), 0) AS m, COALESCE(SUM(status='gone'), 0) AS g FROM tasks").fetchone()
+        r = c.execute("SELECT COUNT(*) AS n, COALESCE(SUM(manual > 0), 0) AS m, COALESCE(SUM(status='gone'), 0) AS g FROM tasks").fetchone()
         return {"tasks": r["n"], "manual": r["m"], "gone": r["g"], "word": CLEAR_WORD}
     finally:
         c.close()
