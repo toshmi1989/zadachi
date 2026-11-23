@@ -105,6 +105,25 @@ def live_answers(snap) -> tuple[list[dict], int]:
     return keep, max(len(allv), total or 0)
 
 
+def _opt(snap, key):
+    """A field of a snapshot that older rows (and the tests' dictionaries) may not have."""
+    return snap[key] if key in snap.keys() else None
+
+
+def term_changed_after(snap, answer_ms: int) -> bool:
+    """The Chamber of Accounts accepted the answer for information at `answer_ms`. Was the term of the task changed on the site AFTER that?
+    Then the task has been dealt with: a new term is set, nothing waits for us. Three signs, in this order:
+      the card says the term was not changed at all -> no;
+      the synchronisation saw the term change after it had seen the answer -> yes;
+      the site changed the task itself (updated_time) later than the answer -> yes (a few minutes of slack: the answer and the term may be one action)."""
+    if _opt(snap, "due_changed") == 0:
+        return False
+    seen, upd = _opt(snap, "term_seen_ms"), _opt(snap, "updated_ms")
+    if seen and seen > answer_ms:
+        return True
+    return bool(upd and upd > answer_ms + 5 * 60 * 1000)
+
+
 def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
     """Where the task is on its way. {code, n (index in STAGE_STEPS, -1 = no answer yet), label, hint, attention, new_due}.
     code 'info': the Chamber of Accounts sent it back (accepted for information / asked for more): the task is NOT done and its term changes."""
@@ -140,6 +159,10 @@ def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
     if t in T_INFO:
         nd = None if periodic else _day(snap["due_ms"])
         accepted = any(w in (cur.get("text") or "").lower() for w in ACCEPTED_WORDS)
+        if term_changed_after(snap, cur.get("at_ms") or 0):       # the new term was set after the answer: the task is not waiting for an answer of ours any more
+            return base | {"code": "info_term", "n": 3, "label": "Срок изменён после ответа Палаты",
+                           "hint": "Счётная палата приняла ответ к сведению, затем срок задачи на сайте был изменён. Задача НЕ выполнена, но ответа от нас сейчас не ждут.",
+                           "attention": False, "new_due": nd.isoformat() if nd and dates else None}
         return base | {"code": "info", "n": 3, "label": "Маълумот учун қабул қилинди" if accepted else "Қўшимча маълумот сўрови",
                        "hint": "Счётная палата вернула задачу" + (": ответ принят к сведению" if accepted else " с запросом информации") + ". Задача НЕ выполнена, срок изменён." + extra,
                        "attention": True, "new_due": nd.isoformat() if nd and dates else None}
@@ -178,7 +201,7 @@ def auto_apply(c, task_id: int) -> list[str]:
         changes["status"] = "progress"
     elif r["our_status"] == "todo" and cl.get("open") and st["code"] in ("moj", "cab", "chamber", "info", "returned", "chamber_other"):
         changes["status"] = "progress"
-    if st["code"] == "info":
+    if st["code"] in ("info", "info_term"):
         if r["our_status"] == "done":
             changes["status"] = "progress"
         if st["new_due"] and st["new_due"] != r["due"]:
@@ -548,7 +571,9 @@ def shown(snap, due: str | None, dates: bool = True) -> tuple[dict, dict, str, s
     Chamber's request (49) alike, so the number alone says "the answer is being approved" also when the task is back with us. Then the stage speaks."""
     cl, st = classify(snap, due, dates=dates), stage_of(snap, due, dates=dates)
     label, note = cl["label"], cl["note"]
-    if cl["status"] == "progress" and st["code"] in ("info", "returned", "chamber_other"):
+    if st["code"] == "info_term":
+        label, note = "Срок изменён после ответа Палаты", st["hint"]
+    elif cl["status"] == "progress" and st["code"] in ("info", "returned", "chamber_other"):
         label = {"info": "Вернулась от Счётной палаты — ждёт вашего ответа", "returned": "Вернулась к вам — ждёт вашего ответа", "chamber_other": "Ответ Счётной палаты: проверьте на сайте"}[st["code"]]
         note = st["hint"]
     return cl, st, label, note
@@ -609,17 +634,29 @@ def ingest(c, key_row, body: dict) -> dict:
         rid = str(rid)[:64] if isinstance(rid, (str, int)) and not isinstance(rid, bool) else ""
         ref = it.get("task_ref")
         ref = str(ref)[:64] if isinstance(ref, (str, int)) and not isinstance(ref, bool) else ""
+        old_row = c.execute("SELECT due_ms, answers FROM ijro_snapshots WHERE task_id=?", (codes[it["code"]],)).fetchone()
+        seen_ms = None
+        if old_row and is_found and old_row["due_ms"] and _int(it.get("due_ms")) and _day(old_row["due_ms"]) != _day(_int(it.get("due_ms"))):
+            prev = current_answer(json.loads(old_row["answers"] or "[]"))
+            if prev and prev.get("sender_type") in T_INFO:      # the Chamber's answer was already known, and now the term is different
+                seen_ms = int(datetime.now(TZ).timestamp() * 1000)
+        upd_ms = _int(it.get("updated_ms"))
+        dch = it.get("due_changed")
+        dch = None if dch is None or not isinstance(dch, bool) else int(dch)
         c.execute("""INSERT INTO ijro_snapshots(task_id, found, section, recipient_id, task_ref, site_status, is_done, overdue, repeatable, due_ms, done_ms,
-                                                periods, is_secret, answers, checked_at, run_id, answers_total) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                                periods, is_secret, answers, checked_at, run_id, answers_total, updated_ms, due_changed, term_seen_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                      ON CONFLICT(task_id) DO UPDATE SET found=excluded.found, section=excluded.section, recipient_id=excluded.recipient_id, task_ref=excluded.task_ref,
                        site_status=excluded.site_status, is_done=excluded.is_done, overdue=excluded.overdue, repeatable=excluded.repeatable,
                        due_ms=excluded.due_ms, done_ms=excluded.done_ms, periods=excluded.periods, is_secret=excluded.is_secret,
                        answers=CASE WHEN excluded.found=1 AND ? THEN excluded.answers ELSE ijro_snapshots.answers END,
                        checked_at=excluded.checked_at, run_id=excluded.run_id,
-                       answers_total=CASE WHEN excluded.found=1 AND ? THEN excluded.answers_total ELSE ijro_snapshots.answers_total END""",
+                       answers_total=CASE WHEN excluded.found=1 AND ? THEN excluded.answers_total ELSE ijro_snapshots.answers_total END,
+                       updated_ms=CASE WHEN excluded.found=1 THEN excluded.updated_ms ELSE ijro_snapshots.updated_ms END,
+                       due_changed=CASE WHEN excluded.found=1 THEN excluded.due_changed ELSE ijro_snapshots.due_changed END,
+                       term_seen_ms=COALESCE(excluded.term_seen_ms, ijro_snapshots.term_seen_ms)""",
                   (codes[it["code"]], int(is_found), sec if is_found else "", rid if is_found else "", ref if is_found else "", _int(it.get("status")) if is_found else None,
                    int(bool(it.get("is_done"))), None if it.get("overdue") is None else int(bool(it.get("overdue"))), int(bool(it.get("repeatable"))),
-                   _int(it.get("due_ms")), _int(it.get("done_ms")), json.dumps(periods), int(secret), json.dumps(answers, ensure_ascii=False), now(), run_id, total,
+                   _int(it.get("due_ms")), _int(it.get("done_ms")), json.dumps(periods), int(secret), json.dumps(answers, ensure_ascii=False), now(), run_id, total, upd_ms if is_found else None, dch if is_found else None, seen_ms,
                    int(bool(it.get("answers_loaded"))), int(bool(it.get("answers_loaded")))))
         stored += 1
         touched.append(codes[it["code"]])

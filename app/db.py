@@ -260,6 +260,9 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN unit_id INTEGER REFERENCES units(id)",
     "ALTER TABLE ijro_snapshots ADD COLUMN task_ref TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE ijro_snapshots ADD COLUMN answers_total INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE ijro_snapshots ADD COLUMN updated_ms INTEGER",          # the time the site last changed the task itself (not an answer): a term moved after the Chamber's answer shows here
+    "ALTER TABLE ijro_snapshots ADD COLUMN due_changed INTEGER",         # the card's own flag «term changed» (NULL = the site did not say)
+    "ALTER TABLE ijro_snapshots ADD COLUMN term_seen_ms INTEGER",        # when the synchronisation saw the term change after it had already seen the Chamber's answer
     "ALTER TABLE tasks ADD COLUMN manual INTEGER NOT NULL DEFAULT 0",       # 1 = a task added by hand: a loaded base never takes it off the dashboard
 ]
 # pw_set = somebody has issued this person a password (people created by the Excel import have none yet)

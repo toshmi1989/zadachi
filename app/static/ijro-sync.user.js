@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.8.0
+// @version      1.8.1
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.8.0";
+  const VERSION = "1.8.1";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -210,6 +210,7 @@
       code, found: true, section: sectionId, recipient_id: String(pick(it, ["id", "recipient_id"]) ?? ""), task_ref: String(it.task_id ?? ""), status: num(it.status), is_done: !!it.is_done,
       overdue: (() => { const v = pick(it, ["overdue", "is_overdue", "expired"]); return v === undefined ? null : !!v; })(),
       repeatable: !!(it.repeatable) || periods.length > 0, due_ms: toMs(pick(it, ["task_due_date_ms", "due_date"])), done_ms: toMs(it.done_at), periods, is_secret: !!it.is_secret, answers_loaded: !!loaded,
+      updated_ms: toMs(it.updated_time),      // when the site last changed the task itself: a term moved after the Chamber's answer shows here
       answers_total: (answerList || []).length,      // how many answers the site has; only the last `days` days are sent
       answers: (answerList || []).map(a => ({ a, t: toMs(pick(a, ["created_at_ms", "created_at", "date_row_ms", "date", "sent_at", "updated_at"])) })).filter(x => !days || !x.t || x.t >= Date.now() - days * 86400000).sort((x, y) => (x.t || 0) - (y.t || 0)).slice(-30).map(({ a, t }) => ({ sender_type: num(a.sender_type), state: num(a.state), active: !!a.active,
         org: orgOf(a), pd: toMs(a.period && a.period.due_date),
@@ -286,18 +287,19 @@
       let it = null, sec = null;
       for (const s of order(t.section)) { it = await client.find(t.code, s); await sleep(pace); if (it) { sec = s; break; } }
       if (!it) return { code: t.code, found: false };
-      let ans = [], loaded = false, secret = !!it.is_secret;
+      let ans = [], loaded = false, secret = !!it.is_secret, dueChanged = null;
       if (it.status !== 0 || it.is_done || it.repeatable) {
         const id = it.id ?? it.recipient_id;
         try {
           const cd = await client.card(id); secret = secret || cd.is_secret;
+          if (cd.raw && typeof cd.raw.due_date_changed === "boolean") dueChanged = cd.raw.due_date_changed;      // the card's own flag: the term of the task was changed
           if (cd.code && cd.code.toUpperCase() !== t.code.toUpperCase()) return { code: t.code, found: false };   // the card says it is another task: never trust it
         } catch (e) { if (e instanceof SessionError || e instanceof TransientError) throw e; secret = true; }   // a card that cannot be read: treated as secret, no answer text
         await sleep(pace);
         try { ans = await client.answers(id); loaded = true; } catch (e) { if (e instanceof SessionError || e instanceof TransientError) throw e; }
         await sleep(pace);
       }
-      return Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded, job.answers_days), { is_secret: secret });
+      return Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded, job.answers_days), { is_secret: secret, due_changed: dueChanged });
     }
     /* the tasks are taken in small portions by several workers; before reading a portion the platform is asked which of it is free:
        what another person's run has taken or has just read is left to them (several people can press the button at once, and nobody reads the same twice) */
@@ -357,9 +359,9 @@
         if (it) {
           const id = it.id ?? it.recipient_id;
           const ans = await client.answers(id).catch(e => [{ error: String(e.message || e) }]);
-          const cardRes = await client.card(id).then(c => ({ ok: true, is_secret: c.is_secret, shape: shapeDeep(c.raw, 2) }), e => ({ ok: false, error: String(e.message || e) }));
+          const cardRes = await client.card(id).then(c => ({ ok: true, is_secret: c.is_secret, raw_flag: c.raw && c.raw.due_date_changed, shape: shapeDeep(c.raw, 2) }), e => ({ ok: false, error: String(e.message || e) }));
           const per = Array.isArray(it.repeat_periods) && it.repeat_periods[0] ? shapeDeep(it.repeat_periods[0], 1) : null;
-          return Object.assign(out, { found: true, section: s.id, matched_by: ownCodeOf(it) ? "code_in_item" : "server_filter", ambiguous: info.ambiguous || 0, item: shapeDeep(it, 2), repeat_period: per, card: cardRes, answers_count: ans.length, answer: shapeDeep(ans[0], 3) });
+          return Object.assign(out, { dates: { updated_time: it.updated_time ?? null, modification_date: it.modification_date ?? null, task_due_date_ms: it.task_due_date_ms ?? null, card_due_date_changed: cardRes.ok && cardRes.raw_flag !== undefined ? cardRes.raw_flag : null }, found: true, section: s.id, matched_by: ownCodeOf(it) ? "code_in_item" : "server_filter", ambiguous: info.ambiguous || 0, item: shapeDeep(it, 2), repeat_period: per, card: cardRes, answers_count: ans.length, answer: shapeDeep(ans[0], 3) });
         }
       }
     }
