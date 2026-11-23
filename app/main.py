@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import auth, backup, closing, importer, ijro, reminders, site_import, stats, tasks, telegram
+from . import auth, backup, closing, importer, ijro, reminders, report, site_import, stats, tasks, telegram
 from .db import STATUSES, audit, connect, init_db, now, setting, today, tx
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -239,9 +239,29 @@ def api_me(request: Request):
 def api_dashboard(request: Request, by: str = "close"):
     c = connect()
     try:
-        return stats.dashboard(c, tasks.norm_by(by, me(request)))
+        return stats.dashboard(c, tasks.norm_by(by, me(request))) | {"updated": report.last_updates(c)}
     finally:
         c.close()
+
+
+@app.get("/api/report.xlsx")
+def api_report(request: Request, month: str = "", by: str = "close"):
+    """The summary table of our department in the format of the ministry's table (Excel). month: YYYY-MM or empty (every month). Administrator and specialist."""
+    user = me(request)
+    if user["role"] not in auth.STAFF:
+        bad("Выгрузка доступна администратору и специалисту", 403)
+    if month and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+        bad("month: ГГГГ-ММ или пусто")
+    c = connect()
+    try:
+        data = report.collect(c, month, tasks.norm_by(by, user))
+        up = report.last_updates(c)
+    finally:
+        c.close()
+    stamp = max(up["sync"], up["base"]) or now()
+    body = report.build_xlsx(data, month, stamp)
+    return Response(body, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="hisobot-{month or "all"}.xlsx"'})
 
 
 def unit_list(c) -> list[dict]:

@@ -42,7 +42,18 @@ routes.dashboard = async function (page, params) {
     other: ["Другое", "Этап не распознан, задача не найдена на сайте или нет ответов за последний месяц"], unchecked: ["Не проверялись", "Этапы ещё не читали: синхронизация читает только задачи, выбранные в «Настройках»"] };
   const STAGE_GROUPS = [["Путь согласования →", ["none", "moj", "cab", "chamber"]], ["Нужны действия", ["info", "returned"]], ["Нет данных", ["other", "unchecked"]]];
 
-  page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Дашборд</h1><p>${esc(todayStr)}</p></div><div class="controls" id="ctl"></div></div>`;
+  /* when the data was last brought: «2026-11-23 09:13:05» -> «23.11.2026 09:13» */
+  const stampOf = v => v ? v.slice(8, 10) + "." + v.slice(5, 7) + "." + v.slice(0, 4) + " " + v.slice(11, 16) : "";
+  const upd = d.updated || {};
+  const updLine = `<span class="upd" data-tip="Время последней проверки задач на сайте (кнопка «Синхронизировать» в скрипте) и последней загрузки базы">Обновлено: <b>${upd.sync ? stampOf(upd.sync) : "синхронизации ещё не было"}</b>${upd.sync ? " · синхронизация с ijro" : ""}${upd.base ? " · база загружена " + stampOf(upd.base) : ""}</span>`;
+  page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Дашборд</h1><p>${esc(todayStr)}</p><p class="upd-line">${updLine}</p></div><div class="controls" id="ctl"></div></div>`;
+  if (["admin", "specialist"].includes(Z.me.role) && T.total) {      // the summary table of the department in the format of the ministry's table (Excel)
+    const best = d.months.reduce((m, ym) => { const v = d.total.months[ym] || { done: 0, open: 0 }, n = v.done + v.open; return n > m[1] ? [ym, n] : m; }, ["", -1])[0];
+    const box = document.createElement("div"); box.className = "ctl rp";
+    box.innerHTML = `<span>Сводная таблица:</span><select id="rp-m" aria-label="Месяц сводной таблицы">${d.months.map(ym => `<option value="${ym}"${ym === best ? " selected" : ""}>${monthShort(ym)}</option>`).join("")}<option value="">Все месяцы</option></select><button type="button" class="btn sm" id="rp-go" data-tip="Таблица по отделам департамента в формате сводной таблицы министерства (Excel)">${icon("download")}Выгрузить в Excel</button>`;
+    $("#ctl", page).appendChild(box);
+    $("#rp-go", page).onclick = () => { location.href = "/api/report.xlsx?month=" + encodeURIComponent($("#rp-m", page).value) + "&by=" + Z.by; };
+  }
   if (Z.me.role === "admin") $("#ctl", page).appendChild(byToggle(() => route()));   // only the administrator can switch between the closing date and the official term
 
   if (!T.total) {

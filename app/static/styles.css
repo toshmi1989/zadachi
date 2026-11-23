@@ -624,3 +624,6 @@ table.dbt{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px;
 .codebtn .ic{width:13px;height:13px;opacity:0;transition:opacity .15s;color:var(--text-3)}
 .codebtn:hover,.codebtn:focus-visible{border-color:var(--line-2);background:var(--surface-2)}.codebtn:hover .ic,.codebtn:focus-visible .ic{opacity:1}
 .codebtn:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+/* the dashboard: when the data was last updated, and the export of the summary table */
+.pagehead .upd-line{margin:2px 0 0;font-size:13px;color:var(--text-2)}.pagehead .upd-line b{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}
+.ctl.rp{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;white-space:nowrap}.ctl.rp select{width:128px;min-width:0;flex:none;border-radius:6px;padding-top:6px;padding-bottom:6px}.ctl.rp .btn{flex:none}
