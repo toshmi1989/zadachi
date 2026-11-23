@@ -263,6 +263,10 @@ MIGRATIONS = [
     "ALTER TABLE ijro_snapshots ADD COLUMN updated_ms INTEGER",          # the time the site last changed the task itself (not an answer): a term moved after the Chamber's answer shows here
     "ALTER TABLE ijro_snapshots ADD COLUMN due_changed INTEGER",         # the card's own flag «term changed» (NULL = the site did not say)
     "ALTER TABLE ijro_snapshots ADD COLUMN term_seen_ms INTEGER",        # when the synchronisation saw the term change after it had already seen the Chamber's answer
+    "ALTER TABLE ijro_snapshots ADD COLUMN due_mod_ms INTEGER",          # the card's own «modification_date» (when the term was modified), if the site gives one
+    "ALTER TABLE ijro_snapshots ADD COLUMN ext_date TEXT",               # «Муддат узайтириш санаси» of the Excel list: the date the term was extended (a copy of tasks.ext_date)
+    "ALTER TABLE tasks ADD COLUMN ext_date TEXT",
+    "ALTER TABLE tasks ADD COLUMN ext_n INTEGER",
     "ALTER TABLE tasks ADD COLUMN manual INTEGER NOT NULL DEFAULT 0",       # 1 = a task added by hand: a loaded base never takes it off the dashboard
 ]
 # pw_set = somebody has issued this person a password (people created by the Excel import have none yet)

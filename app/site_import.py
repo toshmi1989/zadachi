@@ -29,7 +29,7 @@ _CYR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэ�
 
 # columns of the export by the beginning of the header (casefolded)
 COLS = {"num": "№", "kind": "ҳужжат тури", "doc": "ҳужжат рақами ва санаси", "text": "топшириқ мазмуни", "due": "топшириқ муддати", "exec": "масъул ижрочи",
-        "who": "масъул ҳодим", "dept": "бўлим номи", "code": "топшириқ коди", "state": "топшириқ ҳолати", "role": "топшириқ тури", "ext_n": "муддат узайтириш сони"}
+        "who": "масъул ҳодим", "dept": "бўлим номи", "code": "топшириқ коди", "state": "топшириқ ҳолати", "role": "топшириқ тури", "ext_n": "муддат узайтириш сони", "ext_d": "муддат узайтириш санаси"}
 
 
 def skeleton(s) -> str:
@@ -93,6 +93,24 @@ def is_site_export(data: bytes) -> bool:
     return False
 
 
+def last_date(v) -> str | None:
+    """The latest date written in a cell (a date, or text with one or several dates: 25.11.2026, 2026-11-25 ...), ISO, or None."""
+    from datetime import date as _d, datetime as _dt
+    if v in (None, "", "-"):
+        return None
+    if isinstance(v, _dt):
+        return v.date().isoformat()
+    if isinstance(v, _d):
+        return v.isoformat()
+    found = []
+    for m in re.finditer(r"(\d{4})-(\d{2})-(\d{2})|(\d{1,2})[./-](\d{1,2})[./-](\d{4})", str(v)):
+        try:
+            found.append(_d(int(m.group(1)), int(m.group(2)), int(m.group(3))) if m.group(1) else _d(int(m.group(6)), int(m.group(5)), int(m.group(4))))
+        except ValueError:
+            pass
+    return max(found).isoformat() if found else None
+
+
 def _read_rows(data: bytes) -> list[dict]:
     wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
     for ws in wb.worksheets:
@@ -112,7 +130,7 @@ def _read_rows(data: bytes) -> list[dict]:
                 continue
             out.append({"code": code, "kind": get("kind"), "doc": get("doc"), "text": get("text"), "due": get("due"), "who": re.sub(r"\s+", " ", str(get("who") or "")).strip(),
                         "dept": re.sub(r"\s+", " ", str(get("dept") or "")).strip(), "state": str(get("state") or "").strip(), "role": str(get("role") or "").strip(),
-                        "exec": str(get("exec") or "").strip(), "ext": str(get("ext_n") or "").strip(), "n": i})
+                        "exec": str(get("exec") or "").strip(), "ext": str(get("ext_n") or "").strip(), "ext_d": get("ext_d"), "n": i})
         if header:
             if cols.get("exec") is None:       # without the column the filter would drop everything: say so instead
                 raise ImportError_("В выгрузке нет колонки «Масъул ижрочи»: по ней отбираются задачи Соғлиқни сақлаш вазирлиги")
@@ -226,7 +244,8 @@ def read_rows(c, raw_all: list[dict], due_from: str | None, due_to: str | None, 
 
         st = STATE.get(r["state"].strip().casefold(), "todo")
         rows.append({"code": code, "seq": 0, "kind": kind_of(r["kind"]), "doc_no": doc_no, "doc_date": doc_date, "point": point, "text": text, "due": r["_due"], "close_date": None,
-                     "who": r["who"], "status": st, "tag": "", "unit_id": r["_unit"], "department": r["dept"], "ext": r["ext"]})
+                     "who": r["who"], "status": st, "tag": "", "unit_id": r["_unit"], "department": r["dept"], "ext": r["ext"],
+                     "ext_date": last_date(r.get("ext_d")), "ext_n": int(r["ext"]) if str(r["ext"]).strip().isdigit() else None})
     votes: dict[tuple, int] = {}            # which unit the export puts a person in, and where he is now
     for r in rows:
         u = who_is.get(auth.norm_name(r["who"])) if r["who"] else None

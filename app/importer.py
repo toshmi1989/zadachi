@@ -130,6 +130,16 @@ def _same_words(a, b) -> bool:
     return flat(a) == flat(b)
 
 
+def store_ext(c, rows: list[dict]) -> None:
+    """The extension date of the site's list («Муддат узайтириш санаси») and the number of extensions: kept on the task and copied to what was read from the site,
+    because the Chamber's «accepted for information» answer only means «waiting for us» until the term is extended after it."""
+    for r in rows:
+        if "unit_id" not in r:
+            continue                      # only the raw export of the site has these columns
+        c.execute("UPDATE tasks SET ext_date=?, ext_n=? WHERE code=?", (r.get("ext_date"), r.get("ext_n"), r["code"]))
+        c.execute("UPDATE ijro_snapshots SET ext_date=? WHERE task_id=(SELECT id FROM tasks WHERE code=?)", (r.get("ext_date"), r["code"]))
+
+
 def apply_status(c, rows: list[dict], warnings: list[str], filename: str, user_id: int | None, dry: bool) -> dict:
     """The ordinary import: ONLY the statuses of tasks that are already in the base. A task that is not in the base is counted, never created;
     texts, terms, responsible people are not touched; what the administrator edited by hand stays as it is."""
@@ -158,6 +168,8 @@ def apply_status(c, rows: list[dict], warnings: list[str], filename: str, user_i
         updated += 1
         if not dry:
             c.execute("UPDATE tasks SET status=?, done_at=?, updated_at=? WHERE id=?", (new, t if new == "done" else None, t, cur["id"]))
+    if not dry:
+        store_ext(c, rows)
     summary = {"rows": len(rows), "created": 0, "updated": updated, "unchanged": same, "kept_manual": kept, "missing": missing,
                "new_people": [], "warnings": warnings, "dry": dry, "mode": "status"}
     if not dry:
@@ -244,6 +256,8 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
                 diff["done_at"] = t if diff["status"] == "done" else None
             diff["updated_at"] = t
             c.execute(f"UPDATE tasks SET {', '.join(k + '=?' for k in diff)} WHERE id=?", (*diff.values(), cur_row["id"]))
+    if not dry:
+        store_ext(c, rows)
     summary = {"rows": len(rows), "created": created, "updated": updated, "unchanged": same, "kept_manual": kept, "overwritten": overwritten,
                "new_people": new_people, "warnings": warnings, "dry": dry, "mode": "base"}
     if not dry:

@@ -251,6 +251,7 @@ function stageBlock(t, admin) {
   const nd = g.new_due ? g.new_due.split("-").reverse().join(".") : "";
   return `<div class="sec-t" style="margin-top:12px">Этап согласования</div><div class="stepper">${steps}</div>
     <p class="hint" style="margin:6px 0 0"><b>${esc(g.label)}</b> — ${esc(g.hint)}</p>
+    ${admin && g.evidence ? `<p class="hint" style="margin:6px 0 0" data-tip="Почему задача в этом этапе: даты, по которым платформа решает, менялся ли срок после ответа Палаты">Проверка срока: ${esc(g.evidence)}.</p>` : ""}
     ${g.code === "info" ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>Счётная палата вернула задачу (принято к сведению или запрос информации): она <b>не выполнена</b>${admin && nd ? `, срок на сайте изменён на <b>${esc(nd)}</b> (мы обновили его у себя)` : ", срок изменён"}.</span></div>` : ""}
     ${g.code === "returned" || g.code === "chamber_other" ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>${esc(g.hint)}.</span></div>` : ""}`;
 }

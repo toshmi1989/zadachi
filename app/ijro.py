@@ -110,18 +110,39 @@ def _opt(snap, key):
     return snap[key] if key in snap.keys() else None
 
 
+def _local_day(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, TZ).date().isoformat()
+
+
 def term_changed_after(snap, answer_ms: int) -> bool:
     """The Chamber of Accounts accepted the answer for information at `answer_ms`. Was the term of the task changed on the site AFTER that?
-    Then the task has been dealt with: a new term is set, nothing waits for us. Three signs, in this order:
-      the card says the term was not changed at all -> no;
-      the synchronisation saw the term change after it had seen the answer -> yes;
-      the site changed the task itself (updated_time) later than the answer -> yes (a few minutes of slack: the answer and the term may be one action)."""
-    if _opt(snap, "due_changed") == 0:
-        return False
-    seen, upd = _opt(snap, "term_seen_ms"), _opt(snap, "updated_ms")
+    Then the task has been dealt with: a new term is set, nothing waits for us. Signs of a change after the answer (any one is enough):
+      the date of the term's extension in the site's Excel list («Муддат узайтириш санаси») is a later DAY than the answer;
+      the card's own modification date of the term is later than the answer;
+      the synchronisation saw the term change after it had already seen the answer;
+      the site changed the task itself (updated_time) later than the answer (a few minutes of slack: the answer and the term may be one action)."""
+    ext = _opt(snap, "ext_date")
+    if ext and ext > _local_day(answer_ms):
+        return True
+    mod, seen, upd = _opt(snap, "due_mod_ms"), _opt(snap, "term_seen_ms"), _opt(snap, "updated_ms")
+    if mod and mod > answer_ms + 60 * 1000:
+        return True
     if seen and seen > answer_ms:
         return True
     return bool(upd and upd > answer_ms + 5 * 60 * 1000)
+
+
+def term_evidence(snap, answer_ms: int) -> str:
+    """What the platform knows about the term of a task that the Chamber returned, in words (for the administrator): to see at once why it is where it is."""
+    fd = lambda iso: iso[8:10] + "." + iso[5:7] + "." + iso[:4]
+    ft = lambda ms: datetime.fromtimestamp(ms / 1000, TZ).strftime("%d.%m.%Y %H:%M")
+    ext, mod, seen, upd = _opt(snap, "ext_date"), _opt(snap, "due_mod_ms"), _opt(snap, "term_seen_ms"), _opt(snap, "updated_ms")
+    parts = [f"ответ Палаты: {ft(answer_ms)}",
+             f"дата продления срока в списке сайта: {fd(ext)}" if ext else "даты продления срока в списке сайта нет (загрузите свежий список Excel)",
+             f"дата изменения срока в карточке: {ft(mod)}" if mod else "",
+             f"задача изменена на сайте: {ft(upd)}" if upd else "",
+             f"синхронизация увидела новый срок: {ft(seen)}" if seen else ""]
+    return "; ".join(x for x in parts if x)
 
 
 def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
@@ -159,11 +180,12 @@ def stage_of(snap, due: str | None = None, dates: bool = True) -> dict:
     if t in T_INFO:
         nd = None if periodic else _day(snap["due_ms"])
         accepted = any(w in (cur.get("text") or "").lower() for w in ACCEPTED_WORDS)
+        ev = term_evidence(snap, cur.get("at_ms") or 0) if dates and cur.get("at_ms") else ""
         if term_changed_after(snap, cur.get("at_ms") or 0):       # the new term was set after the answer: the task is not waiting for an answer of ours any more
-            return base | {"code": "info_term", "n": 3, "label": "Срок изменён после ответа Палаты",
+            return base | {"evidence": ev, "code": "info_term", "n": 3, "label": "Срок изменён после ответа Палаты",
                            "hint": "Счётная палата приняла ответ к сведению, затем срок задачи на сайте был изменён. Задача НЕ выполнена, но ответа от нас сейчас не ждут.",
                            "attention": False, "new_due": nd.isoformat() if nd and dates else None}
-        return base | {"code": "info", "n": 3, "label": "Маълумот учун қабул қилинди" if accepted else "Қўшимча маълумот сўрови",
+        return base | {"evidence": ev, "code": "info", "n": 3, "label": "Маълумот учун қабул қилинди" if accepted else "Қўшимча маълумот сўрови",
                        "hint": "Счётная палата вернула задачу" + (": ответ принят к сведению" if accepted else " с запросом информации") + ". Задача НЕ выполнена, срок изменён." + extra,
                        "attention": True, "new_due": nd.isoformat() if nd and dates else None}
     if t in T_REWORK or t in T_RETAKEN:
@@ -641,10 +663,11 @@ def ingest(c, key_row, body: dict) -> dict:
             if prev and prev.get("sender_type") in T_INFO:      # the Chamber's answer was already known, and now the term is different
                 seen_ms = int(datetime.now(TZ).timestamp() * 1000)
         upd_ms = _int(it.get("updated_ms"))
+        mod_ms = _int(it.get("due_mod_ms"))
         dch = it.get("due_changed")
         dch = None if dch is None or not isinstance(dch, bool) else int(dch)
         c.execute("""INSERT INTO ijro_snapshots(task_id, found, section, recipient_id, task_ref, site_status, is_done, overdue, repeatable, due_ms, done_ms,
-                                                periods, is_secret, answers, checked_at, run_id, answers_total, updated_ms, due_changed, term_seen_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                                periods, is_secret, answers, checked_at, run_id, answers_total, updated_ms, due_changed, term_seen_ms, due_mod_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                      ON CONFLICT(task_id) DO UPDATE SET found=excluded.found, section=excluded.section, recipient_id=excluded.recipient_id, task_ref=excluded.task_ref,
                        site_status=excluded.site_status, is_done=excluded.is_done, overdue=excluded.overdue, repeatable=excluded.repeatable,
                        due_ms=excluded.due_ms, done_ms=excluded.done_ms, periods=excluded.periods, is_secret=excluded.is_secret,
@@ -653,11 +676,13 @@ def ingest(c, key_row, body: dict) -> dict:
                        answers_total=CASE WHEN excluded.found=1 AND ? THEN excluded.answers_total ELSE ijro_snapshots.answers_total END,
                        updated_ms=CASE WHEN excluded.found=1 THEN excluded.updated_ms ELSE ijro_snapshots.updated_ms END,
                        due_changed=CASE WHEN excluded.found=1 THEN excluded.due_changed ELSE ijro_snapshots.due_changed END,
+                       due_mod_ms=CASE WHEN excluded.found=1 THEN excluded.due_mod_ms ELSE ijro_snapshots.due_mod_ms END,
                        term_seen_ms=COALESCE(excluded.term_seen_ms, ijro_snapshots.term_seen_ms)""",
                   (codes[it["code"]], int(is_found), sec if is_found else "", rid if is_found else "", ref if is_found else "", _int(it.get("status")) if is_found else None,
                    int(bool(it.get("is_done"))), None if it.get("overdue") is None else int(bool(it.get("overdue"))), int(bool(it.get("repeatable"))),
-                   _int(it.get("due_ms")), _int(it.get("done_ms")), json.dumps(periods), int(secret), json.dumps(answers, ensure_ascii=False), now(), run_id, total, upd_ms if is_found else None, dch if is_found else None, seen_ms,
+                   _int(it.get("due_ms")), _int(it.get("done_ms")), json.dumps(periods), int(secret), json.dumps(answers, ensure_ascii=False), now(), run_id, total, upd_ms if is_found else None, dch if is_found else None, seen_ms, mod_ms if is_found else None,
                    int(bool(it.get("answers_loaded"))), int(bool(it.get("answers_loaded")))))
+        c.execute("UPDATE ijro_snapshots SET ext_date=(SELECT ext_date FROM tasks WHERE id=?) WHERE task_id=?", (codes[it["code"]], codes[it["code"]]))
         stored += 1
         touched.append(codes[it["code"]])
         found += is_found

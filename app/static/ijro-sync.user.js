@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.8.1
+// @version      1.8.2
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.8.1";
+  const VERSION = "1.8.2";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -143,6 +143,13 @@
       return null;
     };
     return walk(it, [], 0);
+  };
+  /* a field of the card wherever it lies (up to `depth` levels down); undefined when there is none */
+  const deepFind = (o, key, depth) => {
+    if (!o || typeof o !== "object" || o instanceof Uint8Array || depth < 0) return undefined;
+    if (!Array.isArray(o) && o[key] != null) return o[key];
+    for (const k of Array.isArray(o) ? o.slice(0, 5).keys() : Object.keys(o)) { const r = deepFind(o[k], key, depth - 1); if (r !== undefined && r !== null) return r; }
+    return undefined;
   };
   const getPath = (o, path) => path.split(".").reduce((a, k) => a == null ? a : a[k.replace("[]", "")], o);
   const itemCode = it => { const p = codePath(it, null); const v = p ? getPath(it, p) : ""; return typeof v === "string" ? v : ""; };
@@ -287,19 +294,20 @@
       let it = null, sec = null;
       for (const s of order(t.section)) { it = await client.find(t.code, s); await sleep(pace); if (it) { sec = s; break; } }
       if (!it) return { code: t.code, found: false };
-      let ans = [], loaded = false, secret = !!it.is_secret, dueChanged = null;
+      let ans = [], loaded = false, secret = !!it.is_secret, dueChanged = null, dueMod = null;
       if (it.status !== 0 || it.is_done || it.repeatable) {
         const id = it.id ?? it.recipient_id;
         try {
           const cd = await client.card(id); secret = secret || cd.is_secret;
-          if (cd.raw && typeof cd.raw.due_date_changed === "boolean") dueChanged = cd.raw.due_date_changed;      // the card's own flag: the term of the task was changed
+          const flag = deepFind(cd.raw, "due_date_changed", 3); if (typeof flag === "boolean") dueChanged = flag;      // the card's own flag: the term of the task was changed
+          const md = deepFind(cd.raw, "modification_date", 3); if (md != null) dueMod = toMs(md);                    // and the date of the modification, if the site gives one
           if (cd.code && cd.code.toUpperCase() !== t.code.toUpperCase()) return { code: t.code, found: false };   // the card says it is another task: never trust it
         } catch (e) { if (e instanceof SessionError || e instanceof TransientError) throw e; secret = true; }   // a card that cannot be read: treated as secret, no answer text
         await sleep(pace);
         try { ans = await client.answers(id); loaded = true; } catch (e) { if (e instanceof SessionError || e instanceof TransientError) throw e; }
         await sleep(pace);
       }
-      return Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded, job.answers_days), { is_secret: secret, due_changed: dueChanged });
+      return Object.assign(snapshotOf(t.code, sec.id, it, ans, loaded, job.answers_days), { is_secret: secret, due_changed: dueChanged, due_mod_ms: dueMod });
     }
     /* the tasks are taken in small portions by several workers; before reading a portion the platform is asked which of it is free:
        what another person's run has taken or has just read is left to them (several people can press the button at once, and nobody reads the same twice) */
@@ -359,9 +367,9 @@
         if (it) {
           const id = it.id ?? it.recipient_id;
           const ans = await client.answers(id).catch(e => [{ error: String(e.message || e) }]);
-          const cardRes = await client.card(id).then(c => ({ ok: true, is_secret: c.is_secret, raw_flag: c.raw && c.raw.due_date_changed, shape: shapeDeep(c.raw, 2) }), e => ({ ok: false, error: String(e.message || e) }));
+          const cardRes = await client.card(id).then(c => ({ ok: true, is_secret: c.is_secret, raw_flag: deepFind(c.raw, "due_date_changed", 3), raw_mod: deepFind(c.raw, "modification_date", 3), raw_req: deepFind(c.raw, "request_due_date", 3), shape: shapeDeep(c.raw, 2) }), e => ({ ok: false, error: String(e.message || e) }));
           const per = Array.isArray(it.repeat_periods) && it.repeat_periods[0] ? shapeDeep(it.repeat_periods[0], 1) : null;
-          return Object.assign(out, { dates: { updated_time: it.updated_time ?? null, modification_date: it.modification_date ?? null, task_due_date_ms: it.task_due_date_ms ?? null, card_due_date_changed: cardRes.ok && cardRes.raw_flag !== undefined ? cardRes.raw_flag : null }, found: true, section: s.id, matched_by: ownCodeOf(it) ? "code_in_item" : "server_filter", ambiguous: info.ambiguous || 0, item: shapeDeep(it, 2), repeat_period: per, card: cardRes, answers_count: ans.length, answer: shapeDeep(ans[0], 3) });
+          return Object.assign(out, { dates: { updated_time: it.updated_time ?? null, modification_date: it.modification_date ?? null, task_due_date_ms: it.task_due_date_ms ?? null, card_due_date_changed: cardRes.ok && cardRes.raw_flag !== undefined ? cardRes.raw_flag : null, card_modification_date: cardRes.ok ? (cardRes.raw_mod ?? null) : null, card_request_due_date: cardRes.ok ? (cardRes.raw_req ?? null) : null }, found: true, section: s.id, matched_by: ownCodeOf(it) ? "code_in_item" : "server_filter", ambiguous: info.ambiguous || 0, item: shapeDeep(it, 2), repeat_period: per, card: cardRes, answers_count: ans.length, answer: shapeDeep(ans[0], 3) });
         }
       }
     }
@@ -399,7 +407,7 @@
     throw last;
   }
 
-  const core = { withRetry, orgOf, encode, decode, makeClient, runSync, finishRun, newRun, runExports, fetchExport, exportBody, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
+  const core = { deepFind, withRetry, orgOf, encode, decode, makeClient, runSync, finishRun, newRun, runExports, fetchExport, exportBody, diagnose, snapshotOf, itemCode, codePath, hasCode, shapeDeep, listOf, toMs, SessionError, RateError, TransientError, DEFAULT_BODY };
   if (typeof module !== "undefined" && module.exports) { module.exports = core; return; }
   if (typeof GM_xmlhttpRequest === "undefined" || typeof document === "undefined") return;
 

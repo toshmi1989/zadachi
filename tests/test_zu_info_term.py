@@ -11,7 +11,7 @@ from app.main import app
 from test_app import xlsx
 
 MS = lambda y, m, d, h=12: calendar.timegm(datetime.datetime(y, m, d, h).timetuple()) * 1000
-ANSWER = MS(2026, 11, 6, 21)          # «Маълумот учун қабул қилинди»
+ANSWER = MS(2026, 11, 6, 12)          # «Маълумот учун қабул қилинди»
 HOUR = 3600 * 1000
 
 
@@ -28,8 +28,14 @@ def test_the_stage_depends_on_when_the_term_was_changed(admin):
     assert S(snap(updated_ms=ANSWER + 60 * 1000))["code"] == "info"                       # the answer and the term are one action (a minute apart)
     after = S(snap(updated_ms=ANSWER + 6 * 24 * HOUR))
     assert after["code"] == "info_term" and not after["attention"] and "изменён" in after["label"] and after["new_due"] == "2026-12-05"
-    assert S(snap(updated_ms=ANSWER + 6 * 24 * HOUR, due_changed=0))["code"] == "info"    # the card says the term was not changed at all
-    assert S(snap(updated_ms=ANSWER + 6 * 24 * HOUR, due_changed=1))["code"] == "info_term"
+    assert S(snap(ext_date="2026-11-10"))["code"] == "info_term"                          # the list of the site says: the term was extended on 10.11, the answer is of 6.11
+    assert S(snap(ext_date="2026-11-06"))["code"] == "info"                               # the same day: not enough
+    assert S(snap(ext_date="2026-11-01"))["code"] == "info"                               # the extension is older than the answer
+    assert S(snap(due_mod_ms=ANSWER + 2 * HOUR))["code"] == "info_term"                   # the card's own modification date
+    assert S(snap(due_mod_ms=ANSWER - 2 * HOUR))["code"] == "info"
+    ev = S(snap(ext_date="2026-11-10"))["evidence"]
+    assert "06.11.2026" in ev and "10.11.2026" in ev                                      # the administrator is shown the dates the decision stands on
+    assert "нет" in S(snap())["evidence"] and "evidence" not in S(snap(), dates=False) or S(snap(), dates=False)["evidence"] == ""
     assert S(snap(term_seen_ms=ANSWER + HOUR))["code"] == "info_term"                      # the synchronisation saw the term change after the answer
     assert S(snap(term_seen_ms=ANSWER - HOUR))["code"] == "info"
 
@@ -72,6 +78,18 @@ def test_through_the_synchronisation(admin):
     anon.post("/api/sync/ingest", json={"run_id": 0, "items": [item("IT0001", MS(2026, 12, 25))]}, headers=h)
     t1 = card("IT0001")
     assert t1["site"]["stage"]["code"] == "info_term" and t1["due"] == "2026-12-25"
-    # 4. a term the card says was not changed stays «Палата вернула», whatever the update time
-    anon.post("/api/sync/ingest", json={"run_id": 0, "items": [item("IT0000", MS(2026, 12, 5), updated_ms=ANSWER + 5 * 24 * HOUR, due_changed=False)]}, headers=h)
-    assert card("IT0000")["site"]["stage"]["code"] == "info"
+    # 4. the date of the extension in the site's list (Excel) decides at once, for tasks that were loaded before
+    from test_site_import import HEAD, PRIMARY, export, row
+    col = next(i for i, h in enumerate(HEAD) if str(h).startswith("Муддат узайтириш санаси"))
+    early, late = row("IT0002", PRIMARY, "Term Person", "25.12.2026"), row("IT0003", PRIMARY, "Term Person", "25.12.2026")
+    early[col], late[col] = "01.11.2026", "10.11.2026"
+    r = admin.post("/api/import?dry=0&due_from=2026-12-01&due_to=2026-12-31&ai=0&f_dept=0&f_window=0", files={"file": ("e.xlsx", export([early, late]))})
+    assert r.status_code == 200
+    anon.post("/api/sync/ingest", json={"run_id": 0, "items": [item("IT0002", MS(2026, 12, 25)), item("IT0003", MS(2026, 12, 25))]}, headers=h)
+    assert card("IT0002")["site"]["stage"]["code"] == "info" and card("IT0003")["site"]["stage"]["code"] == "info_term"
+    assert "10.11.2026" in card("IT0003")["site"]["stage"]["evidence"]
+    # a later import with a changed date moves the task without a new synchronisation (the date is kept with what was read from the site)
+    late[col] = ""
+    early[col] = "10.11.2026"
+    admin.post("/api/import?dry=0&due_from=2026-12-01&due_to=2026-12-31&ai=0&f_dept=0&f_window=0", files={"file": ("e.xlsx", export([early, late]))})
+    assert card("IT0002")["site"]["stage"]["code"] == "info_term" and card("IT0003")["site"]["stage"]["code"] == "info"
