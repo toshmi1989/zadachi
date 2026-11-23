@@ -145,7 +145,7 @@ def row_out(r, by: str) -> dict:
         "days": (date.fromisoformat(eff) - t).days if eff else None,
         "status": r["status"], "tag": r["tag"], "bucket": bucket_of(r["status"], eff, t),
         "assignee_id": r["assignee_id"], "assignee": auth.short_name(r["a_name"]) if r["a_name"] else "",
-        "assignee_name": r["a_name"] or "", "unit_id": r["a_unit"], "unit": r["unit_name"] or "", "assignee_raw": r["assignee_raw"], "done_at": r["done_at"], "edited": bool(r["edited"]), "manual": bool(r["manual"]), "by_code": r["manual"] == 2, "pending": r["manual"] == 2 and not r["text"],
+        "assignee_name": r["a_name"] or "", "unit_id": r["a_unit"], "unit": r["unit_name"] or "", "assignee_raw": r["assignee_raw"], "done_at": r["done_at"], "edited": bool(r["edited"]), "manual": bool(r["manual"]), "by_code": r["manual"] == 2, "status_manual": bool(r["status_manual"]), "pending": r["manual"] == 2 and not r["text"],
         "updated_at": r["updated_at"],
     }
 
@@ -211,7 +211,7 @@ def _label(c, field: str, value) -> str:
     return str(value)
 
 
-def update_task(c, task_id: int, changes: dict, user_id: int) -> bool:
+def update_task(c, task_id: int, changes: dict, user_id: int, lock: bool | None = None) -> bool:
     """Admin edit: assignee, status, closing date. Every real change is written to the history. True when anything changed."""
     r = c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
     if not r:
@@ -246,6 +246,8 @@ def update_task(c, task_id: int, changes: dict, user_id: int) -> bool:
             c.execute("UPDATE tasks SET close_src='', close_note='' WHERE id=?", (task_id,))   # a person decided: no longer a proposal
         if field == "status":
             c.execute("UPDATE tasks SET done_at=? WHERE id=?", (now() if value == "done" else None, task_id))
+            if (user_id is not None) if lock is None else lock:       # a person set the status: the task is no longer checked against the site (until they say so)
+                c.execute("UPDATE tasks SET status_manual=1 WHERE id=?", (task_id,))
     if changed:
         c.execute("UPDATE tasks SET edited=1, updated_at=? WHERE id=?", (now(), task_id))
     return changed

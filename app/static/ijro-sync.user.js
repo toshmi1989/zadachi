@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Задачи ⇄ ijro: синхронизация статусов
 // @namespace    zadachi
-// @version      1.8.4
+// @version      1.8.5
 // @description  Читает статусы и ответы по задачам на edo.ijro.uz из вашей уже открытой сессии и передаёт их в платформу «Задачи». Скачивает выгрузки «Hisobot» (только чтение). Ничего не меняет на ijro.
 // @match        https://edo.ijro.uz/*
 // @connect      {{HOST}}
@@ -24,7 +24,7 @@
 (function (root) {
   "use strict";
   const SERVER = "{{ORIGIN}}";
-  const VERSION = "1.8.4";
+  const VERSION = "1.8.5";
 
   /* ───────────── MessagePack (the site speaks it in both directions) ───────────── */
   const te = new TextEncoder(), td = new TextDecoder();
@@ -344,7 +344,7 @@
     await Promise.all(Array.from({ length: width }, () => worker().catch(e => { halt = true; fatal = fatal || e; })));
     if (fatal) { stopped = fatal.message || String(fatal); if (!(fatal instanceof SessionError || fatal instanceof RateError)) { await flush().catch(() => {}); throw fatal; } }
     await flush();
-    return { done, total, found, sent, stopped, failed, taken, moved, outside: job.outside_scope || 0, run_id: job.run_id };
+    return { done, total, found, sent, stopped, failed, taken, moved, locked: job.manual_locked || 0, outside: job.outside_scope || 0, run_id: job.run_id };
   }
 
   /* what the answers look like, without any values that could be personal: names of fields and their types */
@@ -528,7 +528,7 @@
         if (exp) { try { fin = await finishRun({ server, run, exp, sync: r }); } catch (e) { fin = { judged: false, why: e.message }; } }
         finLine = !fin ? "" : !fin.judged ? "\nСнятие лишних задач: пропущено (" + fin.why + ")" : `\nСнятие лишних задач: не относятся к нашим выгрузкам ${fin.stale}${fin.archived ? ", убрано с дашборда " + fin.archived : ""}${fin.waiting ? ", ждут вашего решения в платформе (раздел «Синхронизация»)" : ""}${fin.unsure ? "; не проверялись или закрыты: " + fin.unsure : ""}`;
         resume = !!(r.stopped || r.failed.length);   // after an interrupted run the same button continues where it stopped
-        log(`${r.stopped ? r.stopped + "\n" : ""}Проверено ${r.done} из ${r.total}, найдено ${r.found}, передано ${r.sent}.${r.taken ? "\nЗадач, которые в это время читал другой пользователь: " + r.taken + " (их результат уже в платформе)." : ""}\nСтатусы в платформе: ${r.moved.done + r.moved.progress ? "обновлено " + (r.moved.done + r.moved.progress) + " (выполнено " + r.moved.done + ", в работе " + r.moved.progress + ")" : "изменений нет"}${r.moved.due ? ", новых сроков: " + r.moved.due : ""}.${r.outside ? "\nНе проверялись " + r.outside + " невыполненных: вне периода, выбранного в «Настройках» («У каких задач читать историю этапов»)." : ""}${r.failed.length ? "\nНе удалось проверить " + r.failed.length + " (сайт не отвечал): " + r.failed.slice(0, 8).join(", ") + (r.failed.length > 8 ? "…" : "") + ". Нажмите «Продолжить»." : ""}\nОткройте в платформе раздел «Синхронизация»: там список изменений.${expLine()}${fillLine()}${finLine}`);
+        log(`${r.stopped ? r.stopped + "\n" : ""}Проверено ${r.done} из ${r.total}, найдено ${r.found}, передано ${r.sent}.${r.locked ? "\nНе сверялись " + r.locked + " задач: статус изменён вручную." : ""}${r.taken ? "\nЗадач, которые в это время читал другой пользователь: " + r.taken + " (их результат уже в платформе)." : ""}\nСтатусы в платформе: ${r.moved.done + r.moved.progress ? "обновлено " + (r.moved.done + r.moved.progress) + " (выполнено " + r.moved.done + ", в работе " + r.moved.progress + ")" : "изменений нет"}${r.moved.due ? ", новых сроков: " + r.moved.due : ""}.${r.outside ? "\nНе проверялись " + r.outside + " невыполненных: вне периода, выбранного в «Настройках» («У каких задач читать историю этапов»)." : ""}${r.failed.length ? "\nНе удалось проверить " + r.failed.length + " (сайт не отвечал): " + r.failed.slice(0, 8).join(", ") + (r.failed.length > 8 ? "…" : "") + ". Нажмите «Продолжить»." : ""}\nОткройте в платформе раздел «Синхронизация»: там список изменений.${expLine()}${fillLine()}${finLine}`);
       } catch (e) { resume = true; log("Ошибка: " + e.message + "\nНажмите «Продолжить»: уже проверенное повторно не читается."); }
       running = false; $("go").disabled = false; $("stop").disabled = true; $("go").textContent = resume ? "Продолжить" : "Синхронизировать";
     };

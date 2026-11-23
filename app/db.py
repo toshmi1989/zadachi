@@ -269,6 +269,7 @@ MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN ext_date TEXT",
     "ALTER TABLE tasks ADD COLUMN ext_n INTEGER",
     "ALTER TABLE tasks ADD COLUMN site_code TEXT NOT NULL DEFAULT ''",        # the code of the site when the task is one PERIOD of a periodic task (code is then «КОД#срок»); empty = code
+    "ALTER TABLE tasks ADD COLUMN status_manual INTEGER NOT NULL DEFAULT 0",    # a person set the status by hand: the task is no longer checked against the site
     "ALTER TABLE tasks ADD COLUMN manual INTEGER NOT NULL DEFAULT 0",       # 1 = a task added by hand: a loaded base never takes it off the dashboard
 ]
 # pw_set = somebody has issued this person a password (people created by the Excel import have none yet)
@@ -318,6 +319,9 @@ def init_db() -> None:
         seed_units(c)
         add_missing_units(c)
         remove_wrong_units(c)
+        if not c.execute("SELECT 1 FROM settings WHERE key='status_manual_backfill'").fetchone():      # once: tasks whose status a person has already changed are not checked against the site
+            c.execute("UPDATE tasks SET status_manual=1 WHERE id IN (SELECT task_id FROM task_events WHERE field='status' AND user_id IS NOT NULL)")
+            c.execute("INSERT INTO settings(key, value) VALUES ('status_manual_backfill', '1')")
         if not c.execute("SELECT 1 FROM settings WHERE key='own_default_applied'").fetchone():   # once: employees see only their own tasks
             put_settings(c, {"users_tasks": "own", "own_default_applied": "1"})
         auth.ensure_admin(c)

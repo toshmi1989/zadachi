@@ -323,6 +323,7 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
         if cur_row["edited"] and overwrite and diff.keys() & {"status", "assignee_id", "close_date"}:
             overwritten += 1                      # something the administrator had set by hand is replaced by the file ...
             diff["edited"] = 0                    # ... and the task is the file's again (no longer "edited by hand")
+            diff["status_manual"] = 0             # ... and checked against the site again
         updated += 1
         if not dry:
             if "status" in diff:

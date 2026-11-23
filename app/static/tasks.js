@@ -230,6 +230,8 @@ async function openTask(id, onChange) {
       } catch (e) { toast(e.message, "error"); paint(false); }
     };
     if (canStatus) $("#e-st", b).onclick = e => { const x = e.target.closest("button"); if (x && !x.classList.contains("on")) save({ status: x.dataset.v }, "Статус: " + ST[x.dataset.v]); };
+    const rl = $("#site-relock", b);
+    if (rl) rl.onclick = async () => { try { await api(`/api/tasks/${id}/site-check`, { method: "POST", json: { on: true } }); changed = true; t = await api(`/api/tasks/${id}?by=${Z.by}`); paint(false); toast("Задача снова сверяется с сайтом: статус обновится при следующей синхронизации"); } catch (e) { toast(e.message, "error"); } };
     if (!admin) return;
     const sb = $("#site-apply", b);
     if (sb) sb.onclick = async () => { try { await api("/api/sync/apply", { method: "POST", json: { task_ids: [id] } }); changed = true; const r = await api(`/api/tasks/${id}?by=${Z.by}`); t = r; paint(false); toast("Статус обновлён по данным ijro"); } catch (e) { toast(e.message, "error"); } };
@@ -264,6 +266,7 @@ function siteBlock(t, admin) {
       <a class="btn sm" style="margin-left:auto" href="${esc(s.link)}" target="_blank" rel="noopener noreferrer" ${s.exact_link ? "" : `data-copycode="${esc(t.code)}"`}>${icon("ext")}${s.exact_link ? "Открыть задачу на ijro" : "Открыть раздел и скопировать код"}</a></div>
       ${stageBlock(t, admin)}
       ${s.note ? `<p class="hint" style="margin:8px 0 0">${esc(s.note)}</p>` : ""}
+      ${s.locked ? `<div class="warn" style="margin-top:10px">${icon("info")}<span>Статус изменён вручную: с официальным сайтом эта задача больше не сверяется (её статус и срок остаются такими, как вы поставили).</span>${["admin", "specialist"].includes(Z.me.role) ? '<button class="btn sm" id="site-relock" style="margin-left:auto">Сверять снова</button>' : ""}</div>` : ""}
       ${s.diff ? `<div class="warn" style="margin-top:10px">${icon("info")}<span>На сайте: <b>${esc(s.proposed_label)}</b>, ${admin ? "у нас" : "у вас"}: <b>${esc(ST[t.status])}</b>.</span>${admin ? '<button class="btn sm pri" id="site-apply" style="margin-left:auto">Применить</button>' : ""}</div>` : ""}
       ${s.site_open_we_done ? `<div class="warn" style="margin-top:10px">${icon("alert")}<span>${admin ? "У нас" : "У вас"} задача отмечена выполненной, а на сайте ещё нет: возможно, ответ не отправлен или не принят.</span></div>` : ""}
       ${s.secret ? '<p class="hint" style="margin:8px 0 0">Задача помечена секретной: тексты ответов не копируются в платформу.</p>' : ""}

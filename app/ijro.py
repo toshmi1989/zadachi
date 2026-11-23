@@ -221,9 +221,9 @@ def auto_apply(c, task_id: int) -> list[str]:
     """After a check: what is clear is applied without a review. Never lowers a status by itself, except one case the administrator named:
     the Chamber accepted the answer for information, so a task we had marked done is open again, with the new term.
     Returns what was done (for the log)."""
-    r = c.execute("SELECT s.*, t.status AS our_status, t.due FROM ijro_snapshots s JOIN tasks t ON t.id=s.task_id WHERE s.task_id=?", (task_id,)).fetchone()
-    if not r or r["our_status"] == "info" or not r["found"]:
-        return []
+    r = c.execute("SELECT s.*, t.status AS our_status, t.due, t.status_manual FROM ijro_snapshots s JOIN tasks t ON t.id=s.task_id WHERE s.task_id=?", (task_id,)).fetchone()
+    if not r or r["our_status"] == "info" or not r["found"] or r["status_manual"]:
+        return []                           # a status that a person set stays as it is: the site does not change it
     cl, st, done = classify(r, r["due"]), stage_of(r, r["due"]), []
     changes: dict = {}
     if cl["status"] == "done" and r["our_status"] != "done":
@@ -502,7 +502,7 @@ def job(c, key_id: int, resume: bool = False) -> dict:
     term is in the current month. The section order for each follows the document kind.
     With resume, what was checked in the last hours is skipped: the run goes on where an interrupted one stopped."""
     cond, args = history_filter()
-    sql = "SELECT t.id, COALESCE(NULLIF(t.site_code, ''), t.code) AS code, t.kind FROM tasks t WHERE 1=1" + cond
+    sql = "SELECT t.id, COALESCE(NULLIF(t.site_code, ''), t.code) AS code, t.kind FROM tasks t WHERE t.status_manual=0" + cond      # a task whose status a person set is not checked
     if resume:
         from datetime import timedelta
         sql += " AND t.id NOT IN (SELECT task_id FROM ijro_snapshots WHERE checked_at >= ?)"
@@ -513,10 +513,11 @@ def job(c, key_id: int, resume: bool = False) -> dict:
             seen_codes.add(r["code"])
             rows.append(r)
     cond0, args0 = history_filter()
-    outside = c.execute("SELECT COUNT(*) FROM tasks t WHERE t.manual IN (0, 2) AND t.status IN ('todo','progress') AND t.id NOT IN (SELECT t.id FROM tasks t WHERE 1=1" + cond0 + ")", args0).fetchone()[0]
+    outside = c.execute("SELECT COUNT(*) FROM tasks t WHERE t.manual IN (0, 2) AND t.status_manual=0 AND t.status IN ('todo','progress') AND t.id NOT IN (SELECT t.id FROM tasks t WHERE 1=1" + cond0 + ")", args0).fetchone()[0]
     by_kind = {k: s["id"] for s in SECTIONS["sections"] for k in s["kinds"]}
     cur = c.execute("INSERT INTO sync_runs(key_id, started_at, expected) VALUES (?,?,?)", (key_id, now(), len(rows)))
     return {"run_id": cur.lastrowid, "outside_scope": outside, "scope": setting("history_scope"), "api_tasks": SECTIONS["api_tasks"], "sections": SECTIONS["sections"],
+            "manual_locked": c.execute("SELECT COUNT(*) FROM tasks t WHERE t.status_manual=1 AND t.manual IN (0, 2) AND t.status IN ('todo','progress','done')").fetchone()[0],
             "parallel": max(1, min(5, int(setting("sync_parallel") or 3))), "answers_days": history_days(), "items": [{"code": r["code"], "section": by_kind.get(r["kind"], "")} for r in rows]}
 
 
@@ -616,14 +617,14 @@ def shown(snap, due: str | None, dates: bool = True) -> tuple[dict, dict, str, s
     return cl, st, label, note
 
 
-def site_info(snap, our_status: str, due: str | None = None, admin: bool = True) -> dict:
+def site_info(snap, our_status: str, due: str | None = None, admin: bool = True, locked: bool = False) -> dict:
     """The block 'С ijro.uz' of a task card: for administrators, and for the employee a task is assigned to (without the official term)."""
     cl, st, label, note = shown(snap, due, dates=admin)
-    diff = bool(cl["status"] and cl["status"] != our_status and our_status != "info")
+    diff = bool(cl["status"] and cl["status"] != our_status and our_status != "info") and not locked
     return {"found": bool(snap["found"]), "section": snap["section"], "section_name": (SECTION_BY_ID.get(snap["section"]) or {}).get("name", ""),
             "label": label, "note": note, "known": cl["known"], "proposed": cl["status"],
             "proposed_label": STATUSES.get(cl["status"], "") if cl["status"] else "", "diff": diff,
-            "site_open_we_done": bool(snap["found"] and cl["known"] and (cl["status"] in ("todo", "progress") or cl.get("open")) and our_status == "done"),
+            "site_open_we_done": bool(snap["found"] and cl["known"] and (cl["status"] in ("todo", "progress") or cl.get("open")) and our_status == "done") and not locked, "locked": locked,
             "checked_at": snap["checked_at"], "link": card_link(snap), "exact_link": bool(setting("ijro_card_tpl").strip() and snap["recipient_id"]),
             "secret": bool(snap["is_secret"]), "answers": answers_out(snap), "answers_total": live_answers(snap)[1], "answers_days": history_days(), "late": snap["site_status"] == 21,
             "stage": {k: v for k, v in st.items() if k != "new_due" or admin}}
@@ -842,7 +843,7 @@ def stale_list(c) -> list[dict]:
 
 def review(c) -> dict:
     rows = c.execute("""SELECT s.*, t.code, t.due, t.status AS our_status, t.text, t.kind, t.doc_no, t.point, t.assignee_id, a.name AS assignee
-                        FROM ijro_snapshots s JOIN tasks t ON t.id=s.task_id LEFT JOIN users a ON a.id=t.assignee_id ORDER BY t.seq, t.id""").fetchall()
+                        FROM ijro_snapshots s JOIN tasks t ON t.id=s.task_id LEFT JOIN users a ON a.id=t.assignee_id WHERE t.status_manual=0 ORDER BY t.seq, t.id""").fetchall()
     items, counts = [], {"checked": len(rows), "found": 0, "not_found": 0, "unknown": 0, "to_done": 0, "to_progress": 0, "to_todo": 0, "site_open_we_done": 0, "same": 0}
     for r in rows:
         cl, _st, site_label, site_note = shown(r, r["due"])
@@ -882,7 +883,7 @@ def apply(c, task_ids: list[int], user_id: int) -> dict:
         if not cl["status"] or r["our_status"] == "info" or cl["status"] == r["our_status"]:
             skipped += 1
             continue
-        tasks.update_task(c, tid, {"status": cl["status"]}, user_id)
+        tasks.update_task(c, tid, {"status": cl["status"]}, user_id, lock=False)      # the site's own status taken over: not a manual choice
         applied += 1
     audit(c, "ijro.apply", "task", None, {"applied": applied, "skipped": skipped})
     return {"applied": applied, "skipped": skipped}
@@ -899,7 +900,7 @@ def brief(c, items: list[dict], admin: bool = True) -> None:
         if not r:
             t["site"] = None
             continue
-        info = site_info(r, t["status"], t["due"], admin)
+        info = site_info(r, t["status"], t["due"], admin, t.get("status_manual", False))
         t["site"] = {"found": info["found"], "label": info["label"], "diff": info["diff"], "link": info["link"], "exact": info["exact_link"],
                      "stage": {"code": info["stage"]["code"], "n": info["stage"]["n"], "label": info["stage"]["label"], "attention": info["stage"]["attention"]},
                      "site_open_we_done": info["site_open_we_done"], "checked_at": info["checked_at"]}

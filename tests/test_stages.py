@@ -157,6 +157,11 @@ def test_accepted_for_information_reopens_the_task_with_the_new_term(admin, key)
     assert admin.patch(f"/api/tasks/{tid}", json={"status": "done"}).status_code == 200        # somebody marked it done after the answer was sent
     assert task(admin, "ST0002")["status"] == "done"
     old_due = admin.get(f"/api/tasks/{tid}?by=due").json()["due"]
+    # a status set by hand is final: the site (even the Chamber's return) does not reopen the task or move its term
+    assert push(key, "ST0002", [10, 25, 35, 49], 2, due=ms(2027, 3, 1))["auto_applied"] == 0
+    assert task(admin, "ST0002")["status"] == "done" and admin.get(f"/api/tasks/{tid}?by=due").json()["due"] == old_due
+    # the person turns the check back on: now the Chamber's return reopens it
+    assert admin.post(f"/api/tasks/{tid}/site-check", json={"on": True}).status_code == 200
     push(key, "ST0002", [10, 25, 35, 49], 2, due=ms(2027, 3, 1))
     full = admin.get(f"/api/tasks/{tid}?by=due").json()
     assert full["status"] == "progress"                                                       # the task is not done: the Chamber only took it for information
@@ -223,6 +228,10 @@ def test_status_one_with_answers_means_in_work(admin, key):
     t = admin.get(f"/api/tasks/{uid}").json()
     assert t["status"] == "progress" and t["site"]["stage"]["code"] == "cab" and "статус 1" in t["site"]["label"]
     assert admin.patch(f"/api/tasks/{uid}", json={"status": "done"}).status_code == 200
+    push(key, "ST0003", [10, 25], 1)
+    t = admin.get(f"/api/tasks/{uid}").json()
+    assert t["status"] == "done" and t["site"]["locked"] is True and t["site"]["site_open_we_done"] is False      # set by hand: not checked, not even flagged
+    assert admin.post(f"/api/tasks/{uid}/site-check", json={"on": True}).status_code == 200                        # the check is turned back on
     push(key, "ST0003", [10, 25], 1)
     t = admin.get(f"/api/tasks/{uid}").json()
     assert t["status"] == "done" and t["site"]["site_open_we_done"] is True                  # not reverted by itself: only flagged

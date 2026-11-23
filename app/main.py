@@ -351,7 +351,7 @@ def api_task(request: Request, task_id: int, by: str = "close"):
         out["can_edit"] = me(request)["role"] in auth.STAFF or out["assignee_id"] == me(request)["id"]
         if out["can_edit"]:   # what the site says: for administrators and for the employee a task belongs to (not the official term)
             snap = c.execute("SELECT * FROM ijro_snapshots WHERE task_id=?", (task_id,)).fetchone()
-            out["site"] = ijro.site_info(snap, out["status"], out["due"], me(request)["role"] == "admin") if snap else None
+            out["site"] = ijro.site_info(snap, out["status"], out["due"], me(request)["role"] == "admin", out.get("status_manual", False)) if snap else None
         return out
     finally:
         c.close()
@@ -409,7 +409,7 @@ async def api_task_update(request: Request, task_id: int):
         out = tasks.get_task(c, task_id, user, False)
         out["can_edit"] = True
         snap = c.execute("SELECT * FROM ijro_snapshots WHERE task_id=?", (task_id,)).fetchone()
-        out["site"] = ijro.site_info(snap, out["status"], out["due"], user["role"] == "admin") if snap else None
+        out["site"] = ijro.site_info(snap, out["status"], out["due"], user["role"] == "admin", out.get("status_manual", False)) if snap else None
     if user["role"] in auth.STAFF and changed and before and out["assignee_id"] and out["assignee_id"] != before["assignee_id"] and out["assignee_id"] != user["id"]:
         reminders.notify_assigned([(task_id, out["assignee_id"])])
     return out | {"changed": changed}
@@ -518,6 +518,21 @@ def api_task_delete(request: Request, task_id: int):
         c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
         audit(c, "task.delete", "task", task_id, {"code": t["code"], "status": t["status"], "text": t["text"], "by_role": user["role"]})
     return {"ok": True, "code": t["code"]}
+
+
+@app.post("/api/tasks/{task_id}/site-check")
+async def api_task_site_check(request: Request, task_id: int):
+    """A task whose status a person set is not checked against the official site any more; this turns the check back on (on=true) or off (on=false)."""
+    user = me(request)
+    if user["role"] not in auth.STAFF:
+        bad("Доступно администратору и специалисту", 403)
+    b = await _json(request)
+    on = bool(b.get("on"))
+    with tx() as c:
+        if not c.execute("UPDATE tasks SET status_manual=? WHERE id=?", (0 if on else 1, task_id)).rowcount:
+            bad("Задача не найдена", 404)
+        audit(c, "task.site_check", "task", task_id, {"on": on, "by_role": user["role"]})
+    return {"ok": True, "status_manual": not on}
 
 
 @app.post("/api/tasks/bulk")
