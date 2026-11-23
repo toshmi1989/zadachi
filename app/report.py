@@ -216,7 +216,7 @@ def collect_tasks(c, month: str, by: str) -> dict:
     units = c.execute("SELECT id, num, name, parent_id FROM units WHERE active=1 ORDER BY sort, id").fetchall()
     ids = {u["id"]: u for u in units}
     stage = ijro.stage_map(c)
-    out = []
+    out = []      # a long text is cut to 400 characters: the whole one is in the task
     for r in c.execute("""SELECT t.id, t.code, t.site_code, t.kind, t.doc_no, t.doc_date, t.point, t.text, t.due, t.close_date, t.status, a.name AS who, a.unit_id AS unit_id
                           FROM tasks t LEFT JOIN users a ON a.id = t.assignee_id WHERE t.status NOT IN ('gone', 'info')"""):
         eff = eff_value(r, by)
@@ -226,7 +226,7 @@ def collect_tasks(c, month: str, by: str) -> dict:
         mgmt = ids.get(u["parent_id"]) if u and u["parent_id"] in ids else u
         done = r["status"] not in OPEN
         out.append({"code": r["site_code"] or r["code"], "kind": r["kind"] or "", "doc": (r["doc_no"] or "") + (f" от {r['doc_date'][8:10]}.{r['doc_date'][5:7]}.{r['doc_date'][:4]}" if r["doc_date"] else ""),
-                    "point": r["point"] or "", "text": " ".join((r["text"] or "").split())[:400] + ("…" if len(" ".join((r["text"] or "").split())) > 400 else ""),      # a long text is cut: the full one is in the task "who": r["who"] or "", "close": r["close_date"] or "", "due": r["due"] or "", "eff": eff or "",
+                    "point": r["point"] or "", "text": " ".join((r["text"] or "").split())[:400] + ("…" if len(" ".join((r["text"] or "").split())) > 400 else ""), "who": r["who"] or "", "close": r["close_date"] or "", "due": r["due"] or "", "eff": eff or "",
                     "status": STATUS_RU.get(r["status"], r["status"]), "stage_key": "done" if done else stage.get(r["id"], "unchecked"),
                     "stage": "Выполнено" if done else STAGE_RU.get(stage.get(r["id"], "unchecked"), "Другое"),
                     "mgmt": mgmt["id"] if mgmt else 0, "unit": u["id"] if u else 0})
