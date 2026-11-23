@@ -79,25 +79,27 @@ routes.import = async function (page) {
   const hist = (await api("/api/import/history")).items;
   const cfg = Object.fromEntries((await api("/api/settings")).sync.fields.map(f => [f.key, f.value]));      // the window of terms for the base load comes from Settings
   const mode = "base";       // every load is the base: it overwrites what is on the server (the stages come from the «Синхронизировать» button of the script)
-  const overwrite = cfg.base_manual !== "keep", replace = cfg.base_absent !== "keep";      // Settings: what the base does with hand edits and with tasks that are not in it
+  const overwrite = cfg.base_manual !== "keep"; let replace = cfg.base_absent !== "keep";   // «replace» is chosen at every load (the default comes from Settings)
+  //      // Settings: what the base does with hand edits and with tasks that are not in it
   /* Settings: which rows of the files are taken (the filters are independent; each is off when the person has already selected the rows) */
   const F = { dept: cfg.base_f_dept !== "0", exec: cfg.base_f_exec === "1", kind: cfg.base_f_kind === "1", window: cfg.base_f_window === "1" };
   const filters = [F.dept && "отделы нашей структуры (какие отделы наши, выбираете ниже)", F.exec && "исполнитель «Соғлиқни сақлаш вазирлиги»", F.kind && "без соисполнителей и лишних видов документов", F.window && "сроки в окне"].filter(Boolean);
   let confirmed = false;
-  page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Импорт базы задач</h1><p>Каждая загрузка — это база: файлы Excel с сайта перезаписывают задачи на сервере. Этапы к ним записывает кнопка «Синхронизировать» в скрипте.</p></div></div>
+  page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Импорт базы задач</h1><p>Файлы Excel с сайта загружаются как база: при проверке вы выбираете, перезаписать базу или добавить задачи к существующим. Этапы к ним записывает кнопка «Синхронизировать» в скрипте.</p></div></div>
     <div id="modebar" class="card rise" style="--i:1;margin-bottom:16px"></div>
     <div id="stage" class="rise" style="--i:1"></div>
     <div class="card rise" style="--i:2;margin-top:16px"><div class="card-head"><h2>Последние загрузки</h2></div>${hist.length ? `<table class="plain"><thead><tr><th>Когда</th><th>Файл</th><th>Кто</th><th>Вид</th><th>Новых</th><th>Обновлено</th></tr></thead><tbody>${hist.map(h => `<tr><td>${esc(h.created_at.slice(0, 16))}</td><td>${esc(h.filename)}</td><td>${esc(h.by || "")}</td><td>${h.summary.mode === "status" ? "статусы" : "база"}${h.summary.overwritten ? ` <small class="hint">(перезаписано ${h.summary.overwritten})</small>` : ""}</td><td class="num">${h.summary.created}</td><td class="num">${h.summary.updated}</td></tr>`).join("")}</tbody></table>` : '<p class="hint">Загрузок ещё не было.</p>'}</div>`;
   const stage = $("#stage", page);
   const modeBar = $("#modebar", page);
-  modeBar.innerHTML = `<b>Как загрузка обращается с тем, что уже есть на сервере</b>
+  const paintModebar = () => { modeBar.innerHTML = `<b>Как загрузка обращается с тем, что уже есть на сервере</b>
     <ul class="hint" style="margin:8px 0 0;padding-left:18px">
       <li><b>Какие строки берутся:</b> ${filters.length ? "только " + filters.join("; ") + "<br><span class=\"hint\">остальные строки не загружаются, в предпросмотре видно сколько</span>" : "<b>все строки файлов</b> (вы отобрали их сами)"}.</li>
       <li><b>Задачи из файла</b> добавляются, а у существующих обновляются тексты, документ, срок, статус и ответственный.</li>
       <li><b>Ваши ручные правки:</b> ${overwrite ? "<b>перезаписываются</b> значениями из файла (перед загрузкой покажем сколько)" : "сохраняются"}.</li>
       <li><b>Задачи, которых нет в загруженных файлах:</b> ${replace ? "<b>снимаются с дашборда</b>, в том числе выполненные: в базе остаётся только то, что в файлах («Нет на сайте»; ничего не удаляется, при следующей загрузке вернутся; добавленные вручную не трогаются)" : "остаются как есть"}.</li>
       <li>Файлов можно выбрать несколько сразу (например, по одному на раздел): они читаются вместе как одна база.</li></ul>
-    <p class="hint" style="margin:8px 0 0">Это можно изменить в «Настройках» → «Импорт и синхронизация».</p>`;
+    <p class="hint" style="margin:8px 0 0">Это можно изменить в «Настройках» → «Импорт и синхронизация».</p>`; };
+  paintModebar();
   const dropHtml = (err) => `<label class="drop" id="drop" for="file"><div class="big">${icon("upload")}</div><b>Перетащите файлы Excel сюда</b><p class="hint" style="margin:4px 0 0">или нажмите, чтобы выбрать · .xlsx, можно несколько файлов сразу, до 40 МБ каждый</p>${err ? `<p class="err" style="margin-top:10px">${esc(err)}</p>` : ""}<input type="file" id="file" accept=".xlsx" multiple hidden></label>`;
   function showDrop(err) {
     stage.innerHTML = dropHtml(err);
@@ -175,6 +177,9 @@ routes.import = async function (page) {
     const ab = s.absent_tasks;
     stage.innerHTML = `<div class="card"><h2>${icon("file")}${files.length > 1 ? files.length + " файла(ов) как одна база" : esc(files[0].name)}</h2><p class="sub">Проверка без записи: пока ничего не изменено.${files.length > 1 ? " Файлы: " + files.map(f => esc(f.name)).join(", ") + "." : ""}</p>
       <div class="stats">${stat(s.rows, "строк с задачами")}${stat(s.created, "новых задач", "k-done")}${stat(s.updated, "будет обновлено")}${stat(s.unchanged, "без изменений")}${overwrite ? stat(s.overwritten, "ваших правок будет перезаписано", s.overwritten ? "k-overdue" : "") : stat(s.kept_manual, "с вашими правками (не тронем)")}${replace && ab ? stat(ab.count, "уйдёт с дашборда (нет в базе)", ab.count ? "k-overdue" : "") : ""}</div>
+      <div class="modepick" role="radiogroup" aria-label="Режим загрузки"><div class="mp-t">Как загрузить эти файлы</div>
+        <label class="mp${replace ? " on" : ""}"><input type="radio" name="lm" value="replace"${replace ? " checked" : ""}><b>Перезаписать базу</b><span>Задачи, которых нет в этих файлах, снимаются с дашборда (в том числе выполненные): в базе остаётся только то, что в файлах. Для полной выгрузки.</span></label>
+        <label class="mp${replace ? "" : " on"}"><input type="radio" name="lm" value="add"${replace ? "" : " checked"}><b>Добавить к существующим</b><span>Задачи из файлов добавляются и обновляются, остальные задачи базы не трогаются. Для загрузки других месяцев поверх уже загруженных.</span></label></div>
       ${siteBlock(s, files)}
       ${ab && ab.count ? `<details ${ab.needs_confirm ? "open" : ""} style="margin:10px 0"><summary><b>Уйдёт с дашборда: ${ab.count} из ${ab.total} задач${ab.done ? ` (выполненных: ${ab.done})` : ""}</b> <span class="hint">— их нет в загруженных файлах (статус «Нет на сайте», ничего не удаляется)</span></summary>
         <div class="scroll-x"><table class="plain"><thead><tr><th>Код</th><th>Статус</th><th>Документ</th><th>Срок</th><th>Текст</th></tr></thead><tbody>${ab.sample.map(t => `<tr><td>${esc(t.code)}</td><td class="hint">${t.status === "done" ? "выполнено" : t.status === "info" ? "к сведению" : "не выполнено"}</td><td>${esc(t.doc_no || "")}</td><td>${t.due ? esc(t.due.split("-").reverse().join(".")) : "—"}</td><td>${esc((t.text || "").split("\n")[0].slice(0, 90))}</td></tr>`).join("")}</tbody></table></div>
@@ -183,6 +188,7 @@ routes.import = async function (page) {
       ${s.new_people.length ? `<div class="sec-t" style="margin-top:0">Новые сотрудники (${s.new_people.length}) — будут созданы без пароля</div><p>${s.new_people.map(p => `<span class="chip" style="margin:2px">${esc(p.name)}</span>`).join("")}</p>` : ""}
       ${s.warnings.length ? `<div class="sec-t">Проверьте после загрузки (${s.warnings.length})</div><ul class="warns">${s.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
       <div style="display:flex;gap:10px;margin-top:18px"><button class="btn pri" id="go" ${ab && ab.needs_confirm ? "disabled" : ""}>Загрузить базу</button><button class="btn" id="back">Выбрать другие файлы</button></div></div>`;
+    $$('input[name="lm"]', stage).forEach(r => r.onchange = () => { replace = r.value === "replace"; confirmed = false; paintModebar(); preview(files); });      // the preview is made again for the other way
     bindSite(files);
     $("#back", stage).onclick = () => { confirmed = false; showDrop(); };
     const cr = $("#conf-rm", stage); if (cr) cr.onchange = () => { confirmed = cr.checked; $("#go", stage).disabled = !cr.checked; };

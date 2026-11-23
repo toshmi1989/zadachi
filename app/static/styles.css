@@ -627,3 +627,9 @@ table.dbt{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px;
 /* the dashboard: when the data was last updated, and the export of the summary table */
 .pagehead .upd-line{margin:2px 0 0;font-size:13px;color:var(--text-2)}.pagehead .upd-line b{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}
 .ctl.rp{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;white-space:nowrap}.ctl.rp select{width:128px;min-width:0;flex:none;border-radius:6px;padding-top:6px;padding-bottom:6px}.ctl.rp .btn{flex:none}
+/* the way of a load: replace the base or add to what is there */
+.modepick{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}.modepick .mp-t{grid-column:1/-1;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-2)}
+.mp{display:flex;flex-direction:column;gap:3px;padding:12px 14px 12px 40px;border:1px solid var(--line-2);border-radius:6px;background:var(--surface);cursor:pointer;position:relative}
+.mp input{position:absolute;left:14px;top:15px;width:auto;margin:0;padding:0}.mp b{font-size:14px}.mp span{font-size:12.5px;color:var(--text-2);line-height:1.45}
+.mp:hover{border-color:var(--text-3)}.mp.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 6%,var(--surface));box-shadow:inset 3px 0 0 var(--brand)}
+@media (max-width:700px){.modepick{grid-template-columns:1fr}}
