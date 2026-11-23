@@ -256,12 +256,14 @@ def api_report(request: Request, month: str = "", by: str = "close"):
         bad("month: ГГГГ, ГГГГ-ММ или пусто")
     c = connect()
     try:
-        data = report.collect(c, month, tasks.norm_by(by, user))
+        nb = tasks.norm_by(by, user)
+        data = report.collect(c, month, nb)
+        tdata = report.collect_tasks(c, month, nb)
         up = report.last_updates(c)
     finally:
         c.close()
     stamp = max(up["sync"], up["base"]) or now()
-    body = report.build_xlsx(data, month, stamp)
+    body = report.build_xlsx(data, month, stamp, tdata, user["role"] == "admin")      # the official term is the administrator's: the specialist's file has none
     return Response(body, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="hisobot-{month or "all"}.xlsx"'})
 

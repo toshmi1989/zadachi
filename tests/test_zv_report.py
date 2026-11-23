@@ -91,3 +91,47 @@ def test_the_dashboard_tells_when_the_data_was_updated(admin):
     up = admin.get("/api/dashboard").json()["updated"]
     assert up["base"][:4] == "2026" or up["base"][:2] == "20"                                 # the load of the base is dated
     assert set(up) == {"sync", "base"}
+
+
+def task_rows(ws):
+    """The lines of a sheet of tasks: those that have a code in the second column (the group lines are merged and have none)."""
+    return [r for r in range(4, ws.max_row + 1) if ws.cell(r, 2).value]
+
+
+def test_the_file_has_the_tasks_behind_the_numbers_in_groups(admin):
+    r = admin.get("/api/report.xlsx?month=2026-12")
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    assert wb.sheetnames == ["ТАҲЛИЛИ", "Задачи по отделам", "Задачи по этапам", "Все задачи"]
+    total = wb["ТАҲЛИЛИ"].cell(8, 3).value                                               # «Департамент бўйича жами»: the tasks of the summary
+    for name in wb.sheetnames[1:]:
+        assert len(task_rows(wb[name])) == total, name                                 # every sheet has exactly the tasks of the summary
+    flat = wb["Все задачи"]
+    head = [c.value for c in flat[3]]
+    assert head[:3] == ["№", "Код", "Вид"] and "Этап согласования" in head and "Отдел" in head and "Официальный срок" in head
+    assert flat.auto_filter.ref and flat.auto_filter.ref.startswith("A3:")                  # filters on the flat list
+    codes = {flat.cell(r, 2).value for r in task_rows(flat)}
+    assert {"RP0000", "RP0001", "RP0002", "RP0003", "RP0004", "RP0006"} <= codes and "RP0005" not in codes     # December only: RP0005 is of January
+    # by departments: the management line with its numbers, then its division
+    ws = wb["Задачи по отделам"]
+    heads = [str(ws.cell(r, 1).value) for r in range(4, ws.max_row + 1) if not ws.cell(r, 2).value and ws.cell(r, 1).value]
+    assert any(h.startswith("RX") or "Управление отчёта один" in h for h in heads) and any("Отдел отчёта" in h for h in heads) and all("задач:" in h for h in heads)
+    mg = next(r for r in range(4, ws.max_row + 1) if "Управление отчёта один" in str(ws.cell(r, 1).value))
+    assert "задач: 3" in str(ws.cell(mg, 1).value) and ws.row_dimensions[mg + 2].outlineLevel == 2     # the tasks of a division are one level in (they can be folded)
+    # by stages
+    st = wb["Задачи по этапам"]
+    stage_heads = [str(st.cell(r, 1).value) for r in range(4, st.max_row + 1) if not st.cell(r, 2).value and st.cell(r, 1).value and " — " in str(st.cell(r, 1).value)]
+    assert any(h.startswith("Выполнено —") for h in stage_heads) and any(h.startswith("Не проверялись —") or h.startswith("Ответ не введён —") for h in stage_heads)
+
+
+def test_the_specialist_file_has_no_official_term(admin):
+    admin.post("/api/users", json={"name": "Rep Special", "login": "rep.special", "role": "specialist"})
+    uid = [u for u in admin.get("/api/users").json()["items"] if u["login"] == "rep.special"][0]["id"]
+    pw = admin.post(f"/api/users/{uid}/password", json={}).json()["password"]
+    s = TestClient(app)
+    s.post("/login", data={"login": "rep.special", "password": pw})
+    r = s.get("/api/report.xlsx?month=")
+    assert r.status_code == 200
+    flat = openpyxl.load_workbook(io.BytesIO(r.content))["Все задачи"]
+    head = [c.value for c in flat[3]]
+    assert "Официальный срок" not in head and "Срок исполнения (дата закрытия)" in head
+    d = connect(); d.execute("DELETE FROM users WHERE login='rep.special'"); d.commit(); d.close()

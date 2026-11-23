@@ -92,7 +92,7 @@ def title_text(month: str) -> str:
     return f"Соғлиқни сақлаш вазирлигида{when} ijro.gov.uz тизимидаги топшириқларининг бажарилиши"
 
 
-def build_xlsx(data: dict, month: str, stamp: str) -> bytes:
+def build_xlsx(data: dict, month: str, stamp: str, tdata: dict | None = None, admin: bool = False) -> bytes:
     groups, rows, total = data["groups"], data["rows"], data["total"]
     ncol = 7 + 3 * len(groups)
     wb = Workbook()
@@ -188,6 +188,8 @@ def build_xlsx(data: dict, month: str, stamp: str) -> bytes:
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
     ws.print_title_rows = "5:7"
+    if tdata is not None:
+        add_task_sheets(wb, tdata, admin)
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
@@ -198,3 +200,150 @@ def last_updates(c) -> dict:
     sync = c.execute("SELECT MAX(checked_at) FROM ijro_snapshots").fetchone()[0] or ""
     base = c.execute("SELECT MAX(created_at) FROM imports").fetchone()[0] or ""
     return {"sync": sync, "base": base}
+
+
+# ---------------------------------------------------------------- the tasks themselves (further sheets of the file)
+
+STAGE_RU = {"none": "Ответ не введён", "moj": "Минюст (Адлия)", "cab": "Кабинет Министров", "chamber": "Счётная палата", "info": "Палата вернула (принято к сведению)",
+            "returned": "Возврат / запрос", "other": "Другое", "unchecked": "Не проверялись"}
+STAGE_ORDER = ["none", "moj", "cab", "chamber", "info", "returned", "other", "unchecked", "done"]
+STATUS_RU = {"todo": "Не выполнено", "progress": "В работе", "done": "Выполнено"}
+
+
+def collect_tasks(c, month: str, by: str) -> dict:
+    """The tasks that stand behind the summary numbers (the same selection: a period by the same date, «К сведению» and the tasks taken off the dashboard are not there),
+    each with its department (management / division), its stage and its terms, and the order of the departments of the structure."""
+    units = c.execute("SELECT id, num, name, parent_id FROM units WHERE active=1 ORDER BY sort, id").fetchall()
+    ids = {u["id"]: u for u in units}
+    stage = ijro.stage_map(c)
+    out = []
+    for r in c.execute("""SELECT t.id, t.code, t.site_code, t.kind, t.doc_no, t.doc_date, t.point, t.text, t.due, t.close_date, t.status, a.name AS who, a.unit_id AS unit_id
+                          FROM tasks t LEFT JOIN users a ON a.id = t.assignee_id WHERE t.status NOT IN ('gone', 'info')"""):
+        eff = eff_value(r, by)
+        if month and not (eff or "").startswith(month):
+            continue
+        u = ids.get(r["unit_id"])
+        mgmt = ids.get(u["parent_id"]) if u and u["parent_id"] in ids else u
+        done = r["status"] not in OPEN
+        out.append({"code": r["site_code"] or r["code"], "kind": r["kind"] or "", "doc": (r["doc_no"] or "") + (f" от {r['doc_date'][8:10]}.{r['doc_date'][5:7]}.{r['doc_date'][:4]}" if r["doc_date"] else ""),
+                    "point": r["point"] or "", "text": " ".join((r["text"] or "").split())[:400] + ("…" if len(" ".join((r["text"] or "").split())) > 400 else ""),      # a long text is cut: the full one is in the task "who": r["who"] or "", "close": r["close_date"] or "", "due": r["due"] or "", "eff": eff or "",
+                    "status": STATUS_RU.get(r["status"], r["status"]), "stage_key": "done" if done else stage.get(r["id"], "unchecked"),
+                    "stage": "Выполнено" if done else STAGE_RU.get(stage.get(r["id"], "unchecked"), "Другое"),
+                    "mgmt": mgmt["id"] if mgmt else 0, "unit": u["id"] if u else 0})
+    return {"tasks": out, "units": [dict(u) for u in units]}
+
+
+def _fdate(iso: str) -> str:
+    return f"{iso[8:10]}.{iso[5:7]}.{iso[:4]}" if iso else ""
+
+
+def add_task_sheets(wb, tdata: dict, admin: bool) -> None:
+    from openpyxl.worksheet.properties import Outline
+    tasks, units = tdata["tasks"], {u["id"]: u for u in tdata["units"]}
+    heads = ["№", "Код", "Вид", "Документ", "Пункт", "Текст задачи", "Ответственный", "Месяц срока", "Срок исполнения (дата закрытия)"] + (["Официальный срок"] if admin else []) + ["Статус", "Этап согласования", "Отдел"]
+    widths = [5, 11, 9, 24, 10, 70, 24, 11, 14] + ([14] if admin else []) + [13, 24, 36]
+    thin = Side(style="thin", color="BFBFBF")
+    box = Border(left=thin, right=thin, top=thin, bottom=thin)
+    wrap = Alignment(wrap_text=True, vertical="top")
+    green, band, head = (PatternFill("solid", fgColor=x) for x in ("E2EFDA", "F2F2F2", "D9E1F2"))
+
+    def unit_label(uid: int) -> str:
+        u = units.get(uid)
+        if not u:
+            return "Без отдела"
+        par = units.get(u["parent_id"]) if u["parent_id"] in units else None
+        mine = (u["num"] + ". " if u["num"] else "") + u["name"]
+        return ((par["num"] + ". " if par and par["num"] else "") + par["name"] + " / " + mine) if par else mine
+
+    def setup(ws, title: str):
+        ws.append([title])
+        ws["A1"].font = Font(name="Calibri", size=13, bold=True)
+        ws.append([])
+        ws.append(heads)
+        for i, w in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+            cell = ws.cell(3, i)
+            cell.font, cell.fill, cell.border = Font(name="Calibri", bold=True, size=10), head, box
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.row_dimensions[3].height = 32
+        ws.freeze_panes = "C4"
+        ws.sheet_properties.outlinePr = Outline(summaryBelow=False)          # the plus/minus of a group sits on its heading line
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+        ws.print_title_rows = "3:3"
+
+    def group_line(ws, text: str, fill, level: int = 0):
+        r = ws.max_row + 1
+        ws.cell(r, 1, text)
+        for cc in range(1, len(heads) + 1):
+            ws.cell(r, cc).fill, ws.cell(r, cc).border = fill, box
+        ws.cell(r, 1).font = Font(name="Calibri", bold=True, size=11 if level == 0 else 10)
+        ws.cell(r, 1).alignment = Alignment(horizontal="left", vertical="center", indent=level)
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=len(heads))
+        ws.row_dimensions[r].height = 20 if level == 0 else 17
+
+    def task_line(ws, n: int, t: dict, level: int):
+        vals = [n, t["code"], t["kind"], t["doc"], t["point"], t["text"], t["who"], t["eff"][:7] if t["eff"] else "", _fdate(t["close"])] + ([_fdate(t["due"])] if admin else []) \
+            + [t["status"], t["stage"], unit_label(t["unit"])]
+        r = ws.max_row + 1
+        for cc, v in enumerate(vals, 1):
+            cell = ws.cell(r, cc, v)
+            cell.alignment, cell.border, cell.font = wrap, box, Font(name="Calibri", size=10)
+        ws.cell(r, 1).alignment = Alignment(horizontal="center", vertical="top")
+        ws.row_dimensions[r].outlineLevel = level
+
+    def key(t):
+        return (t["eff"] or "9999", t["code"])
+
+    def counts(ts):
+        d = sum(1 for t in ts if t["stage_key"] == "done")
+        return f"задач: {len(ts)} · выполнено: {d} · не выполнено: {len(ts) - d}"
+
+    # ---- 1. by departments: a management, its divisions, the tasks of each
+    ws = wb.create_sheet("Задачи по отделам")
+    setup(ws, "Задачи по отделам (управление → отдел): значок «–» слева сворачивает группу")
+    by_m: dict[int, list] = {}
+    for t in tasks:
+        by_m.setdefault(t["mgmt"], []).append(t)
+    n = 0
+    order = [u["id"] for u in tdata["units"] if u["parent_id"] not in units] + [0]
+    for mid in order:
+        group = by_m.get(mid)
+        if not group:
+            continue
+        mname = "Без отдела (ответственный без отдела или не назначен)" if mid == 0 else ((units[mid]["num"] + ". " if units[mid]["num"] else "") + units[mid]["name"])
+        group_line(ws, f"{mname} — {counts(group)}", green)
+        own = [t for t in group if t["unit"] == mid]
+        if own:
+            for t in sorted(own, key=key):
+                n += 1; task_line(ws, n, t, 1)
+        for kid in [u["id"] for u in tdata["units"] if u["parent_id"] == mid]:
+            sub = [t for t in group if t["unit"] == kid]
+            if sub:
+                group_line(ws, f"{unit_label(kid).split(' / ')[-1]} — {counts(sub)}", band, 1)
+                for t in sorted(sub, key=key):
+                    n += 1; task_line(ws, n, t, 2)
+    # ---- 2. by stages: a stage, the departments in it, the tasks
+    ws = wb.create_sheet("Задачи по этапам")
+    setup(ws, "Задачи по этапам согласования (этап → управление → задачи): не выполненные идут по пути ответа, выполненные в конце")
+    n = 0
+    for sk in STAGE_ORDER:
+        group = [t for t in tasks if t["stage_key"] == sk]
+        if not group:
+            continue
+        group_line(ws, f"{'Выполнено' if sk == 'done' else STAGE_RU[sk]} — {len(group)}", green)
+        for mid in order:
+            sub = [t for t in group if t["mgmt"] == mid]
+            if not sub:
+                continue
+            group_line(ws, f"{'Без отдела' if mid == 0 else ((units[mid]['num'] + '. ' if units[mid]['num'] else '') + units[mid]['name'])} — {len(sub)}", band, 1)
+            for t in sorted(sub, key=lambda t: (unit_label(t["unit"]),) + key(t)):
+                n += 1; task_line(ws, n, t, 2)
+    # ---- 3. the flat list: for filtering and searching
+    ws = wb.create_sheet("Все задачи")
+    setup(ws, "Все задачи списком (фильтры в заголовках колонок: отдел, этап, статус, месяц)")
+    for i, t in enumerate(sorted(tasks, key=lambda t: (order.index(t["mgmt"]) if t["mgmt"] in order else 99, unit_label(t["unit"])) + key(t)), 1):
+        task_line(ws, i, t, 0)
+    ws.auto_filter.ref = f"A3:{get_column_letter(len(heads))}{max(ws.max_row, 3)}"
