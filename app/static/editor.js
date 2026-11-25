@@ -8,6 +8,7 @@ routes.editor = async function (page, params) {
   const admin = Z.me.role === "admin";
   const meta = await loadMeta();
   const SIZE = 50;
+  if (!Object.keys(params || {}).length) params = savedFilters("editor");      // a click on the menu: the filters are as they were left
   const S = { q: params.q || "", unit: params.unit || "", assignee: params.assignee || "", status: params.status === undefined ? "open" : params.status === "all" ? "" : params.status, kind: params.kind || "", nodate: params.term === "none", page: +params.page || 1 };
   const ST = [["todo", "Не выполнено"], ["progress", "В работе"], ["done", "Выполнено"], ["info", "К сведению"]];
   const kinds = [...new Set(["Фармон", "Қарор", "Баён", "ВМ", "ПА", ...meta.kinds.filter(Boolean)])];
@@ -36,6 +37,7 @@ routes.editor = async function (page, params) {
   const query = () => new URLSearchParams(Object.entries({ q: S.q, unit: S.unit, assignee: S.assignee, status: S.status, kind: S.kind, term: S.nodate ? "none" : "", sort: "eff", dir: "asc", size: SIZE, page: S.page, scope: Z.scope }).filter(([, v]) => v !== "" && v !== false)).toString();
   let total = 0;
   async function load() {
+    saveFilters("editor", { q: S.q, unit: S.unit, assignee: S.assignee, status: S.status === "" ? "all" : S.status, kind: S.kind, term: S.nodate ? "none" : "" });
     rowsBox.innerHTML = `<tr><td colspan="7"><div class="skel" style="height:80px"></div></td></tr>`;
     let d;
     try { d = await api("/api/tasks?" + query()); } catch (e) { rowsBox.innerHTML = `<tr><td colspan="7" class="err">${esc(e.message)}</td></tr>`; return; }

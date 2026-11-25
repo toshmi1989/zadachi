@@ -22,10 +22,15 @@ function byToggle(onChange) {
 
 routes.dashboard = async function (page, params) {
   /* the period of the dashboard: "" (all), "2027" (a year) or "2027-03" (a month): chosen in the header, the page is not drawn again, only the numbers are */
-  let period = /^\d{4}(-\d{2})?$/.test((params && params.period) || "") ? params.period : "";
+  const sv = savedFilters("dashboard");                                    // what was set last time: a click on the menu (no address parameters) brings it back
+  const pick = (k, dflt) => (params && params[k] !== undefined ? params[k] : sv[k] !== undefined ? sv[k] : dflt);
+  let period = /^\d{4}(-\d{2})?$/.test(pick("period", "") || "") ? pick("period", "") : "";
   if (params && ["main", "co", "vm"].includes(params.scope)) setScope(params.scope);        // a link from a list returns to the same group
   const url = () => "/api/dashboard?by=" + Z.by + "&scope=" + Z.scope + (period ? "&period=" + period : "");
   let d = await api(url());
+  if (period && !(d.periods || []).some(m => m.startsWith(period))) {        // the remembered period has no tasks in this group: the year, else all
+    const y = period.slice(0, 4); period = (d.periods || []).some(m => m.startsWith(y)) ? y : ""; d = await api(url());
+  }
   let T = d.totals;
   const MON = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
   const monthShort = ym => MON[+ym.slice(5, 7) - 1] + " " + ym.slice(0, 4);
@@ -39,7 +44,8 @@ routes.dashboard = async function (page, params) {
   /* a bar of segments [number, kind]: the widths are the shares of the sum; a segment with 0 is not drawn */
   const bar = parts => { const sum = parts.reduce((s, x) => s + x[0], 0); return `<span class="bar" aria-hidden="true">${sum ? parts.filter(x => x[0] > 0).map(x => `<i class="${x[1]}" style="width:${(100 * x[0] / sum).toFixed(2)}%"></i>`).join("") : ""}</span>`; };
   const VIEWS = [["months", "По месяцам", "cal"], ["kinds", "По видам документов", "file"], ["stages", "По этапам согласования", "list"]];
-  const st = { view: VIEWS.some(v => v[0] === (params && params.view)) ? params.view : "months", q: "", empty: false, collapsed: new Set() };
+  const st = { view: VIEWS.some(v => v[0] === pick("view", "")) ? pick("view", "") : "months", q: String(sv.q || ""), empty: !!sv.empty, collapsed: new Set(Array.isArray(sv.collapsed) ? sv.collapsed : []) };
+  const persist = () => saveFilters("dashboard", { period, view: st.view, q: st.q, empty: st.empty, collapsed: [...st.collapsed] });
   /* the stages: the way of an answer (left to right), then what needs attention, then what is not known */
   const STAGE = { none: ["Ответ не введён", "Исполнитель ещё не ответил"], moj: ["Минюст (Адлия)", "Идёт согласование в Министерстве юстиции"], cab: ["Кабинет Министров", "Ответ у Кабинета Министров"],
     chamber: ["Счётная палата", "Ответ в Счётной палате"], info: ["Палата вернула", "Счётная палата вернула: принято к сведению или запрос информации, срок изменён"], returned: ["Возврат / запрос", "Нужны действия исполнителя"],
@@ -84,7 +90,7 @@ routes.dashboard = async function (page, params) {
     <section class="dkpis rise" style="--i:1" id="d-kpis">${kpiHtml()}    </section>
     <section class="card rise dboard" style="--i:2">
       <div class="dtabs" role="tablist">${VIEWS.map(v => `<button type="button" role="tab" class="dtab" data-view="${v[0]}">${icon(v[2])}${v[1]}</button>`).join("")}</div>
-      <div class="dtools"><input type="search" id="d-q" placeholder="Найти отдел…" aria-label="Найти отдел"><label class="switchrow" style="margin:0"><input type="checkbox" id="d-empty"><span>Показывать отделы без задач</span></label><button type="button" class="btn sm" id="d-fold">Свернуть управления</button></div>
+      <div class="dtools"><input type="search" id="d-q" placeholder="Найти отдел…" aria-label="Найти отдел" value="${esc(st.q)}"><label class="switchrow" style="margin:0"><input type="checkbox" id="d-empty"${st.empty ? " checked" : ""}><span>Показывать отделы без задач</span></label><button type="button" class="btn sm" id="d-fold">Свернуть управления</button></div>
       <p class="dhelp" id="d-help"></p>
       <div class="tablewrap"><table class="dbt um" id="d-table"></table></div>
       <p class="hint dnote">Нажмите на число или процент: откроется список именно этих задач. Задачи «К сведению» в таблицы не входят. Задача относится к отделу ответственного; без ответственного или его отдела — строка «Без отдела».</p>
@@ -157,7 +163,7 @@ routes.dashboard = async function (page, params) {
   paintPeriodBox();
 
   /* ---- a new period or a new kind of date: only the numbers are fetched and drawn again, the page stays ---- */
-  const syncUrl = () => { try { history.replaceState(null, "", "#/dashboard?view=" + st.view + "&scope=" + Z.scope + (period ? "&period=" + period : "")); } catch (er) { /* the address stays; nothing breaks */ } };     // "back" from a list returns to this view and period
+  const syncUrl = () => { try { history.replaceState(null, "", "#/dashboard?view=" + st.view + "&scope=" + Z.scope + "&period=" + period); persist(); } catch (er) { /* the address stays; nothing breaks */ } };     // "back" from a list returns to this view and period
   let busy = 0;
   async function reload() {
     const my = ++busy, dash = $(".dboard", page), kp = $("#d-kpis", page);
@@ -177,12 +183,12 @@ routes.dashboard = async function (page, params) {
     const b = e.target.closest(".dtab"); if (!b) return;
     st.view = b.dataset.view; paint(); syncUrl();
   };
-  $("#d-q", page).oninput = e => { st.q = e.target.value; paint(); };
-  $("#d-empty", page).onchange = e => { st.empty = e.target.checked; paint(); };
+  $("#d-q", page).oninput = e => { st.q = e.target.value; paint(); persist(); };
+  $("#d-empty", page).onchange = e => { st.empty = e.target.checked; paint(); persist(); };
   $("#d-fold", page).onclick = () => {
     const mgmts = d.rows.filter(r => !r.level && hasKids(r.id));
     if (mgmts.every(r => st.collapsed.has(r.id))) st.collapsed.clear(); else mgmts.forEach(r => st.collapsed.add(r.id));
-    paint();
+    paint(); persist();
   };
 
   /* ---- every number opens its list ---- */
@@ -194,7 +200,7 @@ routes.dashboard = async function (page, params) {
       if (chev.classList.contains("off")) return;
       const id = +chev.dataset.chev;
       st.collapsed.has(id) ? st.collapsed.delete(id) : st.collapsed.add(id);
-      paint();
+      paint(); persist();
       return;
     }
     const b = e.target.closest("#d-table button[data-u], #d-table button[data-st], #d-table button[data-s], #d-table button[data-k], #d-table button[data-ym]");

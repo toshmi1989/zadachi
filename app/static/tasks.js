@@ -29,6 +29,7 @@ function statusChip(t) {
 routes.tasks = async function (page, params) {
   if (Z.me.tasks === "none") throw new Error("Список задач для вашей роли отключён администратором");
   const meta = await loadMeta();
+  if (!Object.keys(params || {}).length) params = savedFilters("tasks");      // a click on the menu: the filters are as they were left
   const S = { unit: params.unit === undefined ? "" : params.unit, assignee: params.assignee || "", status: params.status || "", bucket: params.bucket || "", kind: params.kind || "",
               doc: params.doc || "", stage: params.stage || "", term: params.term || "", closing: params.closing || "", q: params.q || "", date_from: params.date_from || "", date_to: params.date_to || "",
               sort: params.sort || "eff", dir: params.dir || "asc", page: +params.page || 1 };
@@ -143,6 +144,7 @@ routes.tasks = async function (page, params) {
     const my = ++reqId;
     const rowsEl = $("#rows", page); rowsEl.style.opacity = ".45"; rowsEl.style.transition = "opacity .2s";
     const q = { unit: own ? "" : S.unit, assignee: own ? "" : S.assignee, status: S.status, bucket: S.bucket, kind: S.kind, doc: S.doc, stage: S.stage, term: S.term, closing: S.closing, q: S.q, date_from: S.date_from, date_to: S.date_to, sort: S.sort, dir: S.dir, by: Z.by, scope: Z.scope };
+    saveFilters("tasks", Object.fromEntries(Object.entries(q).filter(([k]) => !["by", "scope"].includes(k))));
     history.replaceState(null, "", "#/tasks" + (qs(Object.assign({}, q, { page: S.page > 1 ? S.page : "" })) ? "?" + qs(Object.assign({}, q, { page: S.page > 1 ? S.page : "" })) : ""));
     exp.href = "/api/tasks.xlsx?" + qs(q);
     try { data = await api("/api/tasks?" + qs(Object.assign({}, q, { page: S.page, size: 50 }))); } catch (e) { toast(e.message, "error"); return; }
