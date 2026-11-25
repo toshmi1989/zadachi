@@ -89,6 +89,10 @@ def _where(f: dict, by: str, user: dict | None, own_only: bool) -> tuple[str, di
     elif a.isdigit():
         clauses.append("t.assignee_id = :assignee")
         p["assignee"] = int(a)
+    grp = f.get("scope") or "main"                  # the group of the tasks: the groups have their own lists as they have their own dashboards
+    if grp in ("main", "co", "vm"):
+        clauses.append("t.scope = :grp")
+        p["grp"] = grp
     s = f.get("status") or ""
     if s != "gone":
         clauses.append("t.status != 'gone'")        # tasks the site no longer lists as ours are off the lists, unless asked for

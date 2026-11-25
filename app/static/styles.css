@@ -638,3 +638,7 @@ table.dbt{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px;
 .ctl.rp select{min-width:0}
 /* the header on a phone: the period, the export and the kind of date wrap into lines instead of widening the page */
 @media (max-width:760px){.ctl.rp{flex-wrap:wrap;white-space:normal}.ctl.rp select{width:auto;flex:1 1 110px}.pagehead .controls{flex-wrap:wrap;max-width:100%}.pagehead .controls .ctl{flex-wrap:wrap;max-width:100%}}
+/* the three groups of tasks: a switch in the headers of the dashboard, the lists and the editor */
+.ctl.sc .seg button{white-space:nowrap}
+#ed-scope{margin:0 0 14px}
+@media (max-width:760px){.ctl.sc{max-width:100%;overflow-x:auto}}

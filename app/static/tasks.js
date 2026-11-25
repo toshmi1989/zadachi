@@ -32,6 +32,7 @@ routes.tasks = async function (page, params) {
   const S = { unit: params.unit === undefined ? "" : params.unit, assignee: params.assignee || "", status: params.status || "", bucket: params.bucket || "", kind: params.kind || "",
               doc: params.doc || "", stage: params.stage || "", term: params.term || "", closing: params.closing || "", q: params.q || "", date_from: params.date_from || "", date_to: params.date_to || "",
               sort: params.sort || "eff", dir: params.dir || "asc", page: +params.page || 1 };
+  if (["main", "co", "vm"].includes(params.scope)) setScope(params.scope);      // the list opened from a number of a dashboard is of that dashboard's group
   const own = Z.me.tasks === "own" && !isAdmin();
   const sel = new Set();
   let data = null, reqId = 0;
@@ -58,6 +59,7 @@ routes.tasks = async function (page, params) {
     </tr></thead><tbody id="rows"></tbody></table></div><div class="pager" id="pager"></div></div>`;
 
   const ctl = $("#ctl", page);
+  ctl.appendChild(scopeSeg(() => { S.page = 1; sel.clear(); load(); }));                          // the group of tasks of the list: Асосий ижрочи, Ҳамижрочи, ВМ топшириқлари
   if (admin) ctl.appendChild(byToggle(() => { load(); }));
   const exp = document.createElement("a"); exp.className = "btn"; exp.innerHTML = icon("download") + "Excel"; exp.title = "Скачать текущий список в Excel";
   ctl.appendChild(exp);
@@ -140,7 +142,7 @@ routes.tasks = async function (page, params) {
   async function load() {
     const my = ++reqId;
     const rowsEl = $("#rows", page); rowsEl.style.opacity = ".45"; rowsEl.style.transition = "opacity .2s";
-    const q = { unit: own ? "" : S.unit, assignee: own ? "" : S.assignee, status: S.status, bucket: S.bucket, kind: S.kind, doc: S.doc, stage: S.stage, term: S.term, closing: S.closing, q: S.q, date_from: S.date_from, date_to: S.date_to, sort: S.sort, dir: S.dir, by: Z.by };
+    const q = { unit: own ? "" : S.unit, assignee: own ? "" : S.assignee, status: S.status, bucket: S.bucket, kind: S.kind, doc: S.doc, stage: S.stage, term: S.term, closing: S.closing, q: S.q, date_from: S.date_from, date_to: S.date_to, sort: S.sort, dir: S.dir, by: Z.by, scope: Z.scope };
     history.replaceState(null, "", "#/tasks" + (qs(Object.assign({}, q, { page: S.page > 1 ? S.page : "" })) ? "?" + qs(Object.assign({}, q, { page: S.page > 1 ? S.page : "" })) : ""));
     exp.href = "/api/tasks.xlsx?" + qs(q);
     try { data = await api("/api/tasks?" + qs(Object.assign({}, q, { page: S.page, size: 50 }))); } catch (e) { toast(e.message, "error"); return; }

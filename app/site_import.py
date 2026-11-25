@@ -73,6 +73,20 @@ VM_NOT_KEPT = {" ".join(n.casefold().split()) for n in (
     "Ўзбекистон Республикаси Президенти маслаҳатчилари топшириқлари", "Ўзбекистон Республикаси Президенти ҳузуридаги Хавфсизлик кенгаши топшириқлари")}
 
 
+SCOPES = ("main", "co", "vm")
+SCOPE_NAMES = {"main": "Асосий ижрочи", "co": "Ҳамижрочи", "vm": "ВМ топшириқлари"}
+
+
+def scope_of(r: dict) -> str:
+    """The group of a row of the site's list: a co-executor's task (role «Ҳамижрочи») is «co»; a document of the Cabinet's list of the kinds that are not «Қарор (Янги)» is
+    «vm»; every other is the ministry's own task as the main executor, «main»."""
+    if str(r.get("role") or "").strip().casefold().startswith("ҳамижрочи"):
+        return "co"
+    if not_kept_kind(r.get("kind")):
+        return "vm"
+    return "main"
+
+
 def not_kept_kind(raw) -> bool:
     return " ".join(str(raw or "").casefold().split()) in VM_NOT_KEPT
 
@@ -149,21 +163,23 @@ def suggest_unit(c, name: str, units=None) -> tuple[int | None, float]:
     return (best[1], best[0])
 
 
-def read(c, data: bytes, due_from: str | None, due_to: str | None, ours_out: set | None = None, by_dept: bool = True, by_exec: bool = True, by_kind: bool = True) -> tuple[list[dict], list[str], dict]:
+def read(c, data: bytes, due_from: str | None, due_to: str | None, ours_out: set | None = None, by_dept: bool = True, by_exec: bool = True, by_kind: bool = True, scope: str | None = None) -> tuple[list[dict], list[str], dict]:
     """(rows in the shape of importer.apply, warnings, report). due_from/due_to: only the terms of this window are taken (ISO dates, both ends included)."""
-    return read_rows(c, _read_rows(data), due_from, due_to, ours_out, by_dept, by_exec, by_kind)
+    return read_rows(c, _read_rows(data), due_from, due_to, ours_out, by_dept, by_exec, by_kind, scope)
 
 
 def read_rows(c, raw_all: list[dict], due_from: str | None, due_to: str | None, ours_out: set | None = None, by_dept: bool = True, by_exec: bool = True,
-              by_kind: bool = True) -> tuple[list[dict], list[str], dict]:
+              by_kind: bool = True, scope: str | None = None) -> tuple[list[dict], list[str], dict]:
     """The same for rows that are already read: the rows of SEVERAL files (one list per section) are one base, so they are judged together.
     Which rows are taken is chosen by three independent filters (each can be switched off when the person has already selected the rows):
       by_dept - only the departments that are in the structure (or were matched to it by the person); a row of an employee we already know is taken as well;
       by_exec - only the rows whose main executor is the ministry («Масъул ижрочи»);
-      by_kind - no co-executors, and of the cabinet's list only the kept kind.
+      by_kind - no co-executors, and of the cabinet's list only the kept kind (used only when no scope is given);
+      scope   - the group the files are loaded for: "main" (the ministry as the main executor), "co" (co-executor's tasks) or "vm" (the Cabinet's kinds other than «Қарор (Янги)»):
+                only the rows of that group are taken, the others are counted (skipped) and left for a load of their own; the groups never mix.
     The departments are matched to the structure in any case (it puts people into their departments); a department that is not in the structure leaves its tasks
     in «Без отдела» when by_dept is off. due_from/due_to: only the terms of this window are taken (None = no window)."""
-    raw = [r for r in raw_all if not by_exec or executor_ok(r["exec"])]       # the main executor is another body: not ours, whatever the department says (and its department is not asked about)
+    raw = [r for r in raw_all if scope == "co" or not by_exec or executor_ok(r["exec"])]      # a co-executor's row has another body as the main executor: it is the role that makes it ours       # the main executor is another body: not ours, whatever the department says (and its department is not asked about)
     aliases = load_aliases(c)
     units = c.execute("SELECT id, name FROM units WHERE active=1").fetchall()
     unit_name = {u["id"]: u["name"] for u in units}
@@ -210,12 +226,19 @@ def read_rows(c, raw_all: list[dict], due_from: str | None, due_to: str | None, 
     owner = {(r["site_code"] or r["code"]): r["assignee_raw"] for r in c.execute("SELECT code, site_code, assignee_raw FROM tasks WHERE assignee_raw != ''")}
     cand: dict[str, list[dict]] = {}
     for r in raw:
-        if by_kind and not_kept_kind(r["kind"]):                                # a kind of document of the Cabinet's list that is not kept
-            skipped["doc_type"] = skipped.get("doc_type", 0) + 1
-            continue
-        if by_kind and r["role"].strip().casefold().startswith("ҳамижрочи"):     # a co-executor's task: deliberately not taken (the department does not keep them)
-            skipped["coexec"] += 1
-            continue
+        sc = scope_of(r)
+        if scope is not None:
+            if sc != scope:                                                      # a row of another group: left for the load of that group
+                k = {"co": "coexec", "vm": "doc_type", "main": "main_rows"}[sc]
+                skipped[k] = skipped.get(k, 0) + 1
+                continue
+        else:                                                                    # no group given: the old filters
+            if by_kind and sc == "vm":
+                skipped["doc_type"] = skipped.get("doc_type", 0) + 1
+                continue
+            if by_kind and sc == "co":
+                skipped["coexec"] += 1
+                continue
         d = depts[skeleton(r["dept"])]
         uid = d["unit_id"] or (known.get(auth.norm_name(r["who"])) if r["who"] else None)
         if uid is None and by_dept:
@@ -246,7 +269,7 @@ def read_rows(c, raw_all: list[dict], due_from: str | None, due_to: str | None, 
         text = re.sub(r"\s*\n\s*Механизм:\s*-\s*$", "", text).rstrip()                # the site adds an empty "Механизм: -" and blank lines
 
         st = STATE.get(r["state"].strip().casefold(), "todo")
-        rows.append({"code": code, "seq": 0, "kind": kind_of(r["kind"]), "doc_no": doc_no, "doc_date": doc_date, "point": point, "text": text, "due": r["_due"], "close_date": None,
+        rows.append({"code": code, "seq": 0, "scope": scope_of(r), "kind": (" ".join(str(r["kind"] or "").split()) if scope_of(r) == "vm" else kind_of(r["kind"])), "doc_no": doc_no, "doc_date": doc_date, "point": point, "text": text, "due": r["_due"], "close_date": None,
                      "who": r["who"], "status": st, "tag": "", "unit_id": r["_unit"], "department": r["dept"], "ext": r["ext"], "occ": len(dues_of[code]),
                      "ext_date": last_date(r.get("ext_d")), "ext_n": int(r["ext"]) if str(r["ext"]).strip().isdigit() else None})
     votes: dict[tuple, int] = {}            # which unit the export puts a person in, and where he is now
@@ -268,10 +291,10 @@ def read_rows(c, raw_all: list[dict], due_from: str | None, due_to: str | None, 
     return rows, warnings, report
 
 
-def absent(c, data_codes: set[str], due_from: str | None, due_to: str | None) -> list[dict]:
+def absent(c, data_codes: set[str], due_from: str | None, due_to: str | None, scope: str = "main") -> list[dict]:
     """Open tasks of ours with a term in the window that the file does not contain at all: probably closed on the site (nothing is changed by this)."""
-    q = "SELECT code, doc_no, point, due FROM tasks WHERE status IN ('todo','progress')"
-    args: list = []
+    q = "SELECT code, doc_no, point, due FROM tasks WHERE status IN ('todo','progress') AND scope=?"
+    args: list = [scope]
     if due_from:
         q += " AND due >= ?"; args.append(due_from)
     if due_to:

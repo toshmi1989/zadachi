@@ -40,7 +40,7 @@ def group_of(kind: str) -> str:
     return OTHER
 
 
-def collect(c, month: str, by: str) -> dict:
+def collect(c, month: str, by: str, scope: str = "main") -> dict:
     """{rows: [...], total, none, groups}: month "YYYY-MM", or "" for every month (and the tasks without a term)."""
     units = c.execute("SELECT id, num, name, parent_id FROM units WHERE active=1 ORDER BY sort, id").fetchall()
     ids = {u["id"] for u in units}
@@ -48,7 +48,7 @@ def collect(c, month: str, by: str) -> dict:
     own = {u["id"]: _acc() for u in units}
     own[0] = _acc()
     for r in c.execute("""SELECT t.id, t.status, t.due, t.close_date, t.kind, u.unit_id FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
-                          WHERE t.status NOT IN ('gone', 'info')""").fetchall():
+                          WHERE t.status NOT IN ('gone', 'info') AND t.scope=?""", (scope,)).fetchall():
         if month and not (eff_value(r, by) or "").startswith(month):
             continue
         a = own[r["unit_id"] if r["unit_id"] in ids else 0]
@@ -87,12 +87,13 @@ def asof_text(stamp: str) -> str:
     return f"{y} йил {d} {MONTHS_UZ[m - 1]} {stamp[11:16]} ҳолатига"
 
 
-def title_text(month: str) -> str:
+def title_text(month: str, scope: str = "main") -> str:
     when = (f" {month[:4]} йил {MONTHS_UZ[int(month[5:7]) - 1]} ойига белгиланган" if len(month) == 7 else f" {month[:4]} йилга белгиланган") if month else ""
-    return f"Соғлиқни сақлаш вазирлигида{when} ijro.gov.uz тизимидаги топшириқларининг бажарилиши"
+    grp = {"co": " (Ҳамижрочи)", "vm": " (ВМ топшириқлари)"}.get(scope, "")
+    return f"Соғлиқни сақлаш вазирлигида{when} ijro.gov.uz тизимидаги топшириқларининг бажарилиши{grp}"
 
 
-def build_xlsx(data: dict, month: str, stamp: str, tdata: dict | None = None, admin: bool = False) -> bytes:
+def build_xlsx(data: dict, month: str, stamp: str, tdata: dict | None = None, admin: bool = False, scope: str = "main") -> bytes:
     groups, rows, total = data["groups"], data["rows"], data["total"]
     ncol = 7 + 3 * len(groups)
     wb = Workbook()
@@ -120,7 +121,7 @@ def build_xlsx(data: dict, month: str, stamp: str, tdata: dict | None = None, ad
 
     # the title and the date
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
-    ws.cell(1, 1, title_text(month)).font = font(bold=True, size=14)
+    ws.cell(1, 1, title_text(month, scope)).font = font(bold=True, size=14)
     ws.cell(1, 1).alignment = center
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
     ws.cell(2, 1, "ТАҲЛИЛИ").font = font(bold=True, size=14)
@@ -210,7 +211,7 @@ STAGE_ORDER = ["none", "moj", "cab", "chamber", "info", "returned", "other", "un
 STATUS_RU = {"todo": "Не выполнено", "progress": "В работе", "done": "Выполнено"}
 
 
-def collect_tasks(c, month: str, by: str) -> dict:
+def collect_tasks(c, month: str, by: str, scope: str = "main") -> dict:
     """The tasks that stand behind the summary numbers (the same selection: a period by the same date, «К сведению» and the tasks taken off the dashboard are not there),
     each with its department (management / division), its stage and its terms, and the order of the departments of the structure."""
     units = c.execute("SELECT id, num, name, parent_id FROM units WHERE active=1 ORDER BY sort, id").fetchall()
@@ -218,7 +219,7 @@ def collect_tasks(c, month: str, by: str) -> dict:
     stage = ijro.stage_map(c)
     out = []      # a long text is cut to 400 characters: the whole one is in the task
     for r in c.execute("""SELECT t.id, t.code, t.site_code, t.kind, t.doc_no, t.doc_date, t.point, t.text, t.due, t.close_date, t.status, a.name AS who, a.unit_id AS unit_id
-                          FROM tasks t LEFT JOIN users a ON a.id = t.assignee_id WHERE t.status NOT IN ('gone', 'info')"""):
+                          FROM tasks t LEFT JOIN users a ON a.id = t.assignee_id WHERE t.status NOT IN ('gone', 'info') AND t.scope=?""", (scope,)):
         eff = eff_value(r, by)
         if month and not (eff or "").startswith(month):
             continue

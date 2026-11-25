@@ -236,36 +236,40 @@ def api_me(request: Request):
 
 
 @app.get("/api/dashboard")
-def api_dashboard(request: Request, by: str = "close", period: str = ""):
+def api_dashboard(request: Request, by: str = "close", period: str = "", scope: str = "main"):
     if period and not re.fullmatch(r"\d{4}(-(0[1-9]|1[0-2]))?", period):
         bad("period: ГГГГ или ГГГГ-ММ")
+    if scope not in site_import.SCOPES:
+        bad("scope: main, co или vm")
     c = connect()
     try:
-        return stats.dashboard(c, tasks.norm_by(by, me(request)), period) | {"updated": report.last_updates(c)}
+        return stats.dashboard(c, tasks.norm_by(by, me(request)), period, scope) | {"updated": report.last_updates(c)}
     finally:
         c.close()
 
 
 @app.get("/api/report.xlsx")
-def api_report(request: Request, month: str = "", by: str = "close"):
+def api_report(request: Request, month: str = "", by: str = "close", scope: str = "main"):
     """The summary table of our department in the format of the ministry's table (Excel). month: YYYY-MM or empty (every month). Administrator and specialist."""
     user = me(request)
     if user["role"] not in auth.STAFF:
         bad("Выгрузка доступна администратору и специалисту", 403)
     if month and not re.fullmatch(r"\d{4}(-(0[1-9]|1[0-2]))?", month):
         bad("month: ГГГГ, ГГГГ-ММ или пусто")
+    if scope not in site_import.SCOPES:
+        bad("scope: main, co или vm")
     c = connect()
     try:
         nb = tasks.norm_by(by, user)
-        data = report.collect(c, month, nb)
-        tdata = report.collect_tasks(c, month, nb)
+        data = report.collect(c, month, nb, scope)
+        tdata = report.collect_tasks(c, month, nb, scope)
         up = report.last_updates(c)
     finally:
         c.close()
     stamp = max(up["sync"], up["base"]) or now()
-    body = report.build_xlsx(data, month, stamp, tdata, user["role"] == "admin")      # the official term is the administrator's: the specialist's file has none
+    body = report.build_xlsx(data, month, stamp, tdata, user["role"] == "admin", scope)      # the official term is the administrator's: the specialist's file has none
     return Response(body, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    headers={"Content-Disposition": f'attachment; filename="hisobot-{month or "all"}.xlsx"'})
+                    headers={"Content-Disposition": f'attachment; filename="hisobot-{month or "all"}{"" if scope == "main" else "-" + scope}.xlsx"'})
 
 
 def unit_list(c) -> list[dict]:
@@ -292,7 +296,7 @@ def api_meta(request: Request):
 
 # ---------------------------------------------------------------- tasks
 
-FILTER_KEYS = ("unit", "assignee", "status", "bucket", "kind", "doc", "q", "by", "sort", "dir", "date_from", "date_to", "stage", "closing", "term")
+FILTER_KEYS = ("unit", "assignee", "status", "bucket", "kind", "doc", "q", "by", "sort", "dir", "date_from", "date_to", "stage", "closing", "term", "scope")
 
 
 def filters(request: Request) -> dict:
@@ -706,7 +710,7 @@ def ai_on() -> bool:
 
 
 def import_files(datas: list[bytes], filename: str, user_id: int, dry: bool, due_from: str | None, due_to: str | None, ai: bool, suggest: bool = True,
-                 ours_out: set | None = None, mode: str = "base", overwrite: bool = False, replace: bool = False, confirm: bool = False, by_dept: bool = True, by_exec: bool = True, by_kind: bool = True, by_window: bool = True) -> dict:
+                 ours_out: set | None = None, mode: str = "base", overwrite: bool = False, replace: bool = False, confirm: bool = False, by_dept: bool = True, by_exec: bool = True, by_kind: bool = True, by_window: bool = True, scope: str = "main") -> dict:
     """One import, shared by the screen (files picked by the administrator) and the collector (the list the site's own button makes).
     The files are ONE base (a list per section): they are read together and judged together.
     mode "base": the base load (new tasks are created, fields updated, a window of terms applies). mode "status": only the statuses of tasks already in the
@@ -726,9 +730,10 @@ def import_files(datas: list[bytes], filename: str, user_id: int, dry: bool, due
         if site:
             raw_all = [r for d in datas for r in site_import._read_rows(d)]
             with tx() as c:
-                rows, warnings, report = site_import.read_rows(c, raw_all, None if status else due_from, None if status else due_to, present, by_dept, by_exec, by_kind)
+                rows, warnings, report = site_import.read_rows(c, raw_all, None if status else due_from, None if status else due_to, present, by_dept, by_exec, by_kind,
+                                                               None if status else scope)      # the statuses of the lists go to the tasks of every group; a base load is for one group
                 if not status:
-                    report["absent"] = site_import.absent(c, {r["code"] for r in raw_all}, due_from, due_to)[:200]
+                    report["absent"] = site_import.absent(c, {r["code"] for r in raw_all}, due_from, due_to, scope)[:200]
         else:
             if len(datas) > 1:
                 bad("Обработанный список загружается одним файлом")
@@ -741,13 +746,13 @@ def import_files(datas: list[bytes], filename: str, user_id: int, dry: bool, due
     if replace and not status:
         with tx() as c:
             present |= {r["code"] for r in rows}
-            gone = importer.absent_tasks(c, present)
-            total = c.execute("SELECT COUNT(*) FROM tasks WHERE status != 'gone' AND manual=0").fetchone()[0]
+            gone = importer.absent_tasks(c, present, scope)                   # only the tasks of the group that is being loaded can go: the other groups are not in these files
+            total = c.execute("SELECT COUNT(*) FROM tasks WHERE status != 'gone' AND manual=0 AND scope=?", (scope,)).fetchone()[0]
         limit = max(10, total // 4)
         if not dry and len(gone) > limit and not confirm:
             bad(f"Из базы уйдёт {len(gone)} из {total} задач (больше четверти): проверьте файлы (загружены ли все разделы?) и подтвердите снятие")
     with tx() as c:
-        summary = importer.apply(c, rows, warnings, filename or "export.xlsx", user_id, dry, mode="status" if status else "base", overwrite=overwrite)
+        summary = importer.apply(c, rows, warnings, filename or "export.xlsx", user_id, dry, mode="status" if status else "base", overwrite=overwrite, scope=scope)
     if replace and not status:
         summary["absent_tasks"] = {"count": len(gone), "total": total, "done": sum(g["status"] == "done" for g in gone), "needs_confirm": len(gone) > max(10, total // 4), "sample": gone[:50]}
         if not dry and gone:
@@ -768,12 +773,14 @@ def import_file(data: bytes, filename: str, user_id: int, dry: bool, due_from: s
 
 @app.post("/api/import")
 async def api_import(request: Request, file: list[UploadFile] = File(...), dry: int = 1, due_from: str = "", due_to: str = "", ai: int = 1, mode: str = "base",
-                     overwrite: int = 0, replace: int = 0, confirm: int = 0, f_dept: int = 1, f_exec: int = 1, f_kind: int = 1, f_window: int = 1):
+                     overwrite: int = 0, replace: int = 0, confirm: int = 0, f_dept: int = 1, f_exec: int = 1, f_kind: int = 1, f_window: int = 1, scope: str = "main"):
     """The base load: the lists of the site (one per section, they are read together) or the old processed list. Only our departments, a window of terms,
     the closing dates are proposed. overwrite=1: the file wins over hand edits. replace=1: open tasks that are not in the loaded base leave the dashboard.
     mode=status: only the statuses of tasks that are already in the base."""
     if mode not in ("base", "status"):
         bad("mode: base или status")
+    if scope not in site_import.SCOPES:
+        bad("scope: main, co или vm")
     if not file or len(file) > 10:
         bad("Нужно от 1 до 10 файлов")
     datas, total = [], 0
@@ -787,7 +794,7 @@ async def api_import(request: Request, file: list[UploadFile] = File(...), dry: 
     uid = me(request)["id"]
     # reading the files, the closing dates and the database work take seconds: they run in a thread, so that the other people's requests (the synchronisation of the others) are not held up
     return await run_in_threadpool(lambda: import_files(datas, name, uid, bool(dry), due_from or None, due_to or None, bool(ai), mode=mode, overwrite=bool(overwrite), replace=bool(replace),
-                                                          confirm=bool(confirm), by_dept=bool(f_dept), by_exec=bool(f_exec), by_kind=bool(f_kind), by_window=bool(f_window)))
+                                                          confirm=bool(confirm), by_dept=bool(f_dept), by_exec=bool(f_exec), by_kind=bool(f_kind), by_window=bool(f_window), scope=scope))
 
 
 @app.get("/api/sync/export-plan")

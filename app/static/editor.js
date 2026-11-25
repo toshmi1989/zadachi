@@ -16,6 +16,7 @@ routes.editor = async function (page, params) {
 
   page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Редактор задач</h1><p>Срок исполнения, ответственный и статус меняются прямо в строке и сохраняются сразу. Задачи добавляются по кодам: остальное скрипт найдёт на сайте сам.</p></div>
       <div class="controls"><button class="btn pri" id="ed-add">${icon("plus")}Добавить по кодам</button></div></div>
+    <div id="ed-scope"></div>
     <div id="ed-pend"></div>
     <section class="card rise" style="--i:1">
       <div class="ed-filters">
@@ -30,8 +31,9 @@ routes.editor = async function (page, params) {
       <div class="ed-foot"><span class="hint" id="ed-count"></span><span><button class="btn sm" id="ed-prev">← Назад</button> <button class="btn sm" id="ed-next">Вперёд →</button></span></div>
     </section>`;
   const rowsBox = $("#ed-rows", page);
+  $("#ed-scope", page).appendChild(scopeSeg(() => { S.page = 1; load(); }));                       // the editor works with one group of tasks at a time
 
-  const query = () => new URLSearchParams(Object.entries({ q: S.q, unit: S.unit, assignee: S.assignee, status: S.status, kind: S.kind, term: S.nodate ? "none" : "", sort: "eff", dir: "asc", size: SIZE, page: S.page }).filter(([, v]) => v !== "" && v !== false)).toString();
+  const query = () => new URLSearchParams(Object.entries({ q: S.q, unit: S.unit, assignee: S.assignee, status: S.status, kind: S.kind, term: S.nodate ? "none" : "", sort: "eff", dir: "asc", size: SIZE, page: S.page, scope: Z.scope }).filter(([, v]) => v !== "" && v !== false)).toString();
   let total = 0;
   async function load() {
     rowsBox.innerHTML = `<tr><td colspan="7"><div class="skel" style="height:80px"></div></td></tr>`;

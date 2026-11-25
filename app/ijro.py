@@ -389,6 +389,9 @@ SYNC_FIELDS = [
          "Если последний ответ на сайте старше, задача получает пометку «Нет ответов за последние 30 дн.» (этап не угадывается по старому ответу), а на дашборде попадает в «Другое»."),
         ("90", "Три месяца", "Для задач, которые долго идут по цепочке согласования. История длиннее, этапов определяется больше."),
         ("0", "Вся история", "Читается и хранится всё, что есть на сайте (до 30 последних ответов). Этап считается по самому свежему ответу, каким бы старым он ни был.")]},
+    {"key": "history_groups", "group": "history", "title": "Какие группы задач проверять синхронизацией", "kind": "choice", "options": [
+        ("all", "Все группы (по умолчанию)", "Этапы читаются у задач всех трёх групп: Асосий ижрочи, Ҳамижрочи и ВМ топшириқлари. Тогда вкладка «По этапам согласования» работает в каждой группе. Проверка занимает дольше, чем только по основным."),
+        ("main", "Только Асосий ижрочи", "Читаются только основные задачи. Для групп Ҳамижрочи и ВМ топшириқлари этапы не читаются: на их дашбордах в «По этапам согласования» задачи будут в колонке «Не проверялись».")]},
     {"key": "sync_parallel", "group": "history", "title": "Сколько задач читать одновременно", "kind": "choice", "options": [
         ("1", "По одной", "Самый бережный режим: сайт нагружается минимально, но проверка 250 задач занимает около 5 минут."),
         ("2", "По две", "Вдвое быстрее, чем по одной."),
@@ -447,6 +450,8 @@ def history_filter() -> tuple[str, list]:
     A task without any term is outside every month scope (there is nothing to put it in)."""
     sts = ("todo", "progress", "done", "info") if setting("history_statuses") == "all" else ("todo", "progress")
     sql, args = f" AND t.manual IN (0, 2) AND t.status IN ({','.join('?' * len(sts))})", list(sts)          # a task added by hand (manual=1) is not on the site: nothing to read; one added by its code (manual=2) is read like any other
+    if setting("history_groups") == "main":
+        sql += " AND t.scope='main'"
     scope = setting("history_scope")
     if scope in ("month", "month_next", "month_overdue"):
         eff = tasks.eff_sql("due" if setting("history_date") == "due" else "close")
@@ -502,7 +507,7 @@ def job(c, key_id: int, resume: bool = False) -> dict:
     term is in the current month. The section order for each follows the document kind.
     With resume, what was checked in the last hours is skipped: the run goes on where an interrupted one stopped."""
     cond, args = history_filter()
-    sql = "SELECT t.id, COALESCE(NULLIF(t.site_code, ''), t.code) AS code, t.kind FROM tasks t WHERE t.status_manual=0" + cond      # a task whose status a person set is not checked
+    sql = "SELECT t.id, COALESCE(NULLIF(t.site_code, ''), t.code) AS code, t.kind, t.scope FROM tasks t WHERE t.status_manual=0" + cond      # a task whose status a person set is not checked
     if resume:
         from datetime import timedelta
         sql += " AND t.id NOT IN (SELECT task_id FROM ijro_snapshots WHERE checked_at >= ?)"
@@ -518,7 +523,7 @@ def job(c, key_id: int, resume: bool = False) -> dict:
     cur = c.execute("INSERT INTO sync_runs(key_id, started_at, expected) VALUES (?,?,?)", (key_id, now(), len(rows)))
     return {"run_id": cur.lastrowid, "outside_scope": outside, "scope": setting("history_scope"), "api_tasks": SECTIONS["api_tasks"], "sections": SECTIONS["sections"],
             "manual_locked": c.execute("SELECT COUNT(*) FROM tasks t WHERE t.status_manual=1 AND t.manual IN (0, 2) AND t.status IN ('todo','progress','done')").fetchone()[0],
-            "parallel": max(1, min(5, int(setting("sync_parallel") or 3))), "answers_days": history_days(), "items": [{"code": r["code"], "section": by_kind.get(r["kind"], "")} for r in rows]}
+            "parallel": max(1, min(5, int(setting("sync_parallel") or 3))), "answers_days": history_days(), "items": [{"code": r["code"], "section": "government" if r["scope"] == "vm" else by_kind.get(r["kind"], "")} for r in rows]}
 
 
 # ---------------------------------------------------------------- mapping of the site's status to ours
@@ -748,7 +753,13 @@ def fill_pending(c, data: bytes, filename: str, user_id: int | None) -> dict:
     for r in raw:
         r["code"] = str(r["code"]).upper()
     rows, warnings, _report = site_import.read_rows(c, raw, None, None, None, False, False, False)      # no filters: these codes were asked for by a person
-    importer.apply(c, rows, warnings, filename or "fill.xlsx", user_id, False, mode="base", overwrite=True)
+    by_scope: dict[str, list] = {}
+    for r in rows:                                          # each row says which group it is (main, co-executor, the Cabinet's other kinds): the waiting task joins that group
+        by_scope.setdefault(r.get("scope") or "main", []).append(r)
+    for sc, rs in by_scope.items():
+        codes = [r["code"] for r in rs]
+        c.execute(f"UPDATE tasks SET scope=? WHERE manual=2 AND text='' AND code IN ({','.join('?' * len(codes))})", [sc, *codes])
+        importer.apply(c, rs, warnings, filename or "fill.xlsx", user_id, False, mode="base", overwrite=True, scope=sc)
     left = pending_codes(c)
     return {"filled": len(want) - len(left), "pending": left}
 

@@ -86,13 +86,25 @@ routes.import = async function (page) {
   const filters = [F.dept && "отделы нашей структуры (какие отделы наши, выбираете ниже)", F.exec && "исполнитель «Соғлиқни сақлаш вазирлиги»", F.kind && "без соисполнителей и лишних видов документов", F.window && "сроки в окне"].filter(Boolean);
   let confirmed = false;
   page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Импорт базы задач</h1><p>Файлы Excel с сайта загружаются как база: при проверке вы выбираете, перезаписать базу или добавить задачи к существующим. Этапы к ним записывает кнопка «Синхронизировать» в скрипте.</p></div></div>
+    <div id="scopebar" class="card rise" style="--i:1;margin-bottom:16px"></div>
     <div id="modebar" class="card rise" style="--i:1;margin-bottom:16px"></div>
     <div id="stage" class="rise" style="--i:1"></div>
-    <div class="card rise" style="--i:2;margin-top:16px"><div class="card-head"><h2>Последние загрузки</h2></div>${hist.length ? `<table class="plain"><thead><tr><th>Когда</th><th>Файл</th><th>Кто</th><th>Вид</th><th>Новых</th><th>Обновлено</th></tr></thead><tbody>${hist.map(h => `<tr><td>${esc(h.created_at.slice(0, 16))}</td><td>${esc(h.filename)}</td><td>${esc(h.by || "")}</td><td>${h.summary.mode === "status" ? "статусы" : "база"}${h.summary.overwritten ? ` <small class="hint">(перезаписано ${h.summary.overwritten})</small>` : ""}</td><td class="num">${h.summary.created}</td><td class="num">${h.summary.updated}</td></tr>`).join("")}</tbody></table>` : '<p class="hint">Загрузок ещё не было.</p>'}</div>`;
+    <div class="card rise" style="--i:2;margin-top:16px"><div class="card-head"><h2>Последние загрузки</h2></div>${hist.length ? `<table class="plain"><thead><tr><th>Когда</th><th>Файл</th><th>Кто</th><th>Вид</th><th>Новых</th><th>Обновлено</th></tr></thead><tbody>${hist.map(h => `<tr><td>${esc(h.created_at.slice(0, 16))}</td><td>${esc(h.filename)}</td><td>${esc(h.by || "")}</td><td>${h.summary.mode === "status" ? "статусы" : "база"}${h.summary.scope && h.summary.mode !== "status" ? ` <small class="hint">· ${esc(groupName(h.summary.scope))}</small>` : ""}${h.summary.overwritten ? ` <small class="hint">(перезаписано ${h.summary.overwritten})</small>` : ""}</td><td class="num">${h.summary.created}</td><td class="num">${h.summary.updated}</td></tr>`).join("")}</tbody></table>` : '<p class="hint">Загрузок ещё не было.</p>'}</div>`;
   const stage = $("#stage", page);
-  const modeBar = $("#modebar", page);
+  const modeBar = $("#modebar", page), scopeBar = $("#scopebar", page);
+  /* the groups never mix: every load is for ONE group, which the person names here (by default the group of the dashboard they are looking at) */
+  let lscope = Z.scope, lastFiles = null;
+  const GROUP_ROWS = { main: "строки, где министерство основной исполнитель (роль «Асосий»), кроме документов Кабинета министров других видов",
+                       co: "строки, где министерство соисполнитель (роль «Ҳамижрочи»)",
+                       vm: "документы Кабинета министров всех видов, кроме «Қарор (Янги)»" };
+  const paintScopebar = () => {
+    scopeBar.innerHTML = `<b>Для какой группы эти файлы?</b><p class="hint" style="margin:4px 0 10px">У каждой группы свой дашборд и своя база: загрузка одной группы не меняет и не снимает задачи других.</p>
+      <div class="modepick" role="radiogroup" aria-label="Группа задач" style="margin:0;grid-template-columns:repeat(3,minmax(0,1fr))">${GROUPS.map(g => `<label class="mp${lscope === g[0] ? " on" : ""}"><input type="radio" name="lg" value="${g[0]}"${lscope === g[0] ? " checked" : ""}><b>${esc(g[1])}</b><span>Берутся: ${esc(GROUP_ROWS[g[0]])}.</span></label>`).join("")}</div>`;
+    $$('input[name="lg"]', scopeBar).forEach(r => r.onchange = () => { lscope = r.value; paintScopebar(); paintModebar(); if (lastFiles) { confirmed = false; preview(lastFiles); } });
+  };
   const paintModebar = () => { modeBar.innerHTML = `<b>Как загрузка обращается с тем, что уже есть на сервере</b>
     <ul class="hint" style="margin:8px 0 0;padding-left:18px">
+      <li><b>Группа «${esc(groupName(lscope))}»:</b> берутся только ${esc(GROUP_ROWS[lscope])}; строки двух других групп не загружаются (в предпросмотре видно сколько), их загружают отдельно, выбрав свою группу выше.</li>
       <li><b>Какие строки берутся:</b> ${filters.length ? "только " + filters.join("; ") + "<br><span class=\"hint\">остальные строки не загружаются, в предпросмотре видно сколько</span>" : "<b>все строки файлов</b> (вы отобрали их сами)"}.</li>
       <li><b>Задачи из файла</b> добавляются, а у существующих обновляются тексты, документ, срок, статус и ответственный.</li>
       <li><b>Ваши ручные правки:</b> ${overwrite ? "<b>перезаписываются</b> значениями из файла (перед загрузкой покажем сколько)" : "сохраняются"}.</li>
@@ -100,8 +112,10 @@ routes.import = async function (page) {
       <li>Файлов можно выбрать несколько сразу (например, по одному на раздел): они читаются вместе как одна база.</li></ul>
     <p class="hint" style="margin:8px 0 0">Это можно изменить в «Настройках» → «Импорт и синхронизация».</p>`; };
   paintModebar();
+  paintScopebar();
   const dropHtml = (err) => `<label class="drop" id="drop" for="file"><div class="big">${icon("upload")}</div><b>Перетащите файлы Excel сюда</b><p class="hint" style="margin:4px 0 0">или нажмите, чтобы выбрать · .xlsx, можно несколько файлов сразу, до 40 МБ каждый</p>${err ? `<p class="err" style="margin-top:10px">${esc(err)}</p>` : ""}<input type="file" id="file" accept=".xlsx" multiple hidden></label>`;
   function showDrop(err) {
+    lastFiles = null;
     stage.innerHTML = dropHtml(err);
     const drop = $("#drop", stage), inp = $("#file", stage);
     ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
@@ -116,7 +130,7 @@ routes.import = async function (page) {
   let win = fromCfg(), useAi = false;   // the window of terms for the base load: from Settings (by default the last 30 days and the next 60)
   async function send(files, dry) {
     const f = new FormData(); files.forEach(x => f.append("file", x));
-    return api(`/api/import?dry=${dry}&due_from=${win[0]}&due_to=${win[1]}&ai=${useAi ? 1 : 0}&mode=${mode}&overwrite=${overwrite ? 1 : 0}&replace=${replace ? 1 : 0}&confirm=${confirmed ? 1 : 0}&f_dept=${F.dept ? 1 : 0}&f_exec=${F.exec ? 1 : 0}&f_kind=${F.kind ? 1 : 0}&f_window=${F.window ? 1 : 0}`, { method: "POST", form: f });
+    return api(`/api/import?dry=${dry}&due_from=${win[0]}&due_to=${win[1]}&ai=${useAi ? 1 : 0}&mode=${mode}&overwrite=${overwrite ? 1 : 0}&replace=${replace ? 1 : 0}&confirm=${confirmed ? 1 : 0}&f_dept=${F.dept ? 1 : 0}&f_exec=${F.exec ? 1 : 0}&f_kind=${F.kind ? 1 : 0}&f_window=${F.window ? 1 : 0}&scope=${lscope}`, { method: "POST", form: f });
   }
   /* the raw export of the site: only our departments, a window of terms, the closing dates are proposed */
   function siteBlock(s, files) {
@@ -170,6 +184,7 @@ routes.import = async function (page) {
     };
   }
   async function preview(files) {
+    lastFiles = files;
     stage.innerHTML = `<div class="card"><div class="skel" style="height:24px;width:40%;margin-bottom:14px"></div><div class="skel" style="height:80px"></div></div>`;
     let s;
     try { s = await send(files, 1); } catch (e) { return showDrop(e.message); }
@@ -198,7 +213,7 @@ routes.import = async function (page) {
     };
   }
   function done(r) {
-    Z.meta = null;
+    Z.meta = null; lastFiles = null; setScope(lscope);                                  // the dashboard and the lists open on the group that was loaded
     stage.innerHTML = `<div class="card" style="text-align:center;padding:36px"><div class="okmark"><svg viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg></div><h2 style="justify-content:center;font-size:20px">Готово</h2>
       <p>Новых задач: <b>${r.created}</b> · обновлено: <b>${r.updated}</b>${r.overwritten ? ` · перезаписано ваших правок: <b>${r.overwritten}</b>` : ""}${r.absent_tasks && r.absent_tasks.taken_off ? ` · снято с дашборда: <b>${r.absent_tasks.taken_off}</b>` : ""}${r.new_people.length ? ` · создано сотрудников: <b>${r.new_people.length}</b>` : ""}</p>
       <p class="hint">Теперь нажмите «Синхронизировать» в скрипте на сайте ijro: этапы запишутся к этим задачам.</p>
@@ -206,7 +221,7 @@ routes.import = async function (page) {
       ${r.closing ? `<div class="card" style="text-align:left;margin:14px auto;max-width:560px"><b>Даты закрытия</b><p style="margin:6px 0">Предложено: <b>${r.closing.proposed}</b>${r.closing.proposed ? ` (по прежним решениям: ${r.closing.by_history}, ИИ: ${r.closing.by_ai})` : ""}.</p>
         ${r.closing.errors.length ? `<div class="warn">${icon("alert")}<span>${r.closing.errors.map(esc).join("<br>")}</span></div>` : ""}
         ${r.closing.proposed ? `<p class="hint">Это предложения, а не окончательные даты: по прежним примерам совпадение с вашим выбором около 6 из 10. Просмотрите список и подтвердите.</p><div class="inl"><a class="btn pri" href="#/tasks?status=open&closing=proposed">Посмотреть предложенные</a><button class="btn" id="conf-all">Подтвердить все</button></div>` : ""}</div>` : ""}
-      <div style="display:flex;gap:10px;justify-content:center;margin-top:16px"><a class="btn pri" href="#/dashboard">Открыть дашборд</a><a class="btn" href="#/tasks">Список задач</a><button class="btn" id="again">Загрузить ещё</button></div></div>`;
+      <div style="display:flex;gap:10px;justify-content:center;margin-top:16px"><a class="btn pri" href="#/dashboard?scope=${lscope}">Открыть дашборд (${esc(groupName(lscope))})</a><a class="btn" href="#/tasks?scope=${lscope}">Список задач</a><button class="btn" id="again">Загрузить ещё</button></div></div>`;
     $("#again", stage).onclick = () => route();
     const ca = $("#conf-all", stage); if (ca) ca.onclick = async () => { try { const x = await api("/api/closing/confirm", { method: "POST", json: {} }); toast("Подтверждено: " + x.confirmed); ca.disabled = true; } catch (e) { toast(e.message, "error"); } };
   }

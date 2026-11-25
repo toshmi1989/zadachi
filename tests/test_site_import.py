@@ -396,7 +396,7 @@ def test_the_download_plan_follows_the_setting(admin):
 def test_the_settings_of_the_import_are_explained_and_validated(admin):
     s = admin.get("/api/settings").json()["sync"]
     fields = {f["key"]: f for f in s["fields"]}
-    assert set(fields) == {"base_f_dept", "base_f_exec", "base_f_kind", "base_f_window", "base_manual", "base_absent", "sync_source", "sync_apply", "base_back", "base_fwd", "history_scope", "history_date", "history_statuses", "sync_parallel", "history_days"}
+    assert set(fields) == {"base_f_dept", "base_f_exec", "base_f_kind", "base_f_window", "base_manual", "base_absent", "sync_source", "sync_apply", "base_back", "base_fwd", "history_scope", "history_date", "history_statuses", "sync_parallel", "history_days", "history_groups"}
     assert [fields[k]["value"] for k in ("base_f_dept", "base_f_exec", "base_f_kind", "base_f_window")] == ["1", "0", "0", "0"]     # departments are filtered; the files are already selected otherwise
     assert all(fields[k]["kind"] == "switch" and fields[k]["help"] for k in ("base_f_dept", "base_f_exec", "base_f_kind", "base_f_window"))
     assert fields["base_manual"]["value"] == "overwrite" and fields["base_absent"]["value"] == "gone"                  # the base overwrites; what is not in it leaves the dashboard
@@ -492,17 +492,17 @@ def test_the_filters_of_a_loaded_file_are_independent(admin):
     assert allon["rows"] == 1 and allon["site"]["skipped"]["not_ours"] == 1 and allon["site"]["skipped"]["executor"] == 1
     assert post(admin, rows, dry=1, window=win).json()["rows"] == 1                                            # the API default is every filter on
     dept = post(admin, rows, dry=1, window=win, extra=flags(1, 0, 0, 0)).json()                               # the default of the settings: only the departments are filtered
-    assert dept["rows"] == 5 and dept["site"]["skipped"]["not_ours"] == 1 and dept["site"]["skipped"]["executor"] == 0 and dept["site"]["skipped"]["window"] == 0
+    assert dept["rows"] == 3 and dept["site"]["skipped"]["not_ours"] == 1 and dept["site"]["skipped"]["executor"] == 0 and dept["site"]["skipped"]["window"] == 0    # the co-executor's and the Cabinet's other kinds are other groups: never in a load of the main group
     none = post(admin, rows, dry=1, window=win, extra=flags(0, 0, 0, 0)).json()                               # no filter: every row
-    assert none["rows"] == 6 and none["site"]["skipped"] == {"window": 0, "not_ours": 0, "coexec": 0, "executor": 0}
+    assert none["rows"] == 4 and none["site"]["skipped"] == {"window": 0, "not_ours": 0, "coexec": 1, "executor": 0, "doc_type": 1}      # no filter: every row of the group (the other two groups are left for their own loads)
     ex = post(admin, rows, dry=1, window=win, extra=flags(0, 1, 0, 0)).json()
-    assert ex["rows"] == 5 and ex["site"]["skipped"]["executor"] == 1
+    assert ex["rows"] == 3 and ex["site"]["skipped"]["executor"] == 1
     kd = post(admin, rows, dry=1, window=win, extra=flags(0, 0, 1, 0)).json()
     assert kd["rows"] == 4 and kd["site"]["skipped"]["coexec"] == 1 and kd["site"]["skipped"]["doc_type"] == 1
     wd = post(admin, rows, dry=1, window=win, extra=flags(0, 0, 0, 1)).json()
-    assert wd["rows"] == 5 and wd["site"]["skipped"]["window"] == 1
+    assert wd["rows"] == 3 and wd["site"]["skipped"]["window"] == 1
     r = post(admin, rows, dry=0, extra=flags(0, 0, 0, 0)).json()
-    assert r["created"] == 6
+    assert r["created"] == 4
     got = {c: admin.get(f"/api/tasks?q={c}").json()["items"][0] for c in ("SX0301", "SX0305")}
     assert got["SX0301"]["unit"] in ("", None) and got["SX0305"]["eff"] is not None                          # the foreign department's task is «Без отдела»; a far term is kept
 

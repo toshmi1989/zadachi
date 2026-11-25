@@ -160,13 +160,15 @@ class Matcher:
       another PERIOD when the code is periodic (the file has several terms of the code, or the code already has several tasks, or the site's own list of the periods
         has this term): a new task «КОД#срок», shown with the site's code;
       otherwise the same task with a new term (the term of an ordinary task moved)."""
-    def __init__(self, c):
+    def __init__(self, c, scope: str | None = None):
         self.c = c
+        self.scope = scope
         self.by_site: dict[str, list] = {}
         for t in c.execute("SELECT * FROM tasks"):
-            self.by_site.setdefault(t["site_code"] or t["code"], []).append(dict(t))
+            if scope is None or t["scope"] == scope:        # a load of one group only ever meets the tasks of that group
+                self.by_site.setdefault(t["site_code"] or t["code"], []).append(dict(t))
         self.periods = _periods_of(c)
-        self.taken = {t["code"] for ts in self.by_site.values() for t in ts}
+        self.taken = {r["code"] for r in c.execute("SELECT code FROM tasks")}
 
     def find(self, r: dict):
         sibs = self.by_site.get(r["code"], [])
@@ -184,6 +186,8 @@ class Matcher:
     def new_code(self, r: dict) -> str:
         sibs = self.by_site.get(r["code"], [])
         code = r["code"] if not sibs else f"{r['code']}#{r['due']}"
+        if code in self.taken and self.scope:                 # the same code is already a task of another group: it gets a code of its own
+            code = f"{code}~{self.scope}"
         n = 2
         while code in self.taken:
             code, n = f"{r['code']}#{r['due']}-{n}", n + 1
@@ -207,7 +211,7 @@ def store_ext(c, pairs: list) -> None:
 def apply_status(c, rows: list[dict], warnings: list[str], filename: str, user_id: int | None, dry: bool) -> dict:
     """The ordinary import: ONLY the statuses of tasks that are already in the base. A task that is not in the base is counted, never created;
     texts, terms, responsible people are not touched; what the administrator edited by hand stays as it is."""
-    m = Matcher(c)
+    m = Matcher(c)                           # the statuses of the site's list go to the task whatever its group
     updated = same = kept = missing = 0
     t = now()
     ext_pairs = []
@@ -245,14 +249,14 @@ def apply_status(c, rows: list[dict], warnings: list[str], filename: str, user_i
     return summary
 
 
-def absent_tasks(c, present: set) -> list[dict]:
+def absent_tasks(c, present: set, scope: str = "main") -> list[dict]:
     """The tasks of the base whose code is not in the loaded file, whatever their status: the base is loaded as a whole, so what is not in it is no longer in the base.
     A task added by hand is not in any file and is never one of them."""
-    return [dict(r) for r in c.execute("SELECT id, code, site_code, status, doc_no, point, substr(text, 1, 120) AS text, due FROM tasks WHERE status != 'gone' AND manual=0 ORDER BY code")
+    return [dict(r) for r in c.execute("SELECT id, code, site_code, status, doc_no, point, substr(text, 1, 120) AS text, due FROM tasks WHERE status != 'gone' AND manual=0 AND scope=? ORDER BY code", (scope,))
             if (r["site_code"] or r["code"]) not in present]
 
 
-def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int | None, dry: bool, mode: str = "base", overwrite: bool = False) -> dict:
+def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int | None, dry: bool, mode: str = "base", overwrite: bool = False, scope: str = "main") -> dict:
     """mode "base": the base load (new tasks are created, fields are updated). mode "status": only the statuses, see apply_status.
     overwrite: the file wins over what the administrator edited by hand (the status and the responsible person, and the closing date when the file has one);
     otherwise a task with hand edits keeps them."""
@@ -264,7 +268,7 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
         if u["excel_name"]:
             users[auth.norm_name(u["excel_name"])] = u["id"]
     new_people, created, updated, same, kept, overwritten = [], 0, 0, 0, 0, 0
-    m = Matcher(c)
+    m = Matcher(c, scope)
     t = now()
     ext_pairs = []
     for r in rows:
@@ -287,9 +291,9 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
             code = m.new_code(r)
             new_id = None
             if not dry:
-                cur = c.execute("""INSERT INTO tasks(code, site_code, seq, kind, doc_no, doc_date, point, text, due, close_date, assignee_id, assignee_raw,
-                             status, tag, done_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                          (code, r["code"], r["seq"], r["kind"], r["doc_no"], r["doc_date"], r["point"], r["text"], r["due"], r["close_date"],
+                cur = c.execute("""INSERT INTO tasks(code, site_code, scope, seq, kind, doc_no, doc_date, point, text, due, close_date, assignee_id, assignee_raw,
+                             status, tag, done_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                          (code, r["code"], scope, r["seq"], r["kind"], r["doc_no"], r["doc_date"], r["point"], r["text"], r["due"], r["close_date"],
                            uid, r["who"], r["status"], r["tag"], t if r["status"] == "done" else None, t, t))
                 new_id = cur.lastrowid
             m.add({"id": new_id, "code": code, "site_code": r["code"], "due": r["due"], "status": r["status"], "edited": 0, "close_src": "", "manual": 0})
@@ -332,7 +336,7 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
             c.execute(f"UPDATE tasks SET {', '.join(k + '=?' for k in diff)} WHERE id=?", (*diff.values(), cur_row["id"]))
     if not dry:
         store_ext(c, ext_pairs)
-    summary = {"rows": len(rows), "created": created, "updated": updated, "unchanged": same, "kept_manual": kept, "overwritten": overwritten,
+    summary = {"scope": scope, "rows": len(rows), "created": created, "updated": updated, "unchanged": same, "kept_manual": kept, "overwritten": overwritten,
                "new_people": new_people, "warnings": warnings, "dry": dry, "mode": "base"}
     if not dry:
         import json

@@ -1,7 +1,7 @@
 "use strict";
 /* Shared helpers: API, icons, formatting, router, toasts, drawer/modal, tooltip. No framework, no build. */
 const Z = { me: null, by: "close", mode: "count", meta: null };
-try { Z.by = ["due", "strict"].includes(localStorage.getItem("by")) ? localStorage.getItem("by") : "close"; Z.mode = localStorage.getItem("mode") === "pct" ? "pct" : "count"; } catch (e) {}
+try { Z.by = ["due", "strict"].includes(localStorage.getItem("by")) ? localStorage.getItem("by") : "close"; Z.mode = localStorage.getItem("mode") === "pct" ? "pct" : "count"; Z.scope = ["main", "co", "vm"].includes(localStorage.getItem("scope")) ? localStorage.getItem("scope") : "main"; } catch (e) {}
 
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
@@ -94,6 +94,18 @@ function countUp(el, to, ms) {
   requestAnimationFrame(step);
 }
 /* a sliding pill under the active button of a segmented control */
+/* the three groups of tasks: each has its own dashboard, its own lists, its own load of the Excel files */
+const GROUPS = [["main", "Асосий ижрочи"], ["co", "Ҳамижрочи"], ["vm", "ВМ топшириқлари"]];
+const GROUP_HELP = { main: "Задачи, где министерство основной исполнитель (Асосий)", co: "Задачи, где министерство соисполнитель (Ҳамижрочи)", vm: "Документы Кабинета министров всех видов, кроме «Қарор (Янги)»" };
+const groupName = v => (GROUPS.find(g => g[0] === v) || GROUPS[0])[1];
+function setScope(v) { Z.scope = ["main", "co", "vm"].includes(v) ? v : "main"; try { localStorage.setItem("scope", Z.scope); } catch (e) { /* the choice is only not remembered */ } }
+function scopeSeg(onChange) {
+  const wrap = document.createElement("div"); wrap.className = "ctl sc";
+  wrap.appendChild(seg(GROUPS, Z.scope, v => { setScope(v); onChange(v); }));
+  wrap.title = GROUPS.map(g => g[1] + ": " + GROUP_HELP[g[0]]).join("\n");
+  return wrap;
+}
+
 function seg(items, value, onChange, cls) {
   const box = document.createElement("div");
   box.className = "seg " + (cls || "");

@@ -23,7 +23,8 @@ function byToggle(onChange) {
 routes.dashboard = async function (page, params) {
   /* the period of the dashboard: "" (all), "2027" (a year) or "2027-03" (a month): chosen in the header, the page is not drawn again, only the numbers are */
   let period = /^\d{4}(-\d{2})?$/.test((params && params.period) || "") ? params.period : "";
-  const url = () => "/api/dashboard?by=" + Z.by + (period ? "&period=" + period : "");
+  if (params && ["main", "co", "vm"].includes(params.scope)) setScope(params.scope);        // a link from a list returns to the same group
+  const url = () => "/api/dashboard?by=" + Z.by + "&scope=" + Z.scope + (period ? "&period=" + period : "");
   let d = await api(url());
   let T = d.totals;
   const MON = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
@@ -52,6 +53,7 @@ routes.dashboard = async function (page, params) {
   page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Дашборд</h1><p>${esc(todayStr)}</p><p class="upd-line">${updLine}</p></div><div class="controls" id="ctl"></div></div>`;
   const staff = ["admin", "specialist"].includes(Z.me.role);
   const MONF = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
+  $("#ctl", page).appendChild(scopeSeg(() => reload()));                     // 1 Асосий ижрочи, 2 Ҳамижрочи, 3 ВМ топшириқлари: the whole dashboard is of the chosen group
   const pbox = document.createElement("div"); pbox.className = "ctl rp";
   $("#ctl", page).appendChild(pbox);
   const periodBounds = pr => !pr ? {} : pr.length === 7 ? bounds(pr) : { date_from: pr + "-01-01", date_to: pr + "-12-31" };
@@ -63,7 +65,7 @@ routes.dashboard = async function (page, params) {
       + (staff ? `<button type="button" class="btn sm" id="rp-go" data-tip="Сводная таблица по отделам департамента в формате министерства (Excel) за выбранный период">${icon("download")}Выгрузить в Excel</button>` : "");
     $("#pp-y", pbox).onchange = e => { period = e.target.value; reload(); };
     $("#pp-m", pbox).onchange = e => { period = py + (e.target.value ? "-" + e.target.value : ""); reload(); };
-    const go = $("#rp-go", pbox); if (go) go.onclick = () => { location.href = "/api/report.xlsx?month=" + encodeURIComponent(period) + "&by=" + Z.by; };
+    const go = $("#rp-go", pbox); if (go) go.onclick = () => { location.href = "/api/report.xlsx?month=" + encodeURIComponent(period) + "&by=" + Z.by + "&scope=" + Z.scope; };
   }
   if (Z.me.role === "admin") $("#ctl", page).appendChild(byToggle(() => reload()));   // only the administrator can switch between the closing date and the official term
 
@@ -155,7 +157,7 @@ routes.dashboard = async function (page, params) {
   paintPeriodBox();
 
   /* ---- a new period or a new kind of date: only the numbers are fetched and drawn again, the page stays ---- */
-  const syncUrl = () => { try { history.replaceState(null, "", "#/dashboard?view=" + st.view + (period ? "&period=" + period : "")); } catch (er) { /* the address stays; nothing breaks */ } };     // "back" from a list returns to this view and period
+  const syncUrl = () => { try { history.replaceState(null, "", "#/dashboard?view=" + st.view + "&scope=" + Z.scope + (period ? "&period=" + period : "")); } catch (er) { /* the address stays; nothing breaks */ } };     // "back" from a list returns to this view and period
   let busy = 0;
   async function reload() {
     const my = ++busy, dash = $(".dboard", page), kp = $("#d-kpis", page);
@@ -186,7 +188,7 @@ routes.dashboard = async function (page, params) {
   /* ---- every number opens its list ---- */
   const bounds = ym => { const last = new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate(); return { date_from: ym + "-01", date_to: ym + "-" + String(last).padStart(2, "0") }; };
   page.addEventListener("click", e => {
-    const go1 = e.target.closest(".dk"); if (go1) { drill({ ...(go1.dataset.go ? { status: go1.dataset.go } : {}), ...periodBounds(period) }); return; }
+    const go1 = e.target.closest(".dk"); if (go1) { drill({ ...(go1.dataset.go ? { status: go1.dataset.go } : {}), ...periodBounds(period), scope: Z.scope }); return; }
     const chev = e.target.closest("[data-chev]");
     if (chev) {
       if (chev.classList.contains("off")) return;
@@ -200,7 +202,8 @@ routes.dashboard = async function (page, params) {
     const ds = b.dataset, p = {};
     if (ds.u !== undefined && ds.u !== "") p.unit = ds.u;                                // "0" = without a department
     if (ds.st) p.status = ds.st;
-    if (ds.ym === "none") p.term = "none"; else if (ds.ym) Object.assign(p, bounds(ds.ym)); else Object.assign(p, periodBounds(period));      // the numbers are those of the chosen period: the list is too
+    if (ds.ym === "none") p.term = "none"; else if (ds.ym) Object.assign(p, bounds(ds.ym)); else Object.assign(p, periodBounds(period));
+    p.scope = Z.scope;      // the numbers are those of the chosen period: the list is too
     if (ds.k) p.kind = ds.k;
     if (ds.s) { p.stage = ds.s; p.status = "open"; }
     drill(p);
