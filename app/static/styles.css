@@ -540,6 +540,10 @@ table.edt{min-width:880px}
 @media (max-width:1380px){.tabs a .ic{display:none}.tabs a{padding:9px 8px}}
 @media (max-width:1240px){.tabs a{padding:9px 7px;font-size:13px;gap:0}.me-t{display:none}}
 @media (max-width:1010px){.tabs a{font-size:12px;padding:9px 5px}.top{gap:8px}}
+/* Uzbek words are longer: the menu gives up its icons, the account name and the product name earlier */
+@media (max-width:1700px){html[lang="uz"] .tabs a .ic{display:none}html[lang="uz"] .tabs a{padding:9px 9px}html[lang="uz"] .me-t{display:none}}
+@media (max-width:1380px){html[lang="uz"] .tabs a{padding:9px 7px;font-size:13px}html[lang="uz"] .brand b{display:none}}
+@media (max-width:1100px){html[lang="uz"] .tabs a{padding:9px 5px;font-size:12px}}
 @media (max-width:900px){
   main{padding-bottom:96px}
   .tabs{display:none}.me-t{display:none}
@@ -642,3 +646,6 @@ table.dbt{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px;
 .ctl.sc .seg button{white-space:nowrap}
 #ed-scope{margin:0 0 14px}
 @media (max-width:760px){.ctl.sc{max-width:100%;overflow-x:auto}}
+/* the language switch */
+.lang-btn{width:auto;min-width:42px;padding:0 10px;font-size:12.5px;font-weight:700;letter-spacing:.02em}
+.login-page .lang-btn{position:fixed;top:16px;right:16px;height:36px;border:1px solid var(--line-2);border-radius:8px;background:var(--surface);color:var(--text-2);cursor:pointer}

@@ -5,7 +5,7 @@ let fails = 0;
 const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++; };
 (async () => {
   const b = await chromium.launch(); const errs = [];
-  const mk = async (opts) => { const c = await b.newContext(Object.assign({ viewport: { width: 1440, height: 900 } }, opts)); const p = await c.newPage();
+  const mk = async (opts) => { const c = await b.newContext(Object.assign({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: "lang", value: "ru" }] }] }, viewport: { width: 1440, height: 900 } }, opts)); const p = await c.newPage();
     p.on("pageerror", e => errs.push(e.message)); p.on("console", m => { if (m.type() === "error" && !/401|403/.test(m.text())) errs.push(m.text()); }); return p; };
   // the sign-in page offers a list of people when there is one; the typed login is always available
   const login = async (p, u, pw) => { await p.goto(BASE + "/login"); await p.waitForTimeout(500); if (await p.locator("#to-manual").isVisible()) await p.click("#to-manual"); await p.fill("#login", u); await p.fill("#pw2", pw); await p.click("#s-manual button.btn"); await p.waitForSelector(".dbt"); await p.waitForTimeout(1500); };

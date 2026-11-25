@@ -4,7 +4,7 @@ const BASE = process.env.BASE || "http://localhost:8766", OUT = process.env.OUT 
 let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++; };
 (async () => {
   const b = await chromium.launch(); const errs = [];
-  const actx = await b.newContext({ viewport: { width: 1440, height: 900 } }); const a = await actx.newPage();
+  const actx = await b.newContext({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: "lang", value: "ru" }] }] }, viewport: { width: 1440, height: 900 } }); const a = await actx.newPage();
   await a.goto(BASE + "/login"); await a.click("#to-manual").catch(() => {}); await a.fill("#login", "admin"); await a.fill("#pw2", "secret123"); await a.click("#s-manual button.btn"); await a.waitForSelector(".dbt");
   const api = async (m, p, body) => (await (await a.request.fetch(BASE + p, { method: m, data: body })).json());
   const users = (await api("GET", "/api/users")).items, me = users.find(u => u.login === "test.p");
@@ -19,7 +19,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   await fetch(BASE + "/api/sync/ingest", { method: "POST", headers: { authorization: "Bearer " + key, "content-type": "application/json" }, body: JSON.stringify({ items: [{ code: mineCode, found: true, section: "government", recipient_id: "a1b2c3d4e5f6a1b2c3d4e5f6", status: 2, is_done: false, answers_loaded: true,
     answers: [{ sender_type: 10, state: 1, at_ms: 1763251200000, text: "Ответ исполнителя по задаче" }, { sender_type: 29, state: -1, at_ms: 1763337600000, text: "Возврат на доработку" }] }] }) });
 
-  const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } }); const p = await ctx.newPage();
+  const ctx = await b.newContext({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: "lang", value: "ru" }] }] }, viewport: { width: 1440, height: 900 } }); const p = await ctx.newPage();
   p.on("pageerror", e => errs.push(e.message)); p.on("console", m => { if (m.type() === "error" && !/403|404/.test(m.text())) errs.push(m.text()); });
   await p.goto(BASE + "/login"); await p.waitForSelector(".pitem"); await p.click(`.pitem:has-text("Test Person")`); await p.fill("#pw1", pw); await p.click("#s-pass button.btn"); await p.waitForSelector(".dbt"); await p.waitForTimeout(1200);
   ok((await p.textContent('#tabs a[data-r="tasks"]')).includes("Мои задачи"), "the menu says 'Мои задачи'");
@@ -69,7 +69,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   const r1 = await p.request.fetch(`${BASE}/api/tasks/${gid}`, { method: "PATCH", data: { status: "done" } }); ok(r1.status() === 404, "somebody else's task: 404 from the server (" + r1.status() + ")");
   const r2 = await p.request.fetch(`${BASE}/api/tasks/${rid}`, { method: "PATCH", data: { assignee_id: null } }); ok(r2.status() === 403, "own task, but another field: 403 (" + r2.status() + ")");
   // phone
-  const m = await b.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); const mp = await m.newPage();
+  const m = await b.newContext({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: "lang", value: "ru" }] }] }, viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); const mp = await m.newPage();
   await mp.goto(BASE + "/login"); await mp.waitForSelector(".pitem"); await mp.click(`.pitem:has-text("Test Person")`); await mp.fill("#pw1", pw); await mp.click("#s-pass button.btn"); await mp.waitForSelector(".dbt");
   await mp.goto(BASE + "/#/tasks"); await mp.waitForSelector("#rows tr[data-id]"); await mp.waitForTimeout(900);
   ok(await mp.locator("[data-quick]").first().isVisible(), "the quick button is visible on a phone");

@@ -4,7 +4,7 @@ const BASE = process.env.BASE || "http://localhost:8766", OUT = process.env.OUT 
 let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++; };
 (async () => {
   const b = await chromium.launch(); const errs = [];
-  const a = await (await b.newContext({ viewport: { width: 1400, height: 1000 } })).newPage();
+  const a = await (await b.newContext({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: "lang", value: "ru" }] }] }, viewport: { width: 1400, height: 1000 } })).newPage();
   a.on("pageerror", e => errs.push(e.message)); a.on("console", m => { if (m.type() === "error") errs.push(m.text()); });
   await a.goto(BASE + "/login"); await a.click("#to-manual").catch(() => {}); await a.fill("#login", "admin"); await a.fill("#pw2", "secret123"); await a.click("#s-manual button.btn"); await a.waitForSelector(".dtab");
   // a specialist account
@@ -41,7 +41,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   ok((await a.request.get(BASE + `/api/tasks/${delId}`)).status() === 404 && /удалена/.test(await a.textContent("body")), "the task is deleted after the confirmation");
   await a.request.delete(BASE + `/api/tasks/${(await (await a.request.get(BASE + "/api/tasks?q=EDT2222&status=all")).json()).items[0].id}`);
   // the specialist
-  const s = await (await b.newContext({ viewport: { width: 1400, height: 1000 } })).newPage();
+  const s = await (await b.newContext({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: "lang", value: "ru" }] }] }, viewport: { width: 1400, height: 1000 } })).newPage();
   s.on("pageerror", e => errs.push(e.message));
   await s.goto(BASE + "/login"); await s.waitForSelector("#to-manual, #login", { timeout: 8000 }); if (await s.locator("#to-manual").isVisible()) await s.click("#to-manual");
   await s.fill("#login", "special.tester"); await s.fill("#pw2", pw); await s.click("#s-manual button.btn"); await s.waitForSelector(".dtab", { timeout: 8000 });

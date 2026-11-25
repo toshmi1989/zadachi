@@ -4,7 +4,7 @@ const BASE = process.env.BASE || "http://localhost:8766", OUT = process.env.OUT 
 let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++; };
 (async () => {
   const b = await chromium.launch(); const errs = [];
-  const ctx = await b.newContext({ viewport: { width: 1440, height: 1000 } }); const p = await ctx.newPage();
+  const ctx = await b.newContext({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: "lang", value: "ru" }] }] }, viewport: { width: 1440, height: 1000 } }); const p = await ctx.newPage();
   p.on("pageerror", e => errs.push(e.message)); p.on("console", m => { if (m.type() === "error") errs.push(m.text()); });
   await p.goto(BASE + "/login"); await p.click("#to-manual").catch(() => {}); await p.fill("#login", "admin"); await p.fill("#pw2", "secret123"); await p.click("#s-manual button.btn"); await p.waitForSelector(".dbt");
   ok(await p.locator('#tabs a[data-r="sync"]').count() === 1, "'Синхронизация' is in the menu for the administrator");
@@ -44,7 +44,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   ok(/В работе/.test(await p.textContent(".stbtns button.on")) && await p.locator("#site-apply").count() === 0, "'Применить' in the card changes the status and the warning disappears");
   await p.keyboard.press("Escape"); await p.waitForTimeout(500);
   // phone
-  const m = await b.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); const mp = await m.newPage();
+  const m = await b.newContext({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: "lang", value: "ru" }] }] }, viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); const mp = await m.newPage();
   await mp.goto(BASE + "/login"); await mp.click("#to-manual").catch(() => {}); await mp.fill("#login", "admin"); await mp.fill("#pw2", "secret123"); await mp.click("#s-manual button.btn"); await mp.waitForSelector(".dbt");
   await mp.goto(BASE + "/#/sync"); await mp.waitForSelector("#s-rev"); await mp.waitForTimeout(900);
   ok(!(await mp.evaluate(() => document.documentElement.scrollWidth > 392 || innerWidth > 392)), "no horizontal page scroll on the phone");

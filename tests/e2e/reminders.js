@@ -6,7 +6,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
 const sent = async () => (await fetch(FAKE + "/__sent")).json();
 (async () => {
   const b = await chromium.launch(); const errs = [];
-  const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } }); const p = await ctx.newPage();
+  const ctx = await b.newContext({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: "lang", value: "ru" }] }] }, viewport: { width: 1440, height: 900 } }); const p = await ctx.newPage();
   p.on("pageerror", e => errs.push(e.message)); p.on("console", m => { if (m.type() === "error") errs.push(m.text()); });
   await p.goto(BASE + "/login"); await p.fill("#login", "admin"); await p.fill("#password", "secret123"); await p.click("button.btn.pri");
   await p.waitForSelector(".dbt"); await p.click('#tabs a[data-r="reminders"]'); await p.waitForSelector("#tg-link"); await p.waitForTimeout(900);
@@ -42,7 +42,7 @@ const sent = async () => (await fetch(FAKE + "/__sent")).json();
   ok((await sent()).length > n0, "manual run sends a digest"); ok(/вручную|отправлено/.test(await p.textContent("#c-log")), "log shows the send");
   await p.click(".tgc.on[data-v='14']").catch(() => {});
   // phone
-  const m = await b.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); const mp = await m.newPage();
+  const m = await b.newContext({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: "lang", value: "ru" }] }] }, viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); const mp = await m.newPage();
   await mp.goto(BASE + "/login"); await mp.fill("#login", "admin"); await mp.fill("#password", "secret123"); await mp.click("button.btn.pri"); await mp.waitForSelector(".dbt");
   await mp.goto(BASE + "/#/reminders"); await mp.waitForSelector("#c-me"); await mp.waitForTimeout(900);
   ok(!(await mp.evaluate(() => document.documentElement.scrollWidth > 392 || innerWidth > 392)), "no horizontal scroll on the phone");

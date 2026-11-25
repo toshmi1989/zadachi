@@ -56,3 +56,4 @@
   }).catch(() => { show(manual, "Вход"); });
   if (document.body.dataset.uid === "" && $("#login").value) $("#login").focus();
 })();
+(function () { const m = document.querySelector(".login"); if (m && window.I18N) m.appendChild(I18N.switcher()); })();      // the language: Uzbek (default) / Russian

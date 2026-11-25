@@ -5,7 +5,7 @@ const BASE = process.env.BASE || "http://localhost:8766", OUT = process.env.OUT 
 let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++; };
 (async () => {
   const b = await chromium.launch(); const errs = [];
-  const p = await (await b.newContext({ viewport: { width: 1400, height: 1000 } })).newPage();
+  const p = await (await b.newContext({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: "lang", value: "ru" }] }] }, viewport: { width: 1400, height: 1000 } })).newPage();
   p.on("pageerror", e => errs.push(e.message)); p.on("console", m => { if (m.type() === "error") errs.push(m.text()); });
   await p.goto(BASE + "/login"); await p.click("#to-manual").catch(() => {}); await p.fill("#login", "admin"); await p.fill("#pw2", "secret123"); await p.click("#s-manual button.btn");
   await p.waitForSelector(".dtab"); await p.waitForTimeout(1200);

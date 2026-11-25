@@ -35,7 +35,7 @@ routes.dashboard = async function (page, params) {
   const MON = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
   const monthShort = ym => MON[+ym.slice(5, 7) - 1] + " " + ym.slice(0, 4);
   const curYm = d.today.slice(0, 7);
-  const todayStr = new Date(d.today + "T00:00").toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric", weekday: "long" });
+  const todayStr = I18N.longDate(new Date(d.today + "T00:00"));
   let all = d.rows.concat(d.none ? [d.none] : []);
   const hasKids = id => d.rows.some(r => r.parent_id === id);
   const unitLabel = r => (r.num ? (r.level ? r.num + ". " : r.num + " · ") : "") + r.name;

@@ -13,6 +13,8 @@
   $("#me-av").outerHTML = avatar(me.id, me.name, "").replace("<span", '<span id="me-av"');
   $("#me-name").textContent = me.short; $("#me-role").textContent = me.role_label;
 
+  $(".top-r").insertBefore(I18N.switcher(), $("#theme"));                 // the language: Uzbek (default) / Russian
+
   /* theme: auto → light → dark */
   const themeBtn = $("#theme");
   const cur = () => { try { return localStorage.getItem("theme") || "auto"; } catch (e) { return "auto"; } };
