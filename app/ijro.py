@@ -551,6 +551,15 @@ def current_period(periods: list[dict], due: str | None):
 OPEN_SITE = {-1, 1, 3, 4}   # statuses of the tab "Bajarilmoqda" besides 0 (no answer) and 2 (answered)
 
 
+def cabinet_removed(snap) -> bool:
+    """A document of the CABINET OF MINISTERS (its list on the site): its way ends with the Cabinet. The answer «Nazoratdan olishni tasdiqlandi» (35) of the Cabinet is the last
+    one in the history: the task is removed from control, i.e. done. (For the President's documents the way goes on to the Chamber of Accounts, so there it is only a step.)"""
+    if _opt(snap, "section") != "government" or not snap["found"]:
+        return False
+    cur = current_answer(live_answers(snap)[0])
+    return bool(cur) and cur["sender_type"] == T_REMOVAL
+
+
 def classify(snap, due: str | None = None, dates: bool = True) -> dict:
     """What the site says, in our terms. Conservative: an unknown status never changes anything. A periodic task has one general
     status for all its periods (it stays 'in work' until the last one), so it is judged by the period of our deadline.
@@ -570,6 +579,9 @@ def classify(snap, due: str | None = None, dates: bool = True) -> dict:
             return {"status": "done", "label": f"Период {k} из {n} выполнен{tail}", "note": "Периодическая задача: считается по периоду вашего срока", "known": True}
         done = sum(1 for p in periods if p.get("recipient_status") == 20)
         return {"status": None, "label": f"Период {k} из {n} не выполнен{tail}", "note": f"Периодическая задача, выполнено периодов: {done} из {n}. Общий статус на сайте остаётся «в работе»", "known": True, "open": True}
+    if cabinet_removed(snap):
+        return {"status": "done", "label": "Снято с контроля Кабинетом Министров", "known": True,
+                "note": "Для документов Кабинета Министров подтверждение снятия с контроля (Nazoratdan olishni tasdiqlandi) последнее: Счётная палата не участвует, задача выполнена."}
     if snap["is_done"] and st in (20, 21):
         late = st == 21
         return {"status": "done", "label": "Выполнена с опозданием" if late else "Выполнена в срок", "note": "", "known": True}
