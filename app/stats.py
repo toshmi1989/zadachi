@@ -18,26 +18,27 @@ STAGE_COLS = [(k, label, hint) for k, label, hint in ijro.FUNNEL] + [
 
 
 def _two() -> dict:
-    return {"done": 0, "open": 0}
+    """done, not done, and how many of the not done are past their term («over»: the term is before today by the chosen basis)."""
+    return {"done": 0, "open": 0, "over": 0}
 
 
 def _acc() -> dict:
-    return {"months": {}, "nodate": _two(), "kinds": {}, "stages": {}, "sum": {"done": 0, "open": 0, "info": 0}}
+    return {"months": {}, "nodate": _two(), "kinds": {}, "stages": {}, "sum": {"done": 0, "open": 0, "info": 0, "over": 0}}
 
 
 def _add(a: dict, b: dict) -> dict:
     """a += b (a management takes its divisions' numbers)."""
     for ym, v in b["months"].items():
         t = a["months"].setdefault(ym, _two())
-        t["done"] += v["done"]; t["open"] += v["open"]
+        t["done"] += v["done"]; t["open"] += v["open"]; t["over"] += v["over"]
     for k, v in b["kinds"].items():
         t = a["kinds"].setdefault(k, _two())
-        t["done"] += v["done"]; t["open"] += v["open"]
+        t["done"] += v["done"]; t["open"] += v["open"]; t["over"] += v["over"]
     for k, n in b["stages"].items():
         a["stages"][k] = a["stages"].get(k, 0) + n
-    for k in ("done", "open"):
+    for k in ("done", "open", "over"):
         a["nodate"][k] += b["nodate"][k]
-    for k in ("done", "open", "info"):
+    for k in ("done", "open", "info", "over"):
         a["sum"][k] += b["sum"][k]
     return a
 
@@ -53,6 +54,7 @@ def dashboard(c, by: str = "close", period: str = "", scope: str = "main") -> di
     period = period if period and len(period) in (4, 7) else ""
     units = c.execute("SELECT id, num, name, parent_id FROM units WHERE active=1 ORDER BY sort, id").fetchall()
     ids = {u["id"] for u in units}
+    today_s = today().isoformat()
     stage = ijro.stage_map(c)                                       # {task id: stage key} for the open tasks
     own: dict[int, dict] = {u["id"]: _acc() for u in units}
     own[0] = _acc()                                                  # «Без отдела»
@@ -72,16 +74,20 @@ def dashboard(c, by: str = "close", period: str = "", scope: str = "main") -> di
             a["sum"]["info"] += 1
             continue
         key = "open" if st in OPEN else "done"
+        late = key == "open" and bool(eff) and eff < today_s              # not done and past its term (a task without a term is never past it)
         a["sum"][key] += 1
+        a["sum"]["over"] += late
         if eff:
             months.add(eff[:7])
-            a["months"].setdefault(eff[:7], _two())[key] += 1
+            m = a["months"].setdefault(eff[:7], _two())
+            m[key] += 1; m["over"] += late
         else:
             a["nodate"][key] += 1
         kind = r["kind"] or "—"
         if kind not in KIND_ORDER and kind not in kinds_seen:
             kinds_seen.append(kind)
-        a["kinds"].setdefault(kind, _two())[key] += 1
+        k2 = a["kinds"].setdefault(kind, _two())
+        k2[key] += 1; k2["over"] += late
         if key == "open":
             sk = stage.get(r["id"], "unchecked")
             a["stages"][sk] = a["stages"].get(sk, 0) + 1
@@ -104,6 +110,6 @@ def dashboard(c, by: str = "close", period: str = "", scope: str = "main") -> di
     t = total["sum"]
     return {"today": today().isoformat(), "by": by, "period": period, "scope": scope, "periods": sorted(every_month), "months": sorted(months), "kinds": KIND_ORDER + kinds_seen,
             "stages": [{"key": k, "label": label, "hint": hint} for k, label, hint in STAGE_COLS],
-            "totals": {"done": t["done"], "open": t["open"], "info": t["info"], "total": t["done"] + t["open"] + t["info"]},
+            "totals": {"done": t["done"], "open": t["open"], "over": t["over"], "info": t["info"], "total": t["done"] + t["open"] + t["info"]},
             "rows": rows, "none": {"id": 0, "num": "", "name": "Без отдела", "parent_id": None, "level": 0, **none} if has_none else None,
             "total": total}

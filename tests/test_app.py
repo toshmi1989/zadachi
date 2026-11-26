@@ -97,14 +97,18 @@ def test_the_three_tables_of_the_dashboard(admin):
     assert (T["done"], T["open"], T["info"], T["total"]) == (1, 3, 1, 5)
     assert d["months"] == ["2026-11", "2026-12"]                               # by the closing date; the unassigned task has none, so its official term 31.12 is used
     none = d["none"]                                                          # nobody here has a department
-    assert none["months"]["2026-11"] == {"done": 1, "open": 2} and none["months"]["2026-12"] == {"done": 0, "open": 1}
-    assert none["kinds"]["Қарор"] == {"done": 0, "open": 2} and none["kinds"]["ВМ"] == {"done": 1, "open": 0} and none["kinds"]["Фармон"] == {"done": 0, "open": 1}
+    dn = lambda v: {"done": v["done"], "open": v["open"]}
+    assert dn(none["months"]["2026-11"]) == {"done": 1, "open": 2} and dn(none["months"]["2026-12"]) == {"done": 0, "open": 1}
+    assert dn(none["kinds"]["Қарор"]) == {"done": 0, "open": 2} and dn(none["kinds"]["ВМ"]) == {"done": 1, "open": 0} and dn(none["kinds"]["Фармон"]) == {"done": 0, "open": 1}
+    over = admin.get("/api/tasks?bucket=overdue").json()["total"]                  # «not done: of them past the term» is the same number as the list of the overdue
+    assert T["over"] == over == none["sum"]["over"] == sum(v["over"] for v in none["months"].values()) == sum(v["over"] for v in none["kinds"].values()) == 1
+    assert all(v["over"] <= v["open"] for v in list(none["months"].values()) + list(none["kinds"].values()))
     assert d["kinds"][:5] == ["Фармон", "Қарор", "Баён", "ВМ", "ПА"]
     assert none["sum"]["info"] == 1 and d["total"]["sum"] == none["sum"]       # «К сведению» is counted apart and is in no percent
     assert sum(none["stages"].values()) == 3 and none["stages"]["unchecked"] == 3     # nothing has been read from the site yet
     assert [s["key"] for s in d["stages"]][:6] == ["none", "moj", "cab", "chamber", "info", "returned"] and d["stages"][-1]["key"] == "unchecked"
     due = dashboard_matches_lists(admin, "due")                                  # by the official term: all of them are due in December
-    assert due["months"] == ["2026-12"] and due["by"] == "due" and due["totals"] == T
+    assert due["months"] == ["2026-12"] and due["by"] == "due" and {k: v for k, v in due["totals"].items() if k != "over"} == {k: v for k, v in T.items() if k != "over"} and due["totals"]["over"] == 0   # nothing is past its official term
 
 
 def test_filters(admin):

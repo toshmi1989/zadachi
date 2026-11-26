@@ -98,13 +98,15 @@ routes.dashboard = async function (page, params) {
 
   /* ---- cells ---- */
   const attrOf = a => Object.entries(a).filter(([, v]) => v !== undefined).map(([k, v]) => `data-${k}="${esc(v)}"`).join(" ");
-  const chip = (n, cls, a) => n ? `<button type="button" class="n ${cls}" ${attrOf(a)}>${n}</button>` : `<span class="n ${cls} z">0</span>`;
+  const chip = (n, cls, a, tip) => n ? `<button type="button" class="n ${cls}" ${attrOf(a)}${tip ? ` data-tip="${esc(tip)}"` : ""}>${n}</button>` : `<span class="n ${cls} z">0</span>`;
+  /* the tip of a «not done» number: how many of them are still within the term and how many are past it */
+  const openTip = (who, open, over) => `<b>${esc(who)}</b>Не выполнено: ${open}<br>в срок: ${open - over}<br>просрочено: ${over}`;
   /* one cell: the percent done and the number of tasks; a bar (done | not done); below it two buttons: done and not done */
   function pairCell(v, a, tip, extra = "") {
     const done = v ? v.done : 0, open = v ? v.open : 0, n = done + open;
     if (!n) return `<td class="dc z${extra}"><span class="dash">—</span></td>`;
     const p = pc(done, n);
-    return `<td class="dc${extra}" data-tip="${esc(tip)}: выполнено ${done} из ${n} (${p}%)"><span class="cl"><b class="pc">${p}%</b><span class="of">из ${n}</span></span>${bar([[done, "ok"], [open, "no"]])}<span class="cnt">${chip(done, "ok", { ...a, st: "done" })}${chip(open, "no", { ...a, st: "open" })}</span></td>`;
+    return `<td class="dc${extra}" data-tip="${esc(tip)}: выполнено ${done} из ${n} (${p}%)"><span class="cl"><b class="pc">${p}%</b><span class="of">из ${n}</span></span>${bar([[done, "ok"], [open, "no"]])}<span class="cnt">${chip(done, "ok", { ...a, st: "done" })}${chip(open, "no", { ...a, st: "open" }, v && v.over != null ? openTip(tip, open, v.over) : "")}</span></td>`;
   }
   function nameCell(r, total) {
     if (total) return `<td><div class="um-n"><span class="chev off"></span><button type="button" class="pname" data-u=""><span><b>Весь департамент</b></span></button></div></td>`;

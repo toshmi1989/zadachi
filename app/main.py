@@ -872,33 +872,76 @@ async def api_import_aliases(request: Request):
 CLEAR_WORD = "ОЧИСТИТЬ"
 
 
+CLEAR_SCOPES = {"main": "Асосий ижрочи", "co": "Ҳамижрочи", "vm": "ВМ топшириқлари"}
+
+
+def _clear_selection(src: dict) -> tuple[str, dict, dict]:
+    """The part of the base that «Очистить базу» touches: a group, a year of the official term, a type and a document, all optional (nothing chosen = everything).
+    Returns the WHERE, its parameters and the readable choice. A value that does not exist is refused, so a mistake never widens the erase."""
+    where, p, said = ["1=1"], {}, {}
+    scope, year, kind, doc = (str(src.get(k) or "").strip() for k in ("scope", "year", "kind", "doc"))
+    if scope:
+        if scope not in CLEAR_SCOPES:
+            bad("Неизвестная группа задач")
+        where.append("scope = :scope"); p["scope"] = scope; said["scope"] = CLEAR_SCOPES[scope]
+    if year:
+        if year == "none":
+            where.append("(due IS NULL OR due = '')"); said["year"] = "без срока"
+        elif re.fullmatch(r"\d{4}", year):
+            where.append("substr(due, 1, 4) = :year"); p["year"] = year; said["year"] = year
+        else:
+            bad("Неизвестный год")
+    if kind:
+        where.append("kind = :kind"); p["kind"] = kind; said["kind"] = kind
+    if doc:
+        where.append("doc_no = :doc"); p["doc"] = doc; said["doc"] = doc
+    return " AND ".join(where), p, said
+
+
 @app.get("/api/import/clear")
-def api_import_clear_info():
-    """What «Очистить базу» would erase (shown before the person confirms)."""
+def api_import_clear_info(request: Request):
+    """What «Очистить базу» would erase for the chosen part (shown before the person confirms), and what can be chosen: groups, years of the official term, types and
+    documents with the number of tasks in each."""
     c = connect()
     try:
-        r = c.execute("SELECT COUNT(*) AS n, COALESCE(SUM(manual > 0), 0) AS m, COALESCE(SUM(status='gone'), 0) AS g FROM tasks").fetchone()
-        return {"tasks": r["n"], "manual": r["m"], "gone": r["g"], "word": CLEAR_WORD}
+        where, p, said = _clear_selection(dict(request.query_params))
+        r = c.execute(f"SELECT COUNT(*) AS n, COALESCE(SUM(manual > 0), 0) AS m, COALESCE(SUM(status='gone'), 0) AS g FROM tasks WHERE {where}", p).fetchone()
+        opts = {
+            "scopes": [{"v": r2["scope"], "label": CLEAR_SCOPES.get(r2["scope"], r2["scope"]), "n": r2["n"]} for r2 in c.execute("SELECT scope, COUNT(*) n FROM tasks GROUP BY scope ORDER BY scope='main' DESC, scope")],
+            "years": [{"v": r2["y"] or "none", "label": r2["y"] or "без срока", "n": r2["n"]} for r2 in c.execute(
+                "SELECT NULLIF(substr(COALESCE(due, ''), 1, 4), '') y, COUNT(*) n FROM tasks GROUP BY y ORDER BY y IS NULL, y")],
+            "kinds": [{"v": r2["kind"], "label": r2["kind"] or "без типа", "n": r2["n"]} for r2 in c.execute("SELECT kind, COUNT(*) n FROM tasks GROUP BY kind ORDER BY n DESC, kind")],
+            "docs": [{"v": r2["doc_no"], "kind": r2["kind"], "n": r2["n"]} for r2 in c.execute(
+                "SELECT doc_no, kind, COUNT(*) n FROM tasks GROUP BY doc_no, kind ORDER BY kind, doc_no")],
+        }
+        return {"tasks": r["n"], "manual": r["m"], "gone": r["g"], "word": CLEAR_WORD, "choice": said, "options": opts}
     finally:
         c.close()
 
 
 @app.post("/api/import/clear")
 async def api_import_clear(request: Request):
-    """Erases EVERY task (those added by hand and those taken off the dashboard too) with their history and what was read from the site. People, the structure of the
-    department, the settings and the journal stay. A copy of the database is made first, so the erase can be undone from the backup."""
+    """Erases the chosen part of the tasks (all of them when nothing is chosen; those added by hand and those taken off the dashboard too) with their history and what was read
+    from the site. People, the structure of the department, the settings and the journal stay. A copy of the database is made first, so the erase can be undone from the backup."""
     b = await _json(request)
     if str(b.get("confirm") or "").strip() != CLEAR_WORD:
-        bad(f"Чтобы стереть все задачи, введите слово {CLEAR_WORD}")
+        bad(f"Чтобы стереть задачи, введите слово {CLEAR_WORD}")
+    where, p, said = _clear_selection(b)
+    c0 = connect()
+    try:
+        if not c0.execute(f"SELECT 1 FROM tasks WHERE {where} LIMIT 1", p).fetchone():
+            bad("Под этот выбор не попало ни одной задачи")
+    finally:
+        c0.close()
     try:
         copy = backup.make_now()
     except Exception as e:
         bad("Не удалось сделать копию перед очисткой, задачи не тронуты: " + str(e)[:120], 500)
     with tx() as c:
-        n = c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-        c.execute("DELETE FROM tasks")                 # the history of the tasks, the site's snapshots and the proposals to take off go with them (ON DELETE CASCADE)
-        audit(c, "tasks.clear", "tasks", None, {"deleted": n, "backup": str(copy)[-80:]})
-    return {"deleted": n, "backup": str(copy)}
+        n = c.execute(f"SELECT COUNT(*) FROM tasks WHERE {where}", p).fetchone()[0]
+        c.execute(f"DELETE FROM tasks WHERE {where}", p)   # the history of the tasks, the site's snapshots and the proposals to take off go with them (ON DELETE CASCADE)
+        audit(c, "tasks.clear", "tasks", None, {"deleted": n, "choice": said or "всё", "backup": str(copy)[-80:]})
+    return {"deleted": n, "backup": str(copy), "choice": said}
 
 
 @app.post("/api/import/add-units")

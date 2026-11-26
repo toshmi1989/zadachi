@@ -52,6 +52,11 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); 
   await drill("#d-table tbody tr.kid .pname, #d-table tbody tr.mgmt .pname", "all tasks of a department", /unit=\d+/, false);
   await p.click('.dtab[data-view="kinds"]'); await p.waitForTimeout(300);
   await drill("#d-table tbody tr.total button.n.ok[data-k]", "done of a kind", /status=done.*kind=/);
+  // the «not done» number says how many of them are in term and how many are past it
+  await p.click('.dtab[data-view="months"]'); await p.waitForTimeout(300);
+  const tipOf = await p.locator("#d-table button.n.no[data-tip]").first().getAttribute("data-tip");
+  const mm = /Не выполнено: (\d+)<br>в срок: (\d+)<br>просрочено: (\d+)/.exec(tipOf || "");
+  ok(!!mm && +mm[1] === +mm[2] + +mm[3], "the tip of a not done number: " + (tipOf || "").replace(/<[^>]+>/g, " "));
   await p.click('.dtab[data-view="stages"]'); await p.waitForTimeout(300);
   await drill("#d-table tbody tr.total button.n[data-s]", "open at a stage", /stage=\w+.*status=open|status=open.*stage=\w+/);
   ok(/view=stages/.test(p.url()) && (await p.locator(".dtab.on").getAttribute("data-view")) === "stages", "back from a list returns to the same tab");

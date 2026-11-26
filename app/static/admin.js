@@ -225,18 +225,38 @@ routes.import = async function (page) {
     $("#again", stage).onclick = () => route();
     const ca = $("#conf-all", stage); if (ca) ca.onclick = async () => { try { const x = await api("/api/closing/confirm", { method: "POST", json: {} }); toast("Подтверждено: " + x.confirmed); ca.disabled = true; } catch (e) { toast(e.message, "error"); } };
   }
-  /* «Очистить базу»: erases every task. A copy of the database is made first; the person confirms by typing the word. */
+  /* «Очистить базу»: erases the chosen part of the tasks (by group, year of the official term, type, document; nothing chosen = everything). A copy of the database is made
+     first; the person sees how many tasks fall under the choice and confirms by typing the word. */
   page.insertAdjacentHTML("beforeend", `<div class="card rise" style="--i:3;margin-top:16px;border-color:color-mix(in srgb,var(--c-overdue) 45%,var(--line))"><div class="card-head"><div><h2>Очистить базу</h2>
-    <p class="sub">Стирает <b>все задачи</b> вместе с их историей и этапами, в том числе добавленные вручную и снятые с дашборда. Сотрудники, структура департамента и настройки остаются. Перед очисткой делается копия базы.</p></div>
+    <p class="sub">Стирает задачи вместе с их историей и этапами, в том числе добавленные вручную и снятые с дашборда. Можно стереть всё или только выбранное: группу, год, тип документа или один документ. Сотрудники, структура департамента и настройки остаются. Перед очисткой делается копия базы.</p></div>
     <button class="btn danger" id="clear-all">${icon("x")}Очистить базу</button></div></div>`);
   $("#clear-all", page).onclick = async () => {
     let info; try { info = await api("/api/import/clear"); } catch (e) { toast(e.message, "error"); return; }
     if (!info.tasks) { toast("В базе нет задач"); return; }
-    const r = await formDialog({ title: "Стереть все задачи?", ok: "Стереть все задачи",
-      text: `Будет стёрто задач: ${info.tasks}` + (info.manual ? `, из них добавленных вручную: ${info.manual}` : "") + (info.gone ? `, снятых с дашборда: ${info.gone}` : "") + ". Это нельзя отменить кнопкой: вернуть можно только из копии базы, которая будет сделана перед очисткой.",
-      fields: [{ name: "confirm", label: `Для подтверждения введите слово ${info.word}`, required: true }],
-      submit: d => api("/api/import/clear", { method: "POST", json: d }) });
-    if (r) { Z.meta = null; toast("Стёрто задач: " + r.deleted + ". Копия базы: " + r.backup); route(); }
+    const o = info.options, opt = (list, all, f) => `<option value="">${esc(all)}</option>` + list.map(x => `<option value="${esc(x.v)}">${esc(f(x))}</option>`).join("");
+    const box = layer("modal", `<h2>Очистить базу</h2><p class="mt">Выберите, что стереть. Пустой выбор — все задачи. Число ниже показывает, сколько задач попадёт под выбор.</p><form novalidate>
+      <div class="fld"><label for="cl-scope">Группа задач</label><select id="cl-scope">${opt(o.scopes, "Все группы", x => `${x.label} · ${x.n}`)}</select></div>
+      <div class="fld"><label for="cl-year">Год (по официальному сроку)</label><select id="cl-year">${opt(o.years, "Все годы", x => `${x.label} · ${x.n}`)}</select></div>
+      <div class="fld"><label for="cl-kind">Тип документа</label><select id="cl-kind">${opt(o.kinds, "Все типы", x => `${x.label} · ${x.n}`)}</select></div>
+      <div class="fld"><label for="cl-doc">Документ</label><select id="cl-doc"></select></div>
+      <p class="cl-count" id="cl-count"></p>
+      <div class="fld"><label for="cl-word">Для подтверждения введите слово ${esc(info.word)}</label><input id="cl-word" autocomplete="off"></div>
+      <p class="err" id="ferr"></p><div class="acts"><button type="button" class="btn" data-x>Отмена</button><button class="btn danger" id="cl-go" disabled>Стереть</button></div></form>`);
+    const q = id => $("#" + id, box), choice = () => ({ scope: q("cl-scope").value, year: q("cl-year").value, kind: q("cl-kind").value, doc: q("cl-doc").value });
+    const fillDocs = () => { const k = q("cl-kind").value, cur = q("cl-doc").value;
+      q("cl-doc").innerHTML = opt(o.docs.filter(d => !k || d.kind === k), "Все документы", d => `${d.kind ? d.kind + " " : ""}${d.v || "без номера"} · ${d.n}`); q("cl-doc").value = [...q("cl-doc").options].some(x => x.value === cur) ? cur : ""; };
+    let seq = 0, cnt = info;
+    const refresh = async () => { const my = ++seq; fillDocs();
+      try { const r = await api("/api/import/clear?" + qs(choice())); if (my !== seq) return; cnt = r;
+        q("cl-count").innerHTML = r.tasks ? `Будет стёрто задач: <b>${r.tasks}</b>` + (r.manual ? `, из них добавленных вручную: ${r.manual}` : "") + (r.gone ? `, снятых с дашборда: ${r.gone}` : "") + (Object.keys(choice()).every(k => !choice()[k]) ? " (вся база)" : "") : "Под этот выбор не попало ни одной задачи";
+      } catch (e) { q("cl-count").textContent = e.message; cnt = { tasks: 0 }; }
+      go(); };
+    const go = () => { q("cl-go").disabled = !(cnt.tasks && q("cl-word").value.trim() === info.word); };
+    ["cl-scope", "cl-year", "cl-kind", "cl-doc"].forEach(id => q(id).onchange = refresh); q("cl-word").oninput = go; $("[data-x]", box).onclick = () => box.close();
+    $("form", box).onsubmit = async e => { e.preventDefault(); if (q("cl-go").disabled) return; q("cl-go").disabled = true;
+      try { const r = await api("/api/import/clear", { method: "POST", json: { ...choice(), confirm: q("cl-word").value } }); box.close(); Z.meta = null; toast("Стёрто задач: " + r.deleted + ". Копия базы: " + r.backup); route(); }
+      catch (err) { q("ferr").textContent = err.message; go(); } };
+    refresh();
   };
   showDrop();
 };

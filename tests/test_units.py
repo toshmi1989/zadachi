@@ -13,6 +13,10 @@ for i, (kind, who, close) in enumerate([("Фармон", "Aliyev Ali", "2026-11-
     ROWS.append([i + 1, kind, f"ДОК-{i} \n 01.01.2026", f"{i}-банд\nUN{i}", "31.12.2026", close, who, "Бажарилмаган", f"UN000{i}"])
 
 
+def _n(cell):
+    return cell["done"] + cell["open"]
+
+
 @pytest.fixture(scope="module")
 def admin():
     with TestClient(app) as c:
@@ -67,15 +71,15 @@ def test_assign_people_and_rollup(admin):
     assert d["kinds"][:5] == K                                                      # kinds in the requested order
     # division I-1: Aliyev's tasks only (UN0000..UN0002): 2 Фармон + 1 ВМ
     k11 = rows[div11["id"]]["kinds"]
-    assert sum(k11["Фармон"].values()) == 2 and sum(k11["ВМ"].values()) == 1 and "Қарор" not in k11
+    assert _n(k11["Фармон"]) == 2 and _n(k11["ВМ"]) == 1 and "Қарор" not in k11
     assert rows[div11["id"]]["level"] == 1 and rows[div11["id"]]["parent_id"] == top1["id"]
     # the management includes its divisions
-    assert sum(rows[top1["id"]]["kinds"]["Фармон"].values()) >= sum(k11["Фармон"].values()) and rows[top1["id"]]["sum"]["open"] >= rows[div11["id"]]["sum"]["open"]
+    assert _n(rows[top1["id"]]["kinds"]["Фармон"]) >= _n(k11["Фармон"]) and rows[top1["id"]]["sum"]["open"] >= rows[div11["id"]]["sum"]["open"]
     k2 = rows[top2["id"]]["kinds"]
-    assert sum(k2["Қарор"].values()) == 1 and sum(k2["ПА"].values()) == 1
+    assert _n(k2["Қарор"]) == 1 and _n(k2["ПА"]) == 1
     # the total row adds up to every task, including people without a department and unassigned tasks
     assert d["total"]["sum"]["done"] + d["total"]["sum"]["open"] + d["total"]["sum"]["info"] == d["totals"]["total"]
-    assert d["none"] and sum(d["none"]["kinds"]["Баён"].values()) >= 1 and sum(d["none"]["kinds"]["Қарор"].values()) >= 1
+    assert d["none"] and _n(d["none"]["kinds"]["Баён"]) >= 1 and _n(d["none"]["kinds"]["Қарор"]) >= 1
 
 
 def test_filter_tasks_by_unit(admin):
