@@ -3,7 +3,7 @@ import re
 from datetime import date, timedelta
 
 from . import auth
-from .db import OPEN, STATUSES, now, today, unit_tree_ids
+from .db import OPEN, STATUSES, now, setting, today, unit_tree_ids
 
 BUCKETS = {
     "overdue": "Просрочено",
@@ -21,12 +21,14 @@ class TaskError(Exception):
         self.message, self.status = message, status
 
 
-def norm_by(by: str | None, user) -> str:
+def norm_by(by: str | None, user, grouping: bool = False) -> str:
     """Which date the numbers are built on. An administrator chooses: "close" (closing date, else the official term), "due" or "strict" (the closing date only, as the others see it).
-    Everybody else always gets "strict": the closing date only. The official term is not shown to them anywhere, so it also
-    must not leak through a fallback, a sort order, an export or a reminder."""
+    Everybody else gets "strict": the closing date only. The official term is not shown to them anywhere, so it also must not leak through a fallback, a sort order, an
+    export or a reminder. One exception, for the dashboard and the lists it opens (grouping=True), when the administrator allows it (setting users_dashboard_by = "close"):
+    "ucl" - the tasks are GROUPED (months, periods, the filters of the lists) by the closing date, else the official term, exactly as the administrator's dashboard, so the
+    numbers agree; what is SHOWN is still the closing date only (the exact official date is never sent to them)."""
     if not user or user["role"] != "admin":
-        return "strict"
+        return "ucl" if grouping and setting("users_dashboard_by") == "close" else "strict"
     return by if by in ("due", "strict") else "close"      # «strict» for an administrator: the numbers exactly as everybody else sees them
 
 
@@ -34,13 +36,13 @@ def eff_sql(by: str) -> str:
     """The date a task is judged by. "close": the planned closing date, else the official term; "due": the other way round."""
     if by == "strict":
         return "t.close_date"
-    return "COALESCE(t.due, t.close_date)" if by == "due" else "COALESCE(t.close_date, t.due)"
+    return "COALESCE(t.due, t.close_date)" if by == "due" else "COALESCE(t.close_date, t.due)"      # "close" and "ucl" (the grouping of an ordinary user)
 
 
 def eff_value(row, by: str) -> str | None:
     due, close = row["due"], row["close_date"]
-    if by == "strict":
-        return close
+    if by in ("strict", "ucl"):
+        return close                                         # what is shown to an ordinary user: the closing date only
     return (due or close) if by == "due" else (close or due)
 
 
@@ -144,7 +146,7 @@ def row_out(r, by: str) -> dict:
     t = today()
     return {
         "id": r["id"], "code": r["site_code"] or r["code"], "num": r["seq"], "kind": r["kind"], "doc_no": r["doc_no"], "doc_date": r["doc_date"],
-        "point": r["point"], "text": r["text"], "due": None if by == "strict" else r["due"], "close_date": r["close_date"], "eff": eff,
+        "point": r["point"], "text": r["text"], "due": None if by in ("strict", "ucl") else r["due"], "close_date": r["close_date"], "eff": eff,
         "close_src": r["close_src"], "close_note": r["close_note"],
         "days": (date.fromisoformat(eff) - t).days if eff else None,
         "status": r["status"], "tag": r["tag"], "bucket": bucket_of(r["status"], eff, t),
@@ -159,7 +161,7 @@ SELECT = """SELECT t.*, a.name AS a_name, a.unit_id AS a_unit, un.name AS unit_n
 
 
 def list_tasks(c, f: dict, user: dict, own_only: bool, *, limit: int | None = 50, offset: int = 0) -> dict:
-    by = norm_by(f.get("by"), user)
+    by = norm_by(f.get("by"), user, grouping=True)
     if f.get("stage"):
         from . import ijro
         f = dict(f, _stage_ids=ijro.stage_ids(c, str(f["stage"])))
@@ -167,13 +169,13 @@ def list_tasks(c, f: dict, user: dict, own_only: bool, *, limit: int | None = 50
         f = dict(f, _unit_ids=unit_tree_ids(c, int(f["unit"])))
     where, p = _where(f, by, user, own_only)
     key = f.get("sort") if f.get("sort") in SORTS else "eff"
-    if by == "strict" and key == "due":
+    if by in ("strict", "ucl") and key == "due":
         key = "eff"  # sorting by the official term would reveal its order
     direction = "DESC" if f.get("dir") == "desc" else "ASC"
     col = "eff" if key == "eff" else SORTS[key]
     nulls = f"({col} IS NULL) ASC"  # empty values always go last
     order = f"ORDER BY {nulls}, {col} {direction}, eff ASC, t.seq ASC, t.id ASC"
-    sql = SELECT.format(e=eff_sql(by)) + where
+    sql = SELECT.format(e=eff_sql("strict" if by == "ucl" else by)) + where        # the shown (and sorted) date of an ordinary user is the closing date only
     total = c.execute(f"SELECT COUNT(*) FROM tasks t LEFT JOIN users a ON a.id=t.assignee_id{where}", p).fetchone()[0]
     sql += f" {order}" + (f" LIMIT {int(limit)} OFFSET {int(offset)}" if limit else "")
     rows = c.execute(sql, p).fetchall()

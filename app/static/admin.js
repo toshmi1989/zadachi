@@ -273,6 +273,8 @@ routes.settings = async function (page) {
     <div class="card rise" style="--i:1;max-width:760px"><div class="card-head"><div><h2>Что видит пользователь</h2><p class="sub">Администратор всегда видит и редактирует всё.</p></div></div><div class="opts" id="opts">${opts.map(o => `<button class="opt${s.users_tasks === o[0] ? " on" : ""}" data-v="${o[0]}"><span class="rd" style="margin-top:2px"></span><div><b>${o[1]}</b><span>${o[2]}</span></div></button>`).join("")}</div></div>
     <div class="card rise" style="--i:2;max-width:760px;margin-top:16px"><div class="card-head"><div><h2>${icon("users")}Страница входа</h2><p class="sub">Можно выбрать себя из списка и ввести только пароль.</p></div></div>
       <div class="row" style="padding-top:0"><div class="lb"><b>Показывать список сотрудников</b><span>Имена видны любому, кто откроет страницу входа. Администраторы в список не попадают, они вводят логин. Выключите, если имена сотрудников не должны быть видны посторонним.</span></div><label class="sw"><input type="checkbox" id="ll"${s.login_list ? " checked" : ""}><span class="trk"><i></i></span></label></div></div>
+    <div class="card rise" style="--i:3;max-width:760px;margin-top:16px"><div class="card-head"><div><h2>${icon("dash")}Дашборд пользователя</h2><p class="sub">По каким датам обычному пользователю раскладываются задачи по месяцам и периодам.</p></div></div>
+      <div class="row" style="padding-top:0"><div class="lb"><b>Как у администратора: по дате закрытия, а если её нет — по официальному сроку</b><span>Пользователь видит те же месяцы и цифры, что и вы. Месяц официального срока ему виден на дашборде и в фильтре по месяцам; точная дата официального срока в списках и карточке по-прежнему скрыта. Выключите — дашборд будет строиться только по датам закрытия, а задачи без неё попадут в столбец «Без срока».</span></div><label class="sw"><input type="checkbox" id="ud"${s.users_dashboard_by === "close" ? " checked" : ""}><span class="trk"><i></i></span></label></div></div>
     <div class="card rise" style="--i:3;max-width:760px;margin-top:16px" id="sync-card"></div>
     <div class="card rise" style="--i:3;max-width:760px;margin-top:16px" id="units-card"></div>
     <div class="card rise" style="--i:3;max-width:760px;margin-top:16px" id="ai-card"></div>
@@ -360,6 +362,7 @@ routes.settings = async function (page) {
     };
   }
   await paintStructure();
+  $("#ud", page).onchange = async e => { try { await api("/api/settings", { method: "PUT", json: { users_dashboard_by: e.target.checked ? "close" : "strict" } }); toast(e.target.checked ? "Дашборд пользователя строится как у администратора" : "Дашборд пользователя строится только по датам закрытия"); } catch (er) { toast(er.message, "error"); e.target.checked = !e.target.checked; } };
   $("#ll", page).onchange = async e => { try { await api("/api/settings", { method: "PUT", json: { login_list: e.target.checked } }); toast(e.target.checked ? "Список на странице входа включён" : "Список на странице входа выключен"); } catch (er) { toast(er.message, "error"); e.target.checked = !e.target.checked; } };
   $("#bk", page).onclick = async ev => {
     ev.target.disabled = true;

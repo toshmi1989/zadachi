@@ -59,19 +59,31 @@ def test_user_gets_no_official_term_anywhere_in_tasks(vera):
 def test_user_cannot_ask_for_the_official_term(vera, admin):
     assert items(vera, "&by=due") == items(vera)                                  # the parameter is ignored
     r = vera.get("/api/tasks?size=200&q=VS000&sort=due&dir=desc").json()
-    assert r["by"] == "strict" and all(t["due"] is None for t in r["items"])
+    assert r["by"] in ("strict", "ucl") and all(t["due"] is None for t in r["items"])
     tid = items(vera)["VS0001"]["id"]
     assert vera.get(f"/api/tasks/{tid}?by=due").json()["due"] is None
     assert items(admin, "&by=due")["VS0001"]["eff"] == "2026-12-31"               # the administrator can
 
 
-def test_user_dashboard_is_built_on_the_closing_date_only(admin, vera):
-    a, u = admin.get("/api/dashboard?by=due").json(), vera.get("/api/dashboard?by=due").json()
-    assert u["by"] == "strict" and a["by"] == "due"
-    s = vera.get("/api/dashboard?by=close").json()
-    assert s["rows"] == u["rows"] and s["total"] == u["total"] and s["months"] == u["months"]       # the same numbers whatever the parameter says
-    assert u["total"]["nodate"]["open"] >= 1                                       # a task with only an official term has no month for a user (the term is not shown to them)
-    assert a["by"] == "due" and "2026-12" in a["months"]                           # the administrator can place it by the official term
+def test_user_dashboard_is_grouped_like_the_administrators_but_shows_no_official_date(admin, vera):
+    a, u = admin.get("/api/dashboard?by=close").json(), vera.get("/api/dashboard?by=due").json()
+    assert u["by"] == "ucl" and a["by"] == "close"
+    assert u["months"] == a["months"] and u["total"]["sum"] == a["total"]["sum"] and u["rows"] == a["rows"]       # the same months and numbers as the administrator's (the parameter is ignored)
+    assert u["total"]["nodate"]["open"] == 0 and a["total"]["nodate"]["open"] == 0                              # VS0002 has no closing date: its official term places it in a month for them too
+    assert vera.get("/api/dashboard?by=close").json()["months"] == u["months"]
+    # a month opens the same tasks for the user as for the administrator (the user sees only their own), and the list shows no official date
+    for ym in u["months"]:
+        mine = vera.get(f"/api/tasks?size=200&status=all&date_from={ym}-01&date_to={ym}-31").json()
+        same = admin.get(f"/api/tasks?size=200&status=all&by=close&assignee={vera.uid}&date_from={ym}-01&date_to={ym}-31").json()
+        assert mine["total"] == same["total"] and (ym != "2026-11" or mine["total"] >= 1) and all(t["due"] is None for t in mine["items"]) and "2026-12-31" not in str(mine)
+    # the administrator can switch it off: then only the closing dates make months
+    assert admin.put("/api/settings", json={"users_dashboard_by": "strict"}).status_code == 200
+    try:
+        s = vera.get("/api/dashboard").json()
+        assert s["by"] == "strict" and s["total"]["nodate"]["open"] >= 1               # switched off: a task without a closing date has no month
+    finally:
+        assert admin.put("/api/settings", json={"users_dashboard_by": "close"}).status_code == 200
+    assert admin.put("/api/settings", json={"users_dashboard_by": "nope"}).status_code == 400
 
 
 def test_export_has_no_official_term_column_for_a_user(vera, admin):

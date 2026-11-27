@@ -243,7 +243,7 @@ def api_dashboard(request: Request, by: str = "close", period: str = "", scope: 
         bad("scope: main, co или vm")
     c = connect()
     try:
-        return stats.dashboard(c, tasks.norm_by(by, me(request)), period, scope) | {"updated": report.last_updates(c)}
+        return stats.dashboard(c, tasks.norm_by(by, me(request), grouping=True), period, scope) | {"updated": report.last_updates(c)}
     finally:
         c.close()
 
@@ -1094,7 +1094,7 @@ def api_import_history():
 
 @app.get("/api/settings")
 def api_settings():
-    return {"users_tasks": setting("users_tasks"), "login_list": setting("login_list") == "1",
+    return {"users_tasks": setting("users_tasks"), "login_list": setting("login_list") == "1", "users_dashboard_by": setting("users_dashboard_by"),
             "sync": {"groups": ijro.SYNC_GROUPS, "fields": ijro.sync_settings_view(), "auto_apply": setting("ijro_auto_apply") == "1", "auto_archive": setting("ijro_auto_archive") == "1"},
             "backup": {"files": len(backup._files()), "latest": backup.verify_latest()}}
 
@@ -1109,6 +1109,10 @@ async def api_settings_put(request: Request):
         values["users_tasks"] = b["users_tasks"]
     if "login_list" in b:
         values["login_list"] = "1" if b["login_list"] else "0"
+    if "users_dashboard_by" in b:
+        if b["users_dashboard_by"] not in ("close", "strict"):
+            bad("Допустимо: close, strict")
+        values["users_dashboard_by"] = b["users_dashboard_by"]
     if "sync" in b:
         if not isinstance(b["sync"], dict) or not b["sync"]:
             bad("sync: объект {настройка: значение}")

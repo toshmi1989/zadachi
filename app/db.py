@@ -220,6 +220,7 @@ DEFAULT_SETTINGS = {
     "rem_by": "close",            # which term the reminders use: close | due
     "rem_admin": "1",             # summary for administrators
     "login_list": "1",            # show the list of employees on the sign-in page
+    "users_dashboard_by": "close",  # how an ordinary user's dashboard is grouped: "close" (the closing date, else the official term, as the administrator's; the exact official date is still hidden) | "strict" (the closing date only)
     "rem_max": "15",              # tasks listed in one message
     "public_url": "",             # site address for links in messages
     "ai_enabled": "0",            # the language model chooses the closing-date template (the key and the model are in the settings)

@@ -50,7 +50,8 @@ def _copy(a: dict) -> dict:
 def dashboard(c, by: str = "close", period: str = "", scope: str = "main") -> dict:
     """period: "" (every task, also those without a term), "YYYY" (the terms of that year) or "YYYY-MM" (that month). `periods` always lists every month that has tasks,
     whatever the period is, so that the page can offer the years and the months."""
-    by = by if by in ("due", "strict") else "close"
+    by = by if by in ("due", "strict", "ucl") else "close"          # "ucl": an ordinary user's dashboard grouped like the administrator's (see tasks.norm_by)
+    eff_by = "close" if by == "ucl" else by
     period = period if period and len(period) in (4, 7) else ""
     units = c.execute("SELECT id, num, name, parent_id FROM units WHERE active=1 ORDER BY sort, id").fetchall()
     ids = {u["id"] for u in units}
@@ -66,7 +67,7 @@ def dashboard(c, by: str = "close", period: str = "", scope: str = "main") -> di
                           WHERE t.status != 'gone' AND t.scope=?""", (scope,)).fetchall():
         a = own[r["unit_id"] if r["unit_id"] in ids else 0]
         st = r["status"]
-        eff = eff_value(r, by)
+        eff = eff_value(r, eff_by)
         if eff:
             every_month.add(eff[:7])
         if period and not (eff and eff.startswith(period)):

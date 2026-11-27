@@ -64,7 +64,7 @@ def test_the_specialist_never_sees_the_official_term(admin, spec):
     t = spec.get("/api/tasks?q=SP0001").json()["items"][0]
     assert t["due"] is None and spec.get(f"/api/tasks/{t['id']}").json()["due"] is None
     assert admin.get("/api/tasks?q=SP0001&by=due").json()["items"][0]["due"] == "2026-12-31"           # the administrator does
-    assert spec.get("/api/dashboard?by=due").json()["by"] == "strict"
+    assert spec.get("/api/dashboard?by=due").json()["by"] in ("strict", "ucl")                           # never the official term itself
 
 
 def test_a_task_added_by_hand(admin, spec):
