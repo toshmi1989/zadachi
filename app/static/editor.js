@@ -56,7 +56,7 @@ routes.editor = async function (page, params) {
     const text = (t.text || "").split("\n")[0];
     return `<tr data-id="${t.id}" class="ed-r st-${t.status}">
       <td class="code"><b>${esc(t.code)}</b>${t.by_code ? `<div><span class="chip info" style="padding:0 7px">по коду</span></div>` : t.manual ? `<div><span class="chip info" style="padding:0 7px">вручную</span></div>` : ""}<div class="hint">${esc(t.kind)}</div></td>
-      <td class="ed-t">${t.pending ? `<span class="chip week" style="padding:0 7px">ждёт данных с сайта</span><div class="tx">Текст, документ и срок заполнятся при следующей синхронизации.</div>` : `<b>${esc(t.doc_no)}</b>${t.point ? ` · <span class="hint">${esc(t.point)}</span>` : ""}<div class="tx">${esc(text.length > 170 ? text.slice(0, 168) + "…" : text)}</div>`}</td>
+      <td class="ed-t">${t.pending ? `<span class="chip week" style="padding:0 7px">ждёт данных с сайта</span><div class="tx">Текст, документ и срок заполнятся при следующей синхронизации. Если сайт их не отдаёт, введите вручную.</div><button type="button" class="btn sm" data-fill="${t.id}" style="margin-top:6px">Заполнить вручную</button>` : `<b>${esc(t.doc_no)}</b>${t.point ? ` · <span class="hint">${esc(t.point)}</span>` : ""}<div class="tx">${esc(text.length > 170 ? text.slice(0, 168) + "…" : text)}</div>`}</td>
       <td><select class="ed-f" data-f="assignee_id" data-prev="${t.assignee_id || ""}">${personOpts(t.assignee_id)}</select><div class="hint">${esc(t.unit || "")}</div></td>
       <td><input type="date" class="ed-f" data-f="close_date" data-prev="${t.close_date || ""}" value="${t.close_date || ""}">${admin && t.due ? `<div class="hint">официальный: ${esc(fdate(t.due))}</div>` : ""}</td>
       <td><select class="ed-f" data-f="status" data-prev="${t.status}">${ST.map(s => `<option value="${s[0]}"${t.status === s[0] ? " selected" : ""}>${s[1]}</option>`).join("")}</select></td>
@@ -118,9 +118,9 @@ routes.editor = async function (page, params) {
     };
   };
   /* adding by hand: every field is typed in (a task that is not on the site, or one that the site's list does not give) */
-  $("#ed-new", page).onclick = () => {
+  function openManual(fillTask) {
     const admin = Z.me.role === "admin", fld = (id, label, ctl, hint) => `<div class="fld"><label for="${id}">${label}</label>${ctl}${hint ? `<span class="hint">${hint}</span>` : ""}</div>`;
-    const box = layer("modal", `<h2>Добавить задачу вручную</h2><p class="mt">Заполните данные задачи. Обязателен только текст. Такая задача получает свой код («M…») и не сверяется с сайтом.</p>
+    const box = layer("modal", `<h2>${fillTask ? "Заполнить задачу " + esc(fillTask.code) : "Добавить задачу вручную"}</h2><p class="mt">${fillTask ? "Введите данные задачи с карточки сайта. Код задачи остаётся: синхронизация по-прежнему читает её по этому коду." : "Заполните данные задачи. Обязателен только текст. Такая задача получает свой код («M…») и не сверяется с сайтом."}</p>
       <form novalidate>
         ${fld("mn-scope", "Группа задач", `<select id="mn-scope">${GROUPS.map(g => `<option value="${g[0]}"${g[0] === Z.scope ? " selected" : ""}>${esc(g[1])}</option>`).join("")}</select>`)}
         ${fld("mn-text", "Текст задачи *", `<textarea id="mn-text" rows="5" maxlength="4000"></textarea>`)}
@@ -134,7 +134,7 @@ routes.editor = async function (page, params) {
         </div>
         <div class="fgrid">
         ${fld("mn-who", "Ответственный", `<select id="mn-who">${personOpts("")}</select>`, "Отдел определяется по ответственному")}
-        ${fld("mn-status", "Статус", `<select id="mn-status"><option value="todo">Не выполнено</option><option value="progress">В работе</option></select>`)}
+        ${fld("mn-status", "Статус", `<select id="mn-status"><option value="todo">Не выполнено</option><option value="progress">В работе</option>${fillTask ? `<option value="done">Выполнено</option>` : ""}</select>`)}
         </div>
         <p class="err" id="ferr"></p><div class="acts"><button type="button" class="btn" data-x>Отмена</button><button class="btn pri">Добавить</button></div></form>`);
     box.classList.add("wide"); $("[data-x]", box).onclick = () => box.close();
@@ -146,13 +146,15 @@ routes.editor = async function (page, params) {
       const body = { text, scope: v("mn-scope"), kind: v("mn-kind"), doc_no: v("mn-doc"), doc_date: v("mn-docdate"), point: v("mn-point"), close_date: v("mn-close"), assignee_id: v("mn-who"), status: v("mn-status") };
       if (admin) body.due = v("mn-due");
       try {
-        const r = await api("/api/tasks", { method: "POST", json: body });
-        box.close(); Z.meta = null; toast(`Добавлена задача ${r.code}`);
+        const r = await api(fillTask ? `/api/tasks/${fillTask.id}/fill` : "/api/tasks", { method: "POST", json: body });
+        box.close(); Z.meta = null; toast(fillTask ? `Задача ${r.code} заполнена` : `Добавлена задача ${r.code}`);
         if (body.scope !== Z.scope) toast(`Задача в группе «${groupName(body.scope)}»: откройте эту группу, чтобы её увидеть`);
         S.status = "open"; S.page = 1; load();
       } catch (er) { $("#ferr", box).textContent = er.message; }
     };
-  };
+  }
+  $("#ed-new", page).onclick = () => openManual(null);
+  page.addEventListener("click", e => { const b = e.target.closest("[data-fill]"); if (b) { const row = b.closest("tr"); openManual({ id: +b.dataset.fill, code: row ? row.querySelector(".code b").textContent : "" }); } });
   await load();
 };
 routes.editor.title = "Редактор задач";

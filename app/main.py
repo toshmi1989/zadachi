@@ -500,6 +500,52 @@ async def api_task_by_codes(request: Request):
     return {"created": created, "existing": existing, "invalid": invalid}
 
 
+@app.post("/api/tasks/{task_id}/fill")
+async def api_task_fill(request: Request, task_id: int):
+    """A task that was added by its code and still waits for its data (the site's list did not give it) gets the data typed in by hand: the text, the document, the terms,
+    the responsible person, the group. The code of the site stays (the synchronisation still reads the task by it); the task is no longer «waiting»."""
+    user = me(request)
+    if user["role"] not in auth.STAFF:
+        bad("Доступно администратору и специалисту", 403)
+    b = await _json(request)
+    text = str(b.get("text") or "").strip()
+    if not text or len(text) > 4000:
+        bad("Укажите текст задачи (до 4000 знаков)")
+    scope = str(b.get("scope") or "main")
+    if scope not in site_import.SCOPES:
+        bad("Неизвестная группа задач")
+    kind, doc_no, point = (re.sub(r"\s+", " ", str(b.get(k) or "")).strip() for k in ("kind", "doc_no", "point"))
+    if len(kind) > 60 or len(doc_no) > 200 or len(point) > 60:
+        bad("Слишком длинное значение (вид до 60, документ до 200, пункт до 60 знаков)")
+    with tx() as c:
+        t = c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not t:
+            bad("Задача не найдена", 404)
+        if t["manual"] != 2 or t["text"]:
+            bad("Эта задача уже заполнена: меняйте её в редакторе")
+        doc_date, close = tasks._date_or_none(b.get("doc_date")), tasks._date_or_none(b.get("close_date"))
+        due = tasks._date_or_none(b.get("due")) if user["role"] == "admin" else None
+        who = b.get("assignee_id")
+        assignee = None
+        if who not in (None, "", 0):
+            assignee = c.execute("SELECT id, name FROM users WHERE id=? AND active=1", (who,)).fetchone()
+            if not assignee:
+                bad("Такого сотрудника нет или он отключён")
+        status = b.get("status") or "todo"
+        if status not in ("todo", "progress", "done"):
+            bad("Неизвестный статус")
+        c.execute("""UPDATE tasks SET scope=?, kind=?, doc_no=?, doc_date=?, point=?, text=?, due=?, close_date=?, assignee_id=?, assignee_raw=?, status=?, edited=1, updated_at=?,
+                     done_at=? WHERE id=?""",
+                  (scope, kind, doc_no, doc_date, point, text, due, close, assignee["id"] if assignee else None, assignee["name"] if assignee else "", status, now(),
+                   now() if status == "done" else None, task_id))
+        audit(c, "task.fill_by_hand", "task", task_id, {"code": t["code"], "by_role": user["role"]})
+        out = tasks.get_task(c, task_id, user, False)
+    out["can_edit"] = True
+    if assignee and assignee["id"] != user["id"]:
+        reminders.notify_assigned([(task_id, assignee["id"])])
+    return out
+
+
 @app.get("/api/tasks-pending")
 def api_tasks_pending(request: Request):
     if me(request)["role"] not in auth.STAFF:

@@ -105,3 +105,21 @@ def test_a_task_added_by_code_is_on_the_dashboard_and_a_period_says_where_it_wen
     p = admin.get("/api/dashboard?period=2026").json()
     assert p["no_term"] >= 1                                                                                # a period leaves it out, and the page tells how many such tasks there are
     c = connect(); c.execute("DELETE FROM tasks WHERE code='NTM0001'"); c.commit(); c.close()
+
+
+def test_a_waiting_task_can_be_filled_by_hand_and_keeps_its_code(admin):
+    admin.post("/api/tasks/by-codes", json={"codes": "QDJ8838"})
+    t = task(admin, "QDJ8838")
+    assert t["pending"]
+    for bad in ({}, {"text": " "}, {"text": "x", "scope": "nope"}, {"text": "x", "status": "gone"}, {"text": "x", "assignee_id": 999999}, {"text": "x", "close_date": "31.12"}):
+        assert admin.post(f"/api/tasks/{t['id']}/fill", json=bad).status_code == 400, bad
+    r = admin.post(f"/api/tasks/{t['id']}/fill", json={"text": "Мамлакатнинг юқори иқтисодий ўсишига туртки берувчи устувор вазифаларни амалга ошириш", "kind": "Фармойиш", "doc_no": "Ф-66",
+                                                       "doc_date": "2026-11-16", "point": "18.2-банд", "due": "2026-12-15", "scope": "main", "status": "progress"})
+    assert r.status_code == 200
+    t2 = task(admin, "QDJ8838")
+    assert t2["code"] == "QDJ8838" and not t2["pending"] and t2["doc_no"] == "Ф-66" and t2["kind"] == "Фармойиш" and t2["status"] == "progress"
+    assert "QDJ8838" not in admin.get("/api/tasks-pending").json()["codes"]
+    c = connect(); m = c.execute("SELECT manual FROM tasks WHERE code='QDJ8838'").fetchone()[0]; c.close()
+    assert m == 2                                                                                         # still the site's task: the synchronisation reads it by the code
+    assert admin.post(f"/api/tasks/{t['id']}/fill", json={"text": "again"}).status_code == 400             # filled already
+    c = connect(); c.execute("DELETE FROM tasks WHERE code='QDJ8838'"); c.commit(); c.close()
