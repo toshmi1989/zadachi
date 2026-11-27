@@ -42,7 +42,7 @@ routes.users = async function (page) {
       { name: "name", label: "Имя (как в выгрузке Excel)", required: true, hint: "Например: Bilalov Baxodir Erkinovich. Задачи с таким именем привяжутся автоматически." },
       { name: "login", label: "Логин", required: true, hint: "Латиница, цифры, точка, дефис" },
       { name: "unit", label: "Отдел", type: "select", value: "", options: unitOpts() },
-      { name: "role", label: "Роль", type: "select", value: "user", options: [["user", "Пользователь — видит дашборд"], ["specialist", "Специалист — редактирует задачи"], ["admin", "Администратор — управляет всем"]] },
+      { name: "role", label: "Роль", type: "select", value: "user", options: [["user", "Пользователь — видит дашборд"], ["specialist", "Специалист — только просмотр всех задач"], ["admin", "Администратор — управляет всем"]] },
       { name: "password", label: "Пароль", type: "text", hint: "Оставьте пустым — система придумает сама" }],
       submit: d => api("/api/users", { method: "POST", json: Object.assign({}, d, { unit_id: d.unit ? +d.unit : null }) }).then(res => Object.assign(res, { _d: d })) });
     if (!r) return;

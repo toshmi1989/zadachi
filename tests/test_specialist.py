@@ -1,5 +1,5 @@
-"""The specialist: edits the execution dates, the responsible person and the status of any task and adds tasks by hand, and nothing else.
-A task added by hand is never taken off the dashboard by a loaded base."""
+"""The specialist only VIEWS: the whole list of tasks, the dashboard, the cards, the Excel exports; every change is the administrator's.
+A task added by hand (by the administrator) is never taken off the dashboard by a loaded base."""
 import pytest
 from fastapi.testclient import TestClient
 
@@ -45,19 +45,23 @@ def test_the_specialist_is_a_role_with_the_task_pages_only(admin, spec):
     assert spec.get("/api/tasks").status_code == 200 and spec.get("/api/dashboard").status_code == 200 and spec.get("/api/meta").status_code == 200
 
 
-def test_the_specialist_edits_dates_responsible_and_status_of_any_task(admin, spec):
+def test_the_specialist_changes_nothing(admin, spec):
     t = admin.get("/api/tasks?q=SP0001").json()["items"][0]
-    assert t["can_edit"] is True and spec.get("/api/tasks?q=SP0001").json()["items"][0]["can_edit"] is True
-    r = spec.patch(f"/api/tasks/{t['id']}", json={"close_date": "2026-12-20", "assignee_id": spec.uid, "status": "progress"})
-    assert r.status_code == 200 and r.json()["changed"]
-    got = admin.get(f"/api/tasks/{t['id']}").json()
-    assert got["close_date"] == "2026-12-20" and got["assignee_id"] == spec.uid and got["status"] == "progress"
-    assert any(e["field"] == "close_date" for e in got["events"])                                        # the history says who changed what
-    assert spec.patch(f"/api/tasks/{t['id']}", json={"close_date": ""}).status_code == 200               # a date can be cleared
-    assert admin.get(f"/api/tasks/{t['id']}").json()["close_date"] is None
-    assert spec.patch(f"/api/tasks/{t['id']}", json={"status": "gone"}).status_code in (400, 403)         # «Нет на сайте» is not a status to set by hand
-    assert spec.patch(f"/api/tasks/{t['id']}", json={"assignee_id": 999999}).status_code == 400
-    assert spec.post("/api/tasks/bulk", json={"ids": [t["id"]], "close_date": "2026-12-22"}).json()["changed"] == 1
+    assert t["can_edit"] is True and spec.get("/api/tasks?q=SP0001").json()["items"][0]["can_edit"] is False        # the administrator edits, the specialist only looks
+    assert spec.get(f"/api/tasks/{t['id']}").json()["can_edit"] is False and spec.get(f"/api/tasks/{t['id']}").status_code == 200
+    me_before = admin.get(f"/api/tasks/{t['id']}").json()
+    assert spec.patch(f"/api/tasks/{t['id']}", json={"close_date": "2026-12-20", "assignee_id": spec.uid, "status": "progress"}).status_code == 403
+    assert spec.patch(f"/api/tasks/{t['id']}", json={"status": "done"}).status_code == 403                           # not even the status of a task that is theirs
+    assert spec.post("/api/tasks/bulk", json={"ids": [t["id"]], "close_date": "2026-12-22"}).status_code == 403
+    assert spec.post("/api/tasks", json={"text": "Подготовить справку по вакцинации"}).status_code == 403
+    assert spec.post("/api/tasks/by-codes", json={"codes": "SPX1234"}).status_code == 403
+    assert spec.post(f"/api/tasks/{t['id']}/fill", json={"text": "x"}).status_code == 403
+    assert spec.post(f"/api/tasks/{t['id']}/site-check", json={"on": False}).status_code == 403
+    assert spec.get("/api/tasks-pending").status_code == 403
+    assert spec.delete(f"/api/tasks/{t['id']}").status_code == 403
+    after = admin.get(f"/api/tasks/{t['id']}").json()
+    assert after["close_date"] == me_before["close_date"] and after["status"] == me_before["status"] and after["assignee_id"] == me_before["assignee_id"]   # nothing changed
+    assert spec.get("/api/report.xlsx").status_code == 200 and spec.get("/api/tasks.xlsx").status_code == 200        # exports are viewing: they stay
 
 
 def test_the_specialist_never_sees_the_official_term(admin, spec):
@@ -68,21 +72,20 @@ def test_the_specialist_never_sees_the_official_term(admin, spec):
 
 
 def test_a_task_added_by_hand(admin, spec):
-    r = spec.post("/api/tasks", json={"text": "Подготовить справку по вакцинации", "kind": "Қарор", "doc_no": "ПҚ-319 от 10.09.2026", "point": "1-банд",
-                                      "close_date": "2026-12-12", "assignee_id": spec.uid, "due": "2027-01-01"})
+    r = admin.post("/api/tasks", json={"text": "Подготовить справку по вакцинации", "kind": "Қарор", "doc_no": "ПҚ-319 от 10.09.2026", "point": "1-банд",
+                                       "close_date": "2026-12-12", "assignee_id": spec.uid, "due": "2027-01-01"})
     assert r.status_code == 200, r.text
     t = r.json()
     assert t["code"].startswith("M") and t["manual"] is True and t["status"] == "todo" and t["close_date"] == "2026-12-12" and t["assignee_id"] == spec.uid
-    assert t["due"] is None and admin.get(f"/api/tasks/{t['id']}?by=due").json()["due"] is None        # a specialist cannot set the official term
+    assert admin.get(f"/api/tasks/{t['id']}?by=due").json()["due"] == "2027-01-01" and spec.get(f"/api/tasks/{t['id']}").json()["due"] is None   # the specialist does not see the official term
     a = admin.post("/api/tasks", json={"text": "Задача администратора", "due": "2027-02-01"}).json()
-    assert a["code"] != t["code"] and admin.get(f"/api/tasks/{a['id']}?by=due").json()["due"] == "2027-02-01"   # the administrator can
-    assert int(a["code"][1:]) == int(t["code"][1:]) + 1                                                  # M00001, M00002 ...
+    assert a["code"] != t["code"] and int(a["code"][1:]) == int(t["code"][1:]) + 1                       # M00001, M00002 ...
     v = admin.post("/api/tasks", json={"text": "ВМ вручную", "scope": "vm", "kind": "ВМ", "doc_no": "VM 22/26-196", "doc_date": "2026-05-12", "point": "3-банд", "close_date": "2026-12-01", "due": "2026-12-20"}).json()
     assert admin.get(f"/api/tasks?q={v['code']}&scope=vm&status=all").json()["total"] == 1 and admin.get(f"/api/tasks?q={v['code']}&status=all").json()["total"] == 0   # it is in the chosen group only
     assert v["doc_no"] == "VM 22/26-196" and v["point"] == "3-банд" and v.get("doc_date") in (None, "2026-05-12")
     assert admin.post("/api/tasks", json={"text": "x", "scope": "nope"}).status_code == 400                # an unknown group is refused
     for bad in ({}, {"text": "  "}, {"text": "x" * 4001}, {"text": "x", "status": "done"}, {"text": "x", "assignee_id": 999999}, {"text": "x", "close_date": "not a date"}, {"text": "x", "kind": "k" * 61}):
-        assert spec.post("/api/tasks", json=bad).status_code == 400, bad
+        assert admin.post("/api/tasks", json=bad).status_code == 400, bad
 
 
 def test_a_user_cannot_add_or_edit_by_hand(admin, spec):

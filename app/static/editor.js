@@ -4,7 +4,7 @@
    The official term is the administrator's: the specialist sees and sets only the execution date (the closing date). */
 
 routes.editor = async function (page, params) {
-  if (!["admin", "specialist"].includes(Z.me.role)) throw new Error("Раздел доступен администратору и специалисту");
+  if (Z.me.role !== "admin") throw new Error("Раздел доступен администратору");
   const admin = Z.me.role === "admin";
   const meta = await loadMeta();
   const SIZE = 50;

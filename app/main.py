@@ -311,7 +311,7 @@ def api_tasks(request: Request, page: int = 1, size: int = 50):
     try:
         out = tasks.list_tasks(c, filters(request), me(request), scope == "own", limit=size, offset=(max(page, 1) - 1) * size) | {"page": max(page, 1), "size": size}
         for t in out["items"]:
-            t["can_edit"] = me(request)["role"] in auth.STAFF or t["assignee_id"] == me(request)["id"]
+            t["can_edit"] = me(request)["role"] == "admin" or (me(request)["role"] != "specialist" and t["assignee_id"] == me(request)["id"])
         ijro.brief(c, [t for t in out["items"] if t["can_edit"]], me(request)["role"] == "admin")
         return out
     finally:
@@ -352,7 +352,7 @@ def api_task(request: Request, task_id: int, by: str = "close"):
     c = connect()
     try:
         out = tasks.get_task(c, task_id, me(request), scope == "own", "due" if by == "due" else "close")
-        out["can_edit"] = me(request)["role"] in auth.STAFF or out["assignee_id"] == me(request)["id"]
+        out["can_edit"] = me(request)["role"] == "admin" or (me(request)["role"] != "specialist" and out["assignee_id"] == me(request)["id"])
         if out["can_edit"]:   # what the site says: for administrators and for the employee a task belongs to (not the official term)
             snap = c.execute("SELECT * FROM ijro_snapshots WHERE task_id=?", (task_id,)).fetchone()
             out["site"] = ijro.site_info(snap, out["status"], out["due"], me(request)["role"] == "admin", out.get("status_manual", False)) if snap else None
@@ -385,8 +385,7 @@ async def api_task_update(request: Request, task_id: int):
     if not changes:
         bad("Нечего менять")
     if user["role"] == "specialist":
-        if changes.get("status", "todo") not in ("todo", "progress", "done", "info"):
-            bad("Этот статус ставит администратор", 403)
+        bad("Специалист только просматривает задачи: менять их может администратор", 403)
     elif user["role"] != "admin":
         # an employee: only the status, only of their own task, only to a status they may set
         scope = need_tasks(request)
@@ -424,8 +423,8 @@ async def api_task_create(request: Request):
     """A task added by hand (administrator or specialist). It gets its own code (M00001 ...) and is never taken off the dashboard by a loaded base.
     The official term is the administrator's: a specialist sets only the execution date (the closing date)."""
     user = me(request)
-    if user["role"] not in auth.STAFF:
-        bad("Задачи добавляет администратор или специалист", 403)
+    if user["role"] not in ("admin",):
+        bad("Задачи добавляет администратор", 403)
     b = await _json(request)
     text = str(b.get("text") or "").strip()
     if not text or len(text) > 4000:
@@ -470,8 +469,8 @@ async def api_task_by_codes(request: Request):
     """Tasks are added by their CODES only (administrator or specialist): the rest (text, document, term, the responsible person) the collector finds on the site and fills in
     at its next synchronisation. Such a task is never taken off the dashboard by a loaded base."""
     user = me(request)
-    if user["role"] not in auth.STAFF:
-        bad("Задачи добавляет администратор или специалист", 403)
+    if user["role"] not in ("admin",):
+        bad("Задачи добавляет администратор", 403)
     b = await _json(request)
     raw = b.get("codes")
     tokens = [x for x in (CODES_SPLIT.split(raw) if isinstance(raw, str) else [str(x) for x in raw] if isinstance(raw, list) else []) if x.strip()]
@@ -505,8 +504,8 @@ async def api_task_fill(request: Request, task_id: int):
     """A task that was added by its code and still waits for its data (the site's list did not give it) gets the data typed in by hand: the text, the document, the terms,
     the responsible person, the group. The code of the site stays (the synchronisation still reads the task by it); the task is no longer «waiting»."""
     user = me(request)
-    if user["role"] not in auth.STAFF:
-        bad("Доступно администратору и специалисту", 403)
+    if user["role"] not in ("admin",):
+        bad("Доступно администратору", 403)
     b = await _json(request)
     text = str(b.get("text") or "").strip()
     if not text or len(text) > 4000:
@@ -548,8 +547,8 @@ async def api_task_fill(request: Request, task_id: int):
 
 @app.get("/api/tasks-pending")
 def api_tasks_pending(request: Request):
-    if me(request)["role"] not in auth.STAFF:
-        bad("Доступно администратору и специалисту", 403)
+    if me(request)["role"] not in ("admin",):
+        bad("Доступно администратору", 403)
     c = connect()
     try:
         codes = ijro.pending_codes(c)
@@ -562,8 +561,8 @@ def api_tasks_pending(request: Request):
 def api_task_delete(request: Request, task_id: int):
     """Deletes a task with its history and what was read from the site (administrator or specialist). A task of the site's base comes back with the next load of the base."""
     user = me(request)
-    if user["role"] not in auth.STAFF:
-        bad("Задачи удаляет администратор или специалист", 403)
+    if user["role"] not in ("admin",):
+        bad("Задачи удаляет администратор", 403)
     with tx() as c:
         t = c.execute("SELECT code, status, manual, substr(text, 1, 120) AS text FROM tasks WHERE id=?", (task_id,)).fetchone()
         if not t:
@@ -577,8 +576,8 @@ def api_task_delete(request: Request, task_id: int):
 async def api_task_site_check(request: Request, task_id: int):
     """A task whose status a person set is not checked against the official site any more; this turns the check back on (on=true) or off (on=false)."""
     user = me(request)
-    if user["role"] not in auth.STAFF:
-        bad("Доступно администратору и специалисту", 403)
+    if user["role"] not in ("admin",):
+        bad("Доступно администратору", 403)
     b = await _json(request)
     on = bool(b.get("on"))
     with tx() as c:
@@ -590,8 +589,8 @@ async def api_task_site_check(request: Request, task_id: int):
 
 @app.post("/api/tasks/bulk")
 async def api_task_bulk(request: Request):
-    if me(request)["role"] not in auth.STAFF:
-        bad("Задачи редактирует администратор или специалист", 403)
+    if me(request)["role"] not in ("admin",):
+        bad("Задачи редактирует администратор", 403)
     b = await _json(request)
     ids = b.get("ids")
     if not isinstance(ids, list) or not ids or len(ids) > 1000 or not all(isinstance(i, int) for i in ids):
