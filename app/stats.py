@@ -61,6 +61,7 @@ def dashboard(c, by: str = "close", period: str = "", scope: str = "main") -> di
     months: set[str] = set()
     every_month: set[str] = set()
     kinds_seen: list[str] = []
+    no_term = 0
     for r in c.execute("""SELECT t.id, t.status, t.due, t.close_date, t.kind, u.unit_id FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
                           WHERE t.status != 'gone' AND t.scope=?""", (scope,)).fetchall():
         a = own[r["unit_id"] if r["unit_id"] in ids else 0]
@@ -69,6 +70,8 @@ def dashboard(c, by: str = "close", period: str = "", scope: str = "main") -> di
         if eff:
             every_month.add(eff[:7])
         if period and not (eff and eff.startswith(period)):
+            if not eff and st != "info":
+                no_term += 1                               # a task without a term (e.g. just added by its code, waiting for the site's data) is in no period: the page says so
             continue                                       # not in the chosen year / month (a task without a term is in no period)
         if st == "info":
             a["sum"]["info"] += 1
@@ -108,7 +111,7 @@ def dashboard(c, by: str = "close", period: str = "", scope: str = "main") -> di
     _add(total, none)
     has_none = any(none["sum"].values())
     t = total["sum"]
-    return {"today": today().isoformat(), "by": by, "period": period, "scope": scope, "periods": sorted(every_month), "months": sorted(months), "kinds": KIND_ORDER + kinds_seen,
+    return {"today": today().isoformat(), "by": by, "period": period, "scope": scope, "no_term": no_term, "periods": sorted(every_month), "months": sorted(months), "kinds": KIND_ORDER + kinds_seen,
             "stages": [{"key": k, "label": label, "hint": hint} for k, label, hint in STAGE_COLS],
             "totals": {"done": t["done"], "open": t["open"], "over": t["over"], "info": t["info"], "total": t["done"] + t["open"] + t["info"]},
             "rows": rows, "none": {"id": 0, "num": "", "name": "Без отдела", "parent_id": None, "level": 0, **none} if has_none else None,

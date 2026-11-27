@@ -96,3 +96,12 @@ def test_an_ordinary_user_can_neither_add_nor_delete(admin):
     assert u.delete(f"/api/tasks/{tid}").status_code == 403
     assert u.get("/api/tasks-pending").status_code == 403
     assert task(admin, "ABC1234")
+
+
+def test_a_task_added_by_code_is_on_the_dashboard_and_a_period_says_where_it_went(admin):
+    admin.post("/api/tasks/by-codes", json={"codes": "NTM0001"})
+    d = admin.get("/api/dashboard").json()
+    assert d["total"]["nodate"]["open"] >= 1 and d["no_term"] == 0                                          # no period: it is counted (no term, no department)
+    p = admin.get("/api/dashboard?period=2026").json()
+    assert p["no_term"] >= 1                                                                                # a period leaves it out, and the page tells how many such tasks there are
+    c = connect(); c.execute("DELETE FROM tasks WHERE code='NTM0001'"); c.commit(); c.close()

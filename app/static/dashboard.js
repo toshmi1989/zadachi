@@ -86,6 +86,12 @@ routes.dashboard = async function (page, params) {
       <button type="button" class="dk no" data-go="open"><span class="go">открыть список →</span><span class="l">Не выполнено</span><b class="v">${T.open}</b>${bar([[T.open, "no"], [T.done, "rest"]])}<small>${100 - donePct}% от выполняемых</small></button>
 `;
   };
+  page.insertAdjacentHTML("beforeend", `<div id="d-noterm"></div>`);
+  function paintNoTerm() {                                                    // tasks without a term are in no period: say where they went
+    const box = $("#d-noterm", page);
+    box.innerHTML = period && d.no_term ? `<p class="hint dnote" style="margin:0 0 12px">В выбранный период не входят задачи без срока: <b>${d.no_term}</b> (в том числе добавленные по коду и ждущие данных с сайта). <button type="button" class="btn sm" id="d-allp">Показать за все периоды</button></p>` : "";
+    const b = $("#d-allp", box); if (b) b.onclick = () => { period = ""; reload(); };
+  }
   page.insertAdjacentHTML("beforeend", `
     <section class="dkpis rise" style="--i:1" id="d-kpis">${kpiHtml()}    </section>
     <section class="card rise dboard" style="--i:2">
@@ -162,7 +168,7 @@ routes.dashboard = async function (page, params) {
     $("#d-fold", page).textContent = mgmts.length && mgmts.every(r => st.collapsed.has(r.id)) ? "Развернуть управления" : "Свернуть управления";
   }
   paint();
-  paintPeriodBox();
+  paintPeriodBox(); paintNoTerm();
 
   /* ---- a new period or a new kind of date: only the numbers are fetched and drawn again, the page stays ---- */
   const syncUrl = () => { try { history.replaceState(null, "", "#/dashboard?view=" + st.view + "&scope=" + Z.scope + "&period=" + period); persist(); } catch (er) { /* the address stays; nothing breaks */ } };     // "back" from a list returns to this view and period
@@ -176,7 +182,7 @@ routes.dashboard = async function (page, params) {
     d = nd; T = d.totals; all = d.rows.concat(d.none ? [d.none] : []);
     const ys = new Set((d.periods || []).map(m => m.slice(0, 4)));
     if (period && !(d.periods || []).some(m => m.startsWith(period))) period = ys.has(period.slice(0, 4)) ? period.slice(0, 4) : "";      // the chosen month has no tasks by this date: the year, else all
-    paintPeriodBox(); kp.innerHTML = kpiHtml(); paint(); syncUrl();
+    paintPeriodBox(); paintNoTerm(); kp.innerHTML = kpiHtml(); paint(); syncUrl();
     [dash, kp].forEach(el => el && el.classList.remove("loading"));
   }
 
