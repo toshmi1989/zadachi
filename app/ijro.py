@@ -665,6 +665,22 @@ def ingest(c, key_row, body: dict) -> dict:
     stored = found = 0
     touched: list[int] = []
     expanded = [(tid, it) for it in items if isinstance(it, dict) and isinstance(it.get("code"), str) for tid in by_site.get(it["code"], [])]   # a code we do not have is ignored: the collector can never create tasks; the periods of a periodic task are all one code
+    term_split = 0
+    for tid, it in list(expanded):                           # the official term of an ordinary open task moved to another month since the last check: see tasks.split_term
+        new_ms = _int(it.get("due_ms"))
+        if not (it.get("found") and it.get("section") in SECTION_BY_ID and not it.get("repeatable") and new_ms):
+            continue
+        prev = c.execute("SELECT due_ms, repeatable FROM ijro_snapshots WHERE task_id=?", (tid,)).fetchone()
+        if not prev or not prev["due_ms"] or prev["repeatable"]:
+            continue
+        d_old, d_new = _day(prev["due_ms"]).isoformat(), _day(new_ms).isoformat()
+        row = c.execute("SELECT due FROM tasks WHERE id=?", (tid,)).fetchone()
+        if d_old[:7] != d_new[:7] and row and row["due"] and row["due"][:7] != d_new[:7]:
+            new_id = tasks.split_term(c, tid, d_new)
+            if new_id:
+                term_split += 1
+                if new_id not in [x for x, _ in expanded]:
+                    expanded.append((new_id, it))
     for tid, it in expanded:
         sec = it.get("section") if it.get("section") in SECTION_BY_ID else ""
         is_found = bool(it.get("found")) and bool(sec)
@@ -739,7 +755,7 @@ def ingest(c, key_row, body: dict) -> dict:
             audit(c, "ijro.auto_apply", "task", None, {"tasks": auto, "run": run_id})
     if run_id:
         c.execute("UPDATE sync_runs SET received=received+?, found=found+?, finished_at=? WHERE id=? AND key_id=?", (stored, found, now(), run_id, key_row["id"]))
-    return {"stored": stored, "found": found, "auto_applied": auto, "moved": moved}
+    return {"stored": stored, "found": found, "auto_applied": auto, "moved": moved, "term_split": term_split}
 
 
 # ---------------------------------------------------------------- tasks added by their code: the rest is filled from the site's list

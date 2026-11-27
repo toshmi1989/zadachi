@@ -69,7 +69,7 @@ def test_ordinary_user_cannot_touch_sync(admin):
 def test_ingest_validates_and_never_creates_tasks(admin, key):
     anon = TestClient(app)
     ok = anon.post("/api/sync/ingest", json={"items": [item("SY0000"), item("NOPE000")]}, headers=bearer(key)).json()
-    assert ok == {"stored": 1, "found": 1, "auto_applied": 0, "moved": {"done": 0, "progress": 0, "due": 0}}
+    assert ok == {"stored": 1, "found": 1, "auto_applied": 0, "moved": {"done": 0, "progress": 0, "due": 0}, "term_split": 0}
     assert anon.post("/api/sync/ingest", json={"items": [item("SY0000")] * 201}, headers=bearer(key)).status_code == 400
     assert anon.post("/api/sync/ingest", content=b"not json", headers=bearer(key)).status_code == 400
     assert anon.post("/api/sync/ingest", content=b"x" * 2_100_000, headers=bearer(key)).status_code == 413

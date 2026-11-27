@@ -1,7 +1,7 @@
 "use strict";
 /* Task list (filters, sorting, paging, bulk edit) and the task drawer. */
 
-const FIELD = { assignee_id: "Ответственный", status: "Статус", close_date: "Дата закрытия", due: "Срок по ijro" };
+const FIELD = { assignee_id: "Ответственный", status: "Статус", close_date: "Дата закрытия", due: "Срок по ijro", term: "Перенос срока" };
 const STAGE_NAME = { none: "Ответ не введён", moj: "Адлия вазирлигида", cab: "Вазирлар Маҳкамасида", chamber: "Ҳисоб палатасида", info: "Ҳисоб палатаси вернула (срок изменён)", returned: "Возврат / запрос", unchecked: "Не проверялись на сайте", other: "Другое (этап не распознан)" };
 /* where the task is on its way (the answer goes Justice -> Cabinet -> Chamber of Accounts) */
 function stageChip(t) {

@@ -188,8 +188,41 @@ def get_task(c, task_id: int, user: dict, own_only: bool, by: str = "close") -> 
     out = row_out(r, by)
     out["events"] = [dict(e) for e in c.execute(
         """SELECT e.field, e.old, e.new, e.created_at, COALESCE(u.name, 'Автоматически') AS who FROM task_events e
-           LEFT JOIN users u ON u.id = e.user_id WHERE e.task_id=? AND (? OR e.field != 'due') ORDER BY e.id DESC LIMIT 100""", (task_id, user["role"] == "admin"))]   # the official term is not for employees: neither its changes
+           LEFT JOIN users u ON u.id = e.user_id WHERE e.task_id=? AND (? OR e.field NOT IN ('due', 'term')) ORDER BY e.id DESC LIMIT 100""", (task_id, user["role"] == "admin"))]   # the official term is not for employees: neither its changes
     return out
+
+
+def split_term(c, task_id: int, new_due: str) -> int | None:
+    """The official term of an open task moved to another month (it was November, now it is December). Then
+      - the task of the OLD month is done (nothing is left to do for that month: the term has moved on); it is locked, so it is not checked against the site again;
+      - a NEW task with the same code stands for the NEW month: it carries the work that is still open (the same status, the same people and texts, no closing date yet).
+    So November counts it as done and December as not done. Only for an open task whose term moves to another month. Returns the id of the task of the new month
+    (an existing task of that code in that month is used as it is), or None when nothing was moved."""
+    old = c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not old or old["status"] not in OPEN or old["manual"] or not old["due"] or not new_due or old["due"][:7] == new_due[:7]:
+        return None
+    base = old["site_code"] or old["code"]
+    twin = c.execute("SELECT id FROM tasks WHERE COALESCE(NULLIF(site_code, ''), code) = ? AND scope = ? AND substr(due, 1, 7) = ? AND id != ? AND status != 'gone'",
+                     (base, old["scope"], new_due[:7], task_id)).fetchone()
+    if twin:
+        new_id = twin["id"]
+    else:
+        code, n = f"{base}#{new_due}", 2
+        while c.execute("SELECT 1 FROM tasks WHERE code=?", (code,)).fetchone():
+            code, n = f"{base}#{new_due}-{n}", n + 1
+        t = now()
+        new_id = c.execute("""INSERT INTO tasks(code, site_code, scope, seq, kind, doc_no, doc_date, point, text, due, close_date, assignee_id, assignee_raw, status, tag, ext_date, ext_n,
+                                                created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                           (code, base, old["scope"], old["seq"], old["kind"], old["doc_no"], old["doc_date"], old["point"], old["text"], new_due, None, old["assignee_id"],
+                            old["assignee_raw"], old["status"], old["tag"], old["ext_date"], old["ext_n"], t, t)).lastrowid
+        cols = ", ".join(r["name"] for r in c.execute("PRAGMA table_info(ijro_snapshots)") if r["name"] != "task_id")
+        c.execute(f"INSERT INTO ijro_snapshots(task_id, {cols}) SELECT ?, {cols} FROM ijro_snapshots WHERE task_id=?", (new_id, task_id))   # what was read from the site belongs to both
+        c.execute("INSERT INTO task_events(task_id, user_id, field, old, new, created_at) VALUES (?,?,?,?,?,?)",
+                  (new_id, None, "term", old["due"], f"{new_due} (перенос срока: запись создана)", t))
+    update_task(c, task_id, {"status": "done"}, None, lock=True)                # the old month is done, and the site does not reopen it
+    c.execute("INSERT INTO task_events(task_id, user_id, field, old, new, created_at) VALUES (?,?,?,?,?,?)",
+              (task_id, None, "term", old["due"], f"{new_due} (срок перенесён на другой месяц: этот месяц закрыт)", now()))
+    return new_id
 
 
 def _date_or_none(v) -> str | None:

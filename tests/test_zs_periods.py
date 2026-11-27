@@ -52,9 +52,10 @@ def test_a_load_of_other_months_adds_periods_and_leaves_december_alone(admin):
 
 def test_one_row_with_a_new_term_is_the_same_task_unless_the_site_says_it_is_periodic(admin):
     load(admin, [row("PR0002", PRIMARY, "Periodic Person", "25.12.2026")])
-    load(admin, [row("PR0002", PRIMARY, "Periodic Person", "25.01.2027")])                                       # an ordinary task whose term moved
+    r = load(admin, [row("PR0002", PRIMARY, "Periodic Person", "25.01.2027")])                                   # an ordinary open task whose term moved to another month
     t = mine(admin, "PR0002")
-    assert len(t) == 1 and t[0]["due"] == "2027-01-25"
+    assert r["term_moved"] == 1 and r["created"] == 0
+    assert [(x["due"], x["status"]) for x in t] == [("2026-12-25", "done"), ("2027-01-25", "todo")]            # December is done, the new term carries the open work
     # the site's own list of the periods (the synchronisation) says that PR0003 is periodic: the next period is a new task
     load(admin, [row("PR0003", PRIMARY, "Periodic Person", "25.12.2026")])
     h = {"authorization": "Bearer " + admin.post("/api/sync/keys", json={"name": "per"}).json()["key"]}
@@ -71,7 +72,7 @@ def test_an_extension_moves_the_term_of_the_same_task(admin):
     moved[EXT] = "1"
     r = load(admin, [moved])
     t = mine(admin, "PR0004")
-    assert r["created"] == 0 and len(t) == 1 and t[0]["due"] == "2027-02-25"
+    assert r["created"] == 0 and r["term_moved"] == 1 and [(x["due"], x["status"]) for x in t] == [("2026-12-25", "done"), ("2027-02-25", "todo")]
 
 
 def test_the_synchronisation_reads_the_code_once_and_every_period_gets_it(admin):

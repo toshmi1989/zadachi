@@ -6,7 +6,7 @@ from datetime import date, datetime
 
 import openpyxl
 
-from . import auth
+from . import auth, tasks
 from .db import audit, now
 
 HEADERS = {  # header text (casefolded, stripped) -> field
@@ -267,7 +267,7 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
         users[auth.norm_name(u["name"])] = u["id"]
         if u["excel_name"]:
             users[auth.norm_name(u["excel_name"])] = u["id"]
-    new_people, created, updated, same, kept, overwritten = [], 0, 0, 0, 0, 0
+    new_people, created, updated, same, kept, overwritten, term_moved = [], 0, 0, 0, 0, 0, 0
     m = Matcher(c, scope)
     t = now()
     ext_pairs = []
@@ -299,6 +299,14 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
             m.add({"id": new_id, "code": code, "site_code": r["code"], "due": r["due"], "status": r["status"], "edited": 0, "close_src": "", "manual": 0})
             ext_pairs.append((new_id, r))
             continue
+        if "unit_id" in r and r["due"] and cur_row["due"] and r["due"][:7] != cur_row["due"][:7] and cur_row["status"] in ("todo", "progress") and not cur_row["manual"]:
+            term_moved += 1                                  # the site moved the term of an open task to another month: the old month is done, the new month carries the work
+            if not dry:
+                new_id = tasks.split_term(c, cur_row["id"], r["due"])
+                if new_id:
+                    cur_row["status"] = "done"
+                    cur_row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (new_id,)).fetchone())
+                    m.add(cur_row)
         ext_pairs.append((cur_row["id"], r))
         fields = {"seq": r["seq"], "kind": r["kind"], "doc_no": r["doc_no"], "doc_date": r["doc_date"], "point": r["point"],
                   "text": r["text"], "due": r["due"], "assignee_raw": r["who"], "tag": r["tag"]}
@@ -336,7 +344,7 @@ def apply(c, rows: list[dict], warnings: list[str], filename: str, user_id: int 
             c.execute(f"UPDATE tasks SET {', '.join(k + '=?' for k in diff)} WHERE id=?", (*diff.values(), cur_row["id"]))
     if not dry:
         store_ext(c, ext_pairs)
-    summary = {"scope": scope, "rows": len(rows), "created": created, "updated": updated, "unchanged": same, "kept_manual": kept, "overwritten": overwritten,
+    summary = {"scope": scope, "rows": len(rows), "created": created, "updated": updated, "unchanged": same, "kept_manual": kept, "overwritten": overwritten, "term_moved": term_moved,
                "new_people": new_people, "warnings": warnings, "dry": dry, "mode": "base"}
     if not dry:
         import json
