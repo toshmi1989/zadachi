@@ -123,3 +123,23 @@ def test_a_waiting_task_can_be_filled_by_hand_and_keeps_its_code(admin):
     assert m == 2                                                                                         # still the site's task: the synchronisation reads it by the code
     assert admin.post(f"/api/tasks/{t['id']}/fill", json={"text": "again"}).status_code == 400             # filled already
     c = connect(); c.execute("DELETE FROM tasks WHERE code='QDJ8838'"); c.commit(); c.close()
+
+
+def test_a_periodic_code_added_by_code_fills_every_period_without_a_leftover(admin):
+    h = hdr(admin)
+    admin.post("/api/tasks/by-codes", json={"codes": "PRD1234"})
+    data = export([row("PRD1234", PRIMARY, "Fill Person", "16.02.2027", text="2-банд\nРаз"), row("PRD1234", PRIMARY, "Fill Person", "16.05.2027", text="2-банд\nРаз"),
+                   row("PRD1234", PRIMARY, "Fill Person", "16.08.2027", text="2-банд\nРаз")])
+    r = admin.post("/api/sync/export?source=x&fill=1", content=data, headers=h).json()
+    assert r["filled"] >= 1 and "PRD1234" not in r["pending"]
+    items = admin.get("/api/tasks?q=PRD1234&size=50&status=all").json()["items"]
+    assert sorted(t["due"] for t in items) == ["2027-02-16", "2027-05-16", "2027-08-16"] and not any(t["pending"] for t in items)    # three periods, no placeholder left waiting
+    # a placeholder that an older run left behind (its code is already tasks of their own) is removed by the next fill
+    c = connect()
+    c.execute("INSERT INTO tasks(code, seq, kind, doc_no, point, text, status, tag, manual, created_at, updated_at) VALUES ('PRD1235', 0, '', '', '', '', 'todo', '', 2, '', '')")
+    c.execute("INSERT INTO tasks(code, site_code, seq, kind, doc_no, point, text, due, status, tag, manual, created_at, updated_at) VALUES ('PRD1235#2027-05-16', 'PRD1235', 0, 'Қарор', 'X', '', 'Бор', '2027-05-16', 'todo', '', 0, '', '')")
+    c.commit(); c.close()
+    admin.post("/api/sync/export?source=x&fill=1", content=export([row("OTH9999", PRIMARY, "Other Person", "20.12.2026")]), headers=h)
+    left = admin.get("/api/tasks?q=PRD1235&size=50&status=all").json()["items"]
+    assert len(left) == 1 and not left[0]["pending"]                                                      # the placeholder is gone, the real task stays
+    c = connect(); c.execute("DELETE FROM tasks WHERE code LIKE 'PRD123%' OR site_code LIKE 'PRD123%'"); c.commit(); c.close()

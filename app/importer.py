@@ -177,6 +177,10 @@ class Matcher:
                 return t
         if not sibs:
             return None
+        for t in sibs:                         # a task added by its code and still waiting for its data takes the first row of that code (a periodic code has several rows: the others are new tasks)
+            if t.get("manual") == 2 and not t.get("text") and not t.get("_claimed"):
+                t["_claimed"] = True
+                return t
         if (r.get("ext_n") or 0) > 0:
             return min(sibs, key=lambda t: _days_apart(t["due"], r["due"]))
         if r.get("occ", 1) > 1 or len(sibs) > 1 or any(r["due"] in self.periods.get(t["id"], ()) for t in sibs):

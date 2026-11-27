@@ -772,6 +772,8 @@ def fill_pending(c, data: bytes, filename: str, user_id: int | None) -> dict:
     """The site's Excel list (the same file as an import) is searched for the codes that wait for their data; the rows found fill those tasks, exactly as an import
     would (kind, document, point, text, term, the responsible person and their department, the status). Nothing else in the file is touched."""
     from . import importer, site_import
+    # a placeholder whose code the site's list already gave as tasks of their own (a periodic code: one row per period) is redundant: it would stay «waiting» for ever
+    c.execute("DELETE FROM tasks WHERE manual=2 AND text='' AND EXISTS (SELECT 1 FROM tasks o WHERE o.site_code = tasks.code AND o.id != tasks.id)")
     want = set(pending_codes(c))
     if not want:
         return {"filled": 0, "pending": []}
