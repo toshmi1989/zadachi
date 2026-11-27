@@ -2,6 +2,7 @@
 /* Start-up: who am I, navigation by role, theme, account menu. */
 (async function () {
   try { Z.me = await api("/api/me"); } catch (e) { return; }
+  try { Object.keys(localStorage).filter(k => /^zf\.[a-z]+$/.test(k)).forEach(k => localStorage.removeItem(k)); } catch (e) { /* the filters kept before they were separate for each person are dropped */ }
   const me = Z.me, admin = me.role === "admin", staff = admin || me.role === "specialist";
   const nav = [["dashboard", "Дашборд", "dash"]];
   if (me.tasks !== "none") nav.push(["tasks", !admin && me.tasks === "own" ? "Мои задачи" : "Задачи", "list"]);

@@ -94,9 +94,11 @@ function countUp(el, to, ms) {
   requestAnimationFrame(step);
 }
 /* a sliding pill under the active button of a segmented control */
-/* the filters of a page stay as they were set: the person goes to another section and comes back, and finds the same period, tab, search ... (kept in this browser) */
-const savedFilters = name => { try { return JSON.parse(localStorage.getItem("zf." + name) || "{}") || {}; } catch (e) { return {}; } };
-const saveFilters = (name, obj) => { try { localStorage.setItem("zf." + name, JSON.stringify(obj)); } catch (e) { /* only not remembered */ } };
+/* the filters of a page stay as they were set: the person goes to another section and comes back, and finds the same period, tab, search ... (kept in this browser, apart for each
+   person: what the administrator set must not narrow the numbers of the next one who signs in on the same computer) */
+const fkey = name => "zf." + (typeof Z !== "undefined" && Z.me ? Z.me.id : "") + "." + name;
+const savedFilters = name => { try { return JSON.parse(localStorage.getItem(fkey(name)) || "{}") || {}; } catch (e) { return {}; } };
+const saveFilters = (name, obj) => { try { localStorage.setItem(fkey(name), JSON.stringify(obj)); } catch (e) { /* only not remembered */ } };
 
 /* the three groups of tasks: each has its own dashboard, its own lists, its own load of the Excel files */
 const GROUPS = [["main", "Асосий ижрочи"], ["co", "Ҳамижрочи"], ["vm", "ВМ топшириқлари"]];
