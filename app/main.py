@@ -433,6 +433,9 @@ async def api_task_create(request: Request):
     status = b.get("status") or "todo"
     if status not in ("todo", "progress"):
         bad("Новая задача может быть только «Не выполнено» или «В работе»")
+    scope = str(b.get("scope") or "main")
+    if scope not in site_import.SCOPES:
+        bad("Неизвестная группа задач")
     kind, doc_no, point = (re.sub(r"\s+", " ", str(b.get(k) or "")).strip() for k in ("kind", "doc_no", "point"))
     if len(kind) > 60 or len(doc_no) > 200 or len(point) > 60:
         bad("Слишком длинное значение (вид до 60, документ до 200, пункт до 60 знаков)")
@@ -448,9 +451,9 @@ async def api_task_create(request: Request):
                 bad("Такого сотрудника нет или он отключён")
             assignee = u
         n = c.execute("SELECT COALESCE(MAX(CAST(substr(code, 2) AS INTEGER)), 0) FROM tasks WHERE manual=1 AND code GLOB 'M[0-9]*'").fetchone()[0] + 1
-        cur = c.execute("""INSERT INTO tasks(code, seq, kind, doc_no, doc_date, point, text, due, close_date, assignee_id, assignee_raw, status, tag, manual, created_at, updated_at)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (f"M{n:05d}", 0, kind, doc_no, doc_date, point, text, due, close, assignee["id"] if assignee else None, assignee["name"] if assignee else "", status, "", 1, now(), now()))
+        cur = c.execute("""INSERT INTO tasks(code, scope, seq, kind, doc_no, doc_date, point, text, due, close_date, assignee_id, assignee_raw, status, tag, manual, created_at, updated_at)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (f"M{n:05d}", scope, 0, kind, doc_no, doc_date, point, text, due, close, assignee["id"] if assignee else None, assignee["name"] if assignee else "", status, "", 1, now(), now()))
         audit(c, "task.create", "task", cur.lastrowid, {"code": f"M{n:05d}", "by_role": user["role"]})
         out = tasks.get_task(c, cur.lastrowid, user, False)
     out["can_edit"] = True

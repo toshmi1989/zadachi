@@ -77,6 +77,10 @@ def test_a_task_added_by_hand(admin, spec):
     a = admin.post("/api/tasks", json={"text": "Задача администратора", "due": "2027-02-01"}).json()
     assert a["code"] != t["code"] and admin.get(f"/api/tasks/{a['id']}?by=due").json()["due"] == "2027-02-01"   # the administrator can
     assert int(a["code"][1:]) == int(t["code"][1:]) + 1                                                  # M00001, M00002 ...
+    v = admin.post("/api/tasks", json={"text": "ВМ вручную", "scope": "vm", "kind": "ВМ", "doc_no": "VM 22/26-196", "doc_date": "2026-05-12", "point": "3-банд", "close_date": "2026-12-01", "due": "2026-12-20"}).json()
+    assert admin.get(f"/api/tasks?q={v['code']}&scope=vm&status=all").json()["total"] == 1 and admin.get(f"/api/tasks?q={v['code']}&status=all").json()["total"] == 0   # it is in the chosen group only
+    assert v["doc_no"] == "VM 22/26-196" and v["point"] == "3-банд" and v.get("doc_date") in (None, "2026-05-12")
+    assert admin.post("/api/tasks", json={"text": "x", "scope": "nope"}).status_code == 400                # an unknown group is refused
     for bad in ({}, {"text": "  "}, {"text": "x" * 4001}, {"text": "x", "status": "done"}, {"text": "x", "assignee_id": 999999}, {"text": "x", "close_date": "not a date"}, {"text": "x", "kind": "k" * 61}):
         assert spec.post("/api/tasks", json=bad).status_code == 400, bad
 

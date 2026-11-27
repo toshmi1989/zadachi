@@ -16,7 +16,7 @@ routes.editor = async function (page, params) {
   const unitOpts = (sel, all) => `<option value="">${all}</option>` + (meta.units || []).map(u => `<option value="${u.id}"${String(sel) === String(u.id) ? " selected" : ""}>${esc((u.level ? "— " : "") + (u.num ? u.num + ". " : "") + u.name)}</option>`).join("");
 
   page.innerHTML = `<div class="pagehead rise" style="--i:0"><div><h1>Редактор задач</h1><p>Срок исполнения, ответственный и статус меняются прямо в строке и сохраняются сразу. Задачи добавляются по кодам: остальное скрипт найдёт на сайте сам.</p></div>
-      <div class="controls"><button class="btn pri" id="ed-add">${icon("plus")}Добавить по кодам</button></div></div>
+      <div class="controls"><button class="btn pri" id="ed-add">${icon("plus")}Добавить по кодам</button><button class="btn" id="ed-new">${icon("plus")}Добавить вручную</button></div></div>
     <div id="ed-scope"></div>
     <div id="ed-pend"></div>
     <section class="card rise" style="--i:1">
@@ -113,6 +113,42 @@ routes.editor = async function (page, params) {
         if (r.existing.length) parts.push(`уже были: ${r.existing.length}`);
         if (r.invalid.length) parts.push(`не похожи на код: ${r.invalid.slice(0, 4).join(", ")}`);
         toast(parts.join(" · "), r.created.length ? undefined : "error");
+        S.status = "open"; S.page = 1; load();
+      } catch (er) { $("#ferr", box).textContent = er.message; }
+    };
+  };
+  /* adding by hand: every field is typed in (a task that is not on the site, or one that the site's list does not give) */
+  $("#ed-new", page).onclick = () => {
+    const admin = Z.me.role === "admin", fld = (id, label, ctl, hint) => `<div class="fld"><label for="${id}">${label}</label>${ctl}${hint ? `<span class="hint">${hint}</span>` : ""}</div>`;
+    const box = layer("modal", `<h2>Добавить задачу вручную</h2><p class="mt">Заполните данные задачи. Обязателен только текст. Такая задача получает свой код («M…») и не сверяется с сайтом.</p>
+      <form novalidate>
+        ${fld("mn-scope", "Группа задач", `<select id="mn-scope">${GROUPS.map(g => `<option value="${g[0]}"${g[0] === Z.scope ? " selected" : ""}>${esc(g[1])}</option>`).join("")}</select>`)}
+        ${fld("mn-text", "Текст задачи *", `<textarea id="mn-text" rows="5" maxlength="4000"></textarea>`)}
+        <div class="fgrid">
+        ${fld("mn-kind", "Вид документа", `<input id="mn-kind" list="mn-kinds" autocomplete="off" maxlength="60"><datalist id="mn-kinds">${kinds.map(k => `<option value="${esc(k)}">`).join("")}</datalist>`)}
+        ${fld("mn-doc", "Номер документа", `<input id="mn-doc" autocomplete="off" maxlength="200" placeholder="ПҚ-335">`)}
+        ${fld("mn-docdate", "Дата документа", `<input id="mn-docdate" type="date">`)}
+        ${fld("mn-point", "Пункт", `<input id="mn-point" autocomplete="off" maxlength="60" placeholder="1-банд">`)}
+        ${admin ? fld("mn-due", "Срок по ijro (официальный)", `<input id="mn-due" type="date">`) : ""}
+        ${fld("mn-close", "Срок исполнения (дата закрытия)", `<input id="mn-close" type="date">`)}
+        </div>
+        <div class="fgrid">
+        ${fld("mn-who", "Ответственный", `<select id="mn-who">${personOpts("")}</select>`, "Отдел определяется по ответственному")}
+        ${fld("mn-status", "Статус", `<select id="mn-status"><option value="todo">Не выполнено</option><option value="progress">В работе</option></select>`)}
+        </div>
+        <p class="err" id="ferr"></p><div class="acts"><button type="button" class="btn" data-x>Отмена</button><button class="btn pri">Добавить</button></div></form>`);
+    box.classList.add("wide"); $("[data-x]", box).onclick = () => box.close();
+    setTimeout(() => $("#mn-text", box).focus(), 120);
+    $("form", box).onsubmit = async e => {
+      e.preventDefault();
+      const v = id => $("#" + id, box).value.trim(), text = v("mn-text");
+      if (!text) { $("#ferr", box).textContent = "Введите текст задачи"; return; }
+      const body = { text, scope: v("mn-scope"), kind: v("mn-kind"), doc_no: v("mn-doc"), doc_date: v("mn-docdate"), point: v("mn-point"), close_date: v("mn-close"), assignee_id: v("mn-who"), status: v("mn-status") };
+      if (admin) body.due = v("mn-due");
+      try {
+        const r = await api("/api/tasks", { method: "POST", json: body });
+        box.close(); Z.meta = null; toast(`Добавлена задача ${r.code}`);
+        if (body.scope !== Z.scope) toast(`Задача в группе «${groupName(body.scope)}»: откройте эту группу, чтобы её увидеть`);
         S.status = "open"; S.page = 1; load();
       } catch (er) { $("#ferr", box).textContent = er.message; }
     };
